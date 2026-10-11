@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use shangxian_core::config::default_data_dir;
 use shangxian_core::ctl as core_ctl;
 use shangxian_core::guardian::{
-    Guardian, NewTunnelInput, ServerInput, ServiceInput, UpdateTunnelInput,
+    Guardian, NewTunnelInput, ServerInput, ServiceInput, StopOutcome, UpdateTunnelInput,
 };
 
 /// 开控制通道：绑定随机端口 → 写 ctl.json → 等连接。
@@ -160,8 +160,22 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("remove_service", "删除本机服务（有隧道在用会拒绝）", "{id}"),
     ("service_start", "启动本机服务（用登记过的启动方式）", "{id}"),
-    ("service_stop", "停止本机服务（只停应用自己启动的）", "{id}"),
-    ("service_restart", "重启本机服务（先停再启）", "{id}"),
+    (
+        "service_stop",
+        "停止本机服务（默认只停应用自己启动的；外部进程要先拿 needsConfirm 让用户确认）",
+        "{id, killForeign?, expectedPid?}",
+    ),
+    ("service_restart", "重启本机服务（先停再启；外部进程在听时不碰，返回 needsConfirm）", "{id}"),
+    (
+        "inspect_process_launch_info",
+        "自动读取某端口上进程的启动方式（程序/参数/工作目录 + 警告）",
+        "{port, expectedPid?}",
+    ),
+    (
+        "preview_launch_command",
+        "给人看的实际命令行预览（走和启动一样的分支，不参与启动）",
+        "{exe, args}",
+    ),
     ("set_service_watch", "开关看护（掉了自动拉起）", "{id, watch}"),
     ("set_service_autostart", "开关开机自启", "{id, autostart}"),
     ("get_service_logs", "读本机服务的日志尾部", "{id, lines?}"),
@@ -251,12 +265,51 @@ fn dispatch(g: &mut Guardian, method: &str, params: &Value) -> Result<Value, Str
         }
         "service_stop" => {
             let id = need_str(params, "id")?;
-            g.stop_service(&id).map(|_| json!({"ok": true}))
+            let kill_foreign = params
+                .get("killForeign")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            let expected_pid = params
+                .get("expectedPid")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            g.stop_service(&id, kill_foreign, expected_pid).map(to_json)
         }
         "service_restart" => {
             let id = need_str(params, "id")?;
-            g.stop_service(&id)?;
+            // 外部进程在听：不碰它，把 needsConfirm 原样交给调用方（CLI 会提示先手动停）
+            let outcome = g.stop_service(&id, false, None)?;
+            if matches!(outcome, StopOutcome::NeedsConfirm { .. }) {
+                return Ok(to_json(outcome));
+            }
             g.start_service(&id).map(|_| json!({"ok": true}))
+        }
+        "inspect_process_launch_info" => {
+            let port = params
+                .get("port")
+                .and_then(|v| v.as_u64())
+                .ok_or_else(|| "缺少参数 port".to_string())?;
+            let port = u16::try_from(port)
+                .map_err(|_| "端口要填 1~65535 的数字".to_string())?;
+            let expected_pid = params
+                .get("expectedPid")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as u32);
+            Ok(to_json(shangxian_core::proc_detail::launch_info(
+                port,
+                expected_pid,
+            )))
+        }
+        "preview_launch_command" => {
+            let exe = need_str(params, "exe")?;
+            let args = params
+                .get("args")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(json!({
+                "command": shangxian_core::localservice::preview_launch(&exe, &args)
+            }))
         }
         "set_service_watch" => {
             let id = need_str(params, "id")?;

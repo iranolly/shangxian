@@ -401,7 +401,7 @@ fn local_service_start_stop_and_watch() {
     assert!(restarted, "进程被杀后应该被看护自动拉起来：{:?}", g.snapshot()[0]);
 
     // 用户点停止 → 停掉且不再自动拉起
-    g.stop_service(&id).unwrap();
+    g.stop_service(&id, false, None).unwrap();
     for _ in 0..10 {
         g.poll();
         sleep(Duration::from_millis(100));

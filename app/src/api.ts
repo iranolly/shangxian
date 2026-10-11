@@ -75,6 +75,33 @@ export interface LocalPort {
   exe?: string | null;
 }
 
+/** 自动读取启动方式时后端给的一条警告（code 是机器用的，text 是给人看的） */
+export interface LaunchWarning {
+  code: string;
+  text: string;
+}
+
+/** 自动读取到的进程启动方式（点端口行时用） */
+export interface LaunchInfo {
+  port: number;
+  pid?: number | null;
+  /** 传进去的 pid 和端口现在的占用者一致吗 */
+  pidMatched: boolean;
+  exe?: string | null;
+  args?: string | null;
+  workdir?: string | null;
+  /** 原始命令行（给人看，不做逐字还原） */
+  rawCommandLine?: string | null;
+  warnings: LaunchWarning[];
+}
+
+/** 停止服务的结果：kind=needsConfirm 时要让用户确认（带 pid/exe） */
+export interface ServiceStopResult {
+  kind: "stopped" | "needsConfirm" | "foreignStopped";
+  pid?: number | null;
+  exe?: string | null;
+}
+
 export interface ImportSuggestion {
   name: string;
   source: string;
@@ -159,8 +186,52 @@ export async function serviceStart(id: string): Promise<void> {
   if (inTauri) await invoke("service_start", { id });
 }
 
-export async function serviceStop(id: string): Promise<void> {
-  if (inTauri) await invoke("service_stop", { id });
+export async function serviceStop(
+  id: string,
+  killForeign = false,
+  expectedPid: number | null = null,
+): Promise<ServiceStopResult> {
+  if (!inTauri) return { kind: "stopped" };
+  return await invoke<ServiceStopResult>("service_stop", {
+    id,
+    killForeign,
+    expectedPid,
+  });
+}
+
+/**
+ * 自动读取某个端口现在被谁监听着、是怎么启动的。
+ * 传 expectedPid（端口列表里那一行的进程号）用来核对占用者有没有变。
+ */
+export async function inspectProcessLaunchInfo(
+  port: number,
+  expectedPid?: number | null,
+): Promise<LaunchInfo> {
+  if (!inTauri) {
+    return {
+      port,
+      pid: null,
+      pidMatched: false,
+      exe: null,
+      args: null,
+      workdir: null,
+      rawCommandLine: null,
+      warnings: [{ code: "preview", text: "浏览器预览模式：不会真的去读进程的启动方式。" }],
+    };
+  }
+  return await invoke<LaunchInfo>("inspect_process_launch_info", {
+    port,
+    expectedPid: expectedPid ?? null,
+  });
+}
+
+/** 给人看的「实际会执行的命令行」预览（失败就静默不显示）。 */
+export async function previewLaunchCommand(
+  exe: string,
+  args: string,
+): Promise<string> {
+  if (!inTauri) return [exe.trim(), args.trim()].filter(Boolean).join(" ");
+  return await invoke<string>("preview_launch_command", { exe, args });
 }
 
 export async function setServiceWatch(

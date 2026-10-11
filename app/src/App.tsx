@@ -113,7 +113,9 @@ export default function App() {
             <ServicesPage
               services={snapshot.services}
               onStart={(id) => act(() => serviceStart(id))}
-              onStop={(id) => act(() => serviceStop(id))}
+              onStop={(id, killForeign, expectedPid) =>
+                serviceStop(id, killForeign, expectedPid)
+              }
               onToggleWatch={(id, watch) =>
                 act(() => setServiceWatch(id, watch))
               }

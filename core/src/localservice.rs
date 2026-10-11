@@ -453,6 +453,22 @@ fn build_command(spec: &LaunchSpec) -> (String, Vec<String>) {
     }
 }
 
+/// 给人看的「实际会执行的命令行」预览：走和启动完全一样的分支（.bat/.cmd → cmd /C、
+/// .ps1 → powershell、.sh → bash、其余直接执行），参数按 MSVCRT 规则引号化。
+///
+/// **仅供显示**：这里返回的字符串不参与启动，真正启动仍走 `build_command` + `Command`。
+pub fn preview_launch(exe: &str, args: &str) -> String {
+    let spec = LaunchSpec {
+        exe: exe.trim().to_string(),
+        args: args.to_string(),
+        workdir: None,
+    };
+    let (program, argv) = build_command(&spec);
+    let mut parts = vec![quote_arg(&program)];
+    parts.extend(argv.iter().map(|arg| quote_arg(arg)));
+    parts.join(" ")
+}
+
 /// Git Bash 的位置（找不到就让系统自己找 bash）。
 fn bash_path() -> String {
     for p in [
@@ -466,25 +482,117 @@ fn bash_path() -> String {
     "bash".to_string()
 }
 
-/// 把一行参数拆成数组：双引号包住的空格不当分隔符。
-fn split_args(text: &str) -> Vec<String> {
+/// 把一行参数拆成数组：按 MSVCRT（CommandLineToArgvW / VC++ 启动代码）的规则解析。
+///
+/// 覆盖：双引号包空格、空参数 `""`、反斜杠转义 `\"`、尾部反斜杠、连续引号、中文路径。
+/// 引号里的空白不当分隔符；只有空格和制表符算分隔符（和 MSVCRT 一致）。
+pub fn split_args(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut in_quote = false;
-    for ch in text.chars() {
-        match ch {
-            '"' => in_quote = !in_quote,
-            c if c.is_whitespace() && !in_quote => {
-                if !cur.is_empty() {
-                    out.push(std::mem::take(&mut cur));
+    let mut i = 0usize;
+    while i < chars.len() {
+        // 参数之间的空白
+        while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+            i += 1;
+        }
+        if i >= chars.len() {
+            break;
+        }
+
+        let mut current = String::new();
+        let mut in_quotes = false;
+        while i < chars.len() {
+            let ch = chars[i];
+            if ch == '\\' {
+                // 数连续反斜杠，看后面是不是引号
+                let mut backslashes = 0usize;
+                while i < chars.len() && chars[i] == '\\' {
+                    backslashes += 1;
+                    i += 1;
                 }
+                if i < chars.len() && chars[i] == '"' {
+                    for _ in 0..backslashes / 2 {
+                        current.push('\\');
+                    }
+                    if backslashes % 2 == 1 {
+                        // 奇数个反斜杠 + 引号 = 字面引号
+                        current.push('"');
+                    } else {
+                        in_quotes = !in_quotes;
+                    }
+                    i += 1;
+                } else {
+                    for _ in 0..backslashes {
+                        current.push('\\');
+                    }
+                }
+            } else if ch == '"' {
+                if in_quotes && i + 1 < chars.len() && chars[i + 1] == '"' {
+                    // 引号里的连续两个引号 = 一个字面引号
+                    current.push('"');
+                    i += 2;
+                } else {
+                    in_quotes = !in_quotes;
+                    i += 1;
+                }
+            } else if (ch == ' ' || ch == '\t') && !in_quotes {
+                break;
+            } else {
+                current.push(ch);
+                i += 1;
             }
-            c => cur.push(c),
+        }
+        out.push(current);
+    }
+    out
+}
+
+/// 把参数数组按 MSVCRT 规则拼回一行（`split_args` 的逆运算），空格分隔。
+pub fn quote_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// 单个参数引号化：只在必要时加引号，按 MSVCRT 规则转义反斜杠/引号，
+/// 保证再经 [`split_args`] 解析能还原。
+fn quote_arg(arg: &str) -> String {
+    let needs_quotes = arg.is_empty()
+        || arg
+            .chars()
+            .any(|c| matches!(c, ' ' | '\t' | '\n' | '\r' | '"'));
+    if !needs_quotes {
+        return arg.to_string();
+    }
+
+    let mut out = String::with_capacity(arg.len() + 2);
+    out.push('"');
+    let mut backslashes = 0usize;
+    for ch in arg.chars() {
+        match ch {
+            '\\' => backslashes += 1,
+            '"' => {
+                for _ in 0..backslashes * 2 + 1 {
+                    out.push('\\');
+                }
+                out.push('"');
+                backslashes = 0;
+            }
+            _ => {
+                for _ in 0..backslashes {
+                    out.push('\\');
+                }
+                backslashes = 0;
+                out.push(ch);
+            }
         }
     }
-    if !cur.is_empty() {
-        out.push(cur);
+    // 结尾的反斜杠要加倍，否则会把“收尾引号”转义掉
+    for _ in 0..backslashes * 2 {
+        out.push('\\');
     }
+    out.push('"');
     out
 }
 
@@ -512,6 +620,85 @@ mod tests {
         );
         assert_eq!(split_args(""), Vec::<String>::new());
         assert_eq!(split_args("a  b"), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn args_split_msvcrt_edge_cases() {
+        // 空参数
+        assert_eq!(split_args(r#"--name """#), vec!["--name", ""]);
+        // 内嵌引号（反斜杠转义）
+        assert_eq!(split_args(r#"a\"b"#), vec!["a\"b"]);
+        // 尾部反斜杠路径（偶数个反斜杠 + 收尾引号）
+        assert_eq!(split_args(r#""D:\a b\\""#), vec![r"D:\a b\"]);
+        // 中文路径（空格在引号里）
+        assert_eq!(
+            split_args(r#"--dir "C:\中文 目录\x.txt""#),
+            vec!["--dir", r"C:\中文 目录\x.txt"]
+        );
+        // 纯空格 = 没有参数
+        assert_eq!(split_args("   "), Vec::<String>::new());
+        assert_eq!(split_args(" \t "), Vec::<String>::new());
+        // 未闭合的引号：宽松处理，不报错
+        assert_eq!(split_args(r#"unclosed "quote here"#), vec!["unclosed", "quote here"]);
+        // 引号内的连续两个引号 = 字面引号
+        assert_eq!(split_args(r#""a""b""#), vec!["a\"b"]);
+    }
+
+    #[test]
+    fn args_quote_round_trips() {
+        let cases: Vec<Vec<&str>> = vec![
+            vec!["--port", "8188", "--dir", r"D:\my app\data"],
+            vec!["--name", ""],
+            vec!["a\"b"],
+            vec![r"D:\a b\"],
+            vec![r"C:\中文 目录\x.txt"],
+            vec!["a\"b\\c\"", "--x", "y\\"],
+            vec!["plain"],
+            vec!["two words", "\ttab\t"],
+        ];
+        for case in cases {
+            let owned: Vec<String> = case.iter().map(|s| s.to_string()).collect();
+            let line = quote_args(&owned);
+            assert_eq!(split_args(&line), owned, "line={line:?}");
+        }
+    }
+
+    #[test]
+    fn preview_launch_shows_effective_command() {
+        assert_eq!(
+            preview_launch(r"D:\x\start.bat", "--fast"),
+            r"cmd.exe /C D:\x\start.bat --fast"
+        );
+        assert_eq!(
+            preview_launch(r"D:\x\run.ps1", ""),
+            r"powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\x\run.ps1"
+        );
+        assert_eq!(
+            preview_launch(r"D:\my app\comfy.exe", r#"--port 8188 --dir "D:\my app\data""#),
+            r#""D:\my app\comfy.exe" --port 8188 --dir "D:\my app\data""#
+        );
+        let sh = preview_launch(r"D:\x\run.sh", "--fast");
+        assert!(sh.ends_with(r"run.sh --fast"), "sh={sh}");
+        assert!(sh.contains("bash"), "sh={sh}");
+    }
+
+    #[test]
+    fn handwritten_legacy_dir_arg_keeps_trailing_literal_quote() {
+        // 手写老配置 `--dir "D:\data\"`：尾随反斜杠把收尾引号转义成字面引号，
+        // 解析结果末尾是字面引号而不是目录分隔符——这是既有语义，用测试锁住。
+        assert_eq!(
+            split_args(r#"--dir "D:\data\""#),
+            vec!["--dir", r#"D:\data""#]
+        );
+        // 规范写法（quote_args 生成）再经 split_args 必须还原成 D:\data\，往返一致。
+        let args = vec![r"D:\data\".to_string()];
+        let canonical = quote_args(&args);
+        assert_eq!(split_args(&canonical), args, "canonical={canonical:?}");
+        // 带空格的路径：quote_args 会把尾部反斜杠加倍保住收尾引号
+        let spaced = vec![r"D:\my data\".to_string()];
+        let canonical = quote_args(&spaced);
+        assert_eq!(canonical, r#""D:\my data\\""#);
+        assert_eq!(split_args(&canonical), spaced);
     }
 
     #[test]

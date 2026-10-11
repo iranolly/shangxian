@@ -134,8 +134,13 @@ enum ServiceCmd {
     },
     /// 启动
     Start { id: String },
-    /// 停止（只停应用自己启动的进程）
-    Stop { id: String },
+    /// 停止（默认只停应用自己启动的进程；--force 只对配了启动方式的服务生效）
+    Stop {
+        id: String,
+        /// 端口上不是应用启动的进程时，确认要连它一起停（只监控的服务即使加了这个也会被人话拒绝）
+        #[arg(long)]
+        force: bool,
+    },
     /// 重启（先停再启）
     Restart { id: String },
     /// 删除（还有隧道在用会拒绝）
@@ -445,12 +450,55 @@ fn service_cmd(sub: &ServiceCmd, want_json: bool) -> Result<(), String> {
             let v = call("service_start", json!({"id": id}))?;
             done(want_json, &v, &format!("✓ 已让「{id}」启动（几秒后 cli services 看结果）"));
         }
-        ServiceCmd::Stop { id } => {
-            let v = call("service_stop", json!({"id": id}))?;
-            done(want_json, &v, &format!("✓ 已停止「{id}」"));
+        ServiceCmd::Stop { id, force } => {
+            let v = call(
+                "service_stop",
+                json!({"id": id, "killForeign": force, "expectedPid": null}),
+            )?;
+            let kind = v["kind"].as_str().unwrap_or("stopped");
+            if kind == "needsConfirm" {
+                if *force {
+                    return Err(format!(
+                        "没能停掉「{id}」：应用仍要求确认（端口占用者可能又变了，先 cli services 看一眼再试）"
+                    ));
+                }
+                // 兜底：只监控的服务（没配启动方式）绝不接管外部进程，
+                // 这里不再提示一条必然失败的 --force（core 现在会直接返回人话错误）。
+                let svc = find_service(id)?;
+                if svc["launchExe"].is_null() {
+                    return Err(format!(
+                        "这台服务没配启动方式，是你自己开的程序，我不会去动它。\n想接管它，先补全启动方式再停止：cli service edit {id} --exe <程序完整路径>"
+                    ));
+                }
+                let exe = v["exe"].as_str().unwrap_or("一个不是本应用启动的程序");
+                let pid = num_of(&v, "pid");
+                return Err(format!(
+                    "这台服务不是你启动的，正在监听的是 {exe}（PID {pid}）。\n停止会真的把它关掉。确认要停就加 --force：cli service stop {id} --force"
+                ));
+            }
+            let human = if kind == "foreignStopped" {
+                format!("✓ 已停止「{id}」（外部启动的进程）")
+            } else {
+                format!("✓ 已停止「{id}」")
+            };
+            done(want_json, &v, &human);
         }
         ServiceCmd::Restart { id } => {
             let v = call("service_restart", json!({"id": id}))?;
+            if v["kind"].as_str() == Some("needsConfirm") {
+                // 兜底：只监控的服务不接管外部进程，不会提示先 --force（那一步必然失败）
+                let svc = find_service(id)?;
+                if svc["launchExe"].is_null() {
+                    return Err(format!(
+                        "「{id}」是只监控的服务（没配启动方式），重启不会去动端口上的程序。\n想接管它，先 cli service edit {id} --exe <程序完整路径> 补全启动方式，再试"
+                    ));
+                }
+                let exe = v["exe"].as_str().unwrap_or("一个不是本应用启动的程序");
+                let pid = num_of(&v, "pid");
+                return Err(format!(
+                    "「{id}」现在不是你启动的进程在监听（{exe}，PID {pid}），重启不会去动它。\n要停掉它再重启：先 cli service stop {id} --force，再 cli service start {id}"
+                ));
+            }
             done(want_json, &v, &format!("✓ 已重启「{id}」"));
         }
         ServiceCmd::Remove { id } => {
@@ -1197,6 +1245,7 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
     cli tunnel start <隧道id>               # 开始发布
     cli tunnel stop <隧道id>                # 暂停发布
     cli service start <服务id>              # 拉起本机服务（用它登记的启动方式）
+    cli service stop <服务id>               # 停止（不是应用启动的进程会先拦一下；配了启动方式才加 --force 真停，只监控的服务会被拒绝）
     cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志）
     cli nginx <隧道id>                      # 生成要贴到云端面板的 nginx 配置片段
     cli tunnel check <隧道id>               # 去云端看实际开着的访问保护（只读，不改服务器）

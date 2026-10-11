@@ -1010,6 +1010,97 @@ body {
   white-space: nowrap;
 }
 
+/* 端口已经登记在别的服务名下：点它跳去编辑那台服务 */
+.port-row.registered {
+  background: var(--accent-soft);
+}
+
+.port-owner {
+  font-size: 12px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+/* 「自动读取 · 未验证」小标签：用户一编辑就消失 */
+.auto-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+/* 自动读取的警告区：默认只提示，sensitiveArgs 时红字 + 勾选框 */
+.launch-warnings {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-card);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.launch-warnings p {
+  margin: 0;
+}
+
+.launch-warnings p + p,
+.launch-warnings p + .switch {
+  margin-top: 6px;
+}
+
+.launch-warnings.sensitive {
+  border-color: var(--st-error);
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.launch-warnings .warn-sensitive {
+  color: var(--st-error-fg);
+  font-weight: 500;
+}
+
+.launch-warnings .warn-check {
+  display: flex;
+  color: var(--st-error-fg);
+}
+
+.preview-line {
+  word-break: break-all;
+}
+
+/* 参数被丢弃时展示的原始命令行（只读，最多 3 行） */
+.raw-cmd {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.raw-cmd-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.raw-cmd-text {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+  word-break: break-all;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* 命令失败：页面顶部的提醒条 */
 .banner-page {
   padding-top: 20px;

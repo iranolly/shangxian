@@ -7,8 +7,17 @@
 //! - 删本机服务前先看有没有隧道在用它（有就拦住报错，不自动连带删）。
 
 use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
 use std::path::PathBuf;
 use std::time::Duration;
+
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, TerminateProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
+};
 
 use crate::cleanup::{CleanupSpec, SshExec};
 use crate::config::{self, AppConfig, LaunchSpec, LocalService, ServerConfig, Tunnel};
@@ -146,6 +155,23 @@ pub struct ServerInput {
     pub ssh_port: u16,
     pub user: String,
     pub key_path: Option<String>,
+}
+
+/// 停止一台本机服务的结果。
+///
+/// JSON 用 `kind` 区分（serde 内部标签，camelCase）：
+/// `{"kind":"stopped","pid":123}` /
+/// `{"kind":"needsConfirm","pid":123,"exe":"D:\\x\\a.exe"}` /
+/// `{"kind":"foreignStopped","pid":123}`
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum StopOutcome {
+    /// 我们自己启动的进程已经停掉（`pid` 是它的进程号）；端口上本来就没有进程时 `pid` 为 None。
+    Stopped { pid: Option<u32> },
+    /// 端口被外部进程占着：需要用户确认后才结束。
+    NeedsConfirm { pid: u32, exe: Option<String> },
+    /// 用户确认后，外部进程已经结束。
+    ForeignStopped { pid: u32 },
 }
 
 pub struct Guardian {
@@ -580,19 +606,125 @@ impl Guardian {
         Ok(())
     }
 
-    /// 停止一台本机服务（只停我们自己启动的那个进程）。
-    pub fn stop_service(&mut self, id: &str) -> Result<(), String> {
-        let svc = self
-            .config
-            .service(id)
-            .ok_or_else(|| format!("找不到服务：{id}"))?;
-        if svc.launch.is_none() {
-            return Err("这台服务没配启动方式，是你自己开的程序，我不会去动它".into());
-        }
+    /// 停止一台本机服务。
+    ///
+    /// 分支顺序（安全红线：只有确认过、且能核对是这台服务配置的程序的进程才会被结束）：
+    /// 1. 先记下自家子进程号并枚举它的整棵进程树（`.bat/.cmd/.ps1` 包装脚本会再起子孙
+    ///    进程绑端口），随后 `runner.stop_now()`：设置 `user_stopped`（看护不再拉起）并借
+    ///    Job 结束整棵树；
+    /// 2. 轮询端口（3×200ms）等自家进程树退干净，并做最终确认：自家树里不能还有 PID
+    ///    占着端口（作业分配失败 / `TerminateJobObject` 失败 / 子孙进程抢跑时会发生），
+    ///    否则直接报「没能停干净」；确认后再把仍在监听、但不在自家树里的 PID 当成
+    ///    「外部监听者」（只排除直接子进程会把自家后代误判成外部进程）；
+    /// 3. 自家树确认退出、端口没有其他监听者 → [`StopOutcome::Stopped`]（`pid` 是自家子进程）；
+    /// 4. 只监控的服务（没配启动方式）：不管 `kill_foreign` 是 false 还是 true，都只返回
+    ///    人话错误（提示端口上现在是谁在听、先把启动方式补全），绝不返回 `NeedsConfirm`
+    ///    ——确认了也一定被拒，是死路；
+    /// 5. 还有真正的外部监听者：`kill_foreign = false` 返回 [`StopOutcome::NeedsConfirm`]；
+    ///    `kill_foreign = true` 时重新解析端口，核对 PID（若提供）和程序路径，通过才真的
+    ///    结束它。
+    ///
+    /// - 端口上本来就没有进程：返回 [`StopOutcome::Stopped`]。
+    pub fn stop_service(
+        &mut self,
+        id: &str,
+        kill_foreign: bool,
+        expected_pid: Option<u32>,
+    ) -> Result<StopOutcome, String> {
+        let (port, launch_exe) = {
+            let svc = self
+                .config
+                .service(id)
+                .ok_or_else(|| format!("找不到服务：{id}"))?;
+            (svc.local_port, svc.launch.as_ref().map(|l| l.exe.clone()))
+        };
+        self.sync_local();
+
+        // 1) 先记下自家子进程整棵树（必须在 stop_now 之前记：stop_now 会把 child 清掉），
+        //    再停：stop_now 设置 user_stopped 并借 Job 结束整棵树。
+        let own_pid = self.local.get(id).and_then(|r| r.pid());
+        let own_tree = own_pid.map(process_tree).unwrap_or_default();
         if let Some(runner) = self.local.get_mut(id) {
             runner.stop_now();
         }
-        Ok(())
+
+        // 2) 有自家进程时轮询等端口清空；仍在监听、又不在自家树里的，才是外部进程。
+        let raw_owners = if own_pid.is_some() {
+            poll_port_owners(port)
+        } else {
+            crate::local_ports::listening_pids(port)
+        };
+
+        // 2.5) 最终确认自家进程树真的退出：作业分配失败 / TerminateJobObject 失败 /
+        //      子孙进程抢跑时，自家进程可能还活着占着端口——不能静默当成功。
+        let own_left: Vec<u32> = raw_owners
+            .iter()
+            .copied()
+            .filter(|pid| own_tree.contains(pid))
+            .collect();
+        if !own_left.is_empty() {
+            return Err(format!(
+                "没能停干净：端口 {port} 还被这台服务自己的进程占着（PID {}），可能子进程还没退掉；请稍等几秒再点停止，或到任务管理器里结束这些进程",
+                join_pids(&own_left)
+            ));
+        }
+
+        let owners: Vec<u32> = raw_owners
+            .into_iter()
+            .filter(|pid| !own_tree.contains(pid))
+            .collect();
+
+        // 3) 端口没有外部监听者：自家进程已经停了
+        if owners.is_empty() {
+            return Ok(StopOutcome::Stopped { pid: own_pid });
+        }
+
+        // 4) 只监控的服务（没配启动方式）：不管 kill_foreign，都绝不接管外部进程。
+        //    之前 kill_foreign=false 会返回 NeedsConfirm，但确认后也一定被拒，是个死路。
+        let Some(configured) = launch_exe.as_deref() else {
+            let who = owners
+                .first()
+                .map(|pid| {
+                    crate::local_ports::process_path(*pid)
+                        .map(|exe| format!("PID {pid}「{exe}」"))
+                        .unwrap_or_else(|| format!("PID {pid}"))
+                })
+                .unwrap_or_else(|| join_pids(&owners));
+            return Err(format!(
+                "这台服务没配启动方式，是你自己开的程序，我不会去动它（端口上现在是 {who}）；想接管它，先在编辑界面点端口把启动方式补全，再来停止"
+            ));
+        };
+
+        // 5) 真正的外部监听者：选目标 → 要确认 / 校验后结束
+        let target = match expected_pid {
+            Some(pid) if owners.contains(&pid) => pid,
+            Some(pid) => {
+                return Err(format!(
+                    "这台服务的端口 {port} 现在的主人已经不是 PID {pid} 了（可能刚退出或被换了），我没有结束任何进程，请重新确认"
+                ));
+            }
+            None => pick_unique_owner(&owners, Some(configured))?,
+        };
+
+        if !kill_foreign {
+            return Ok(StopOutcome::NeedsConfirm {
+                pid: target,
+                exe: crate::local_ports::process_path(target),
+            });
+        }
+
+        // 程序路径必须和配置一致（看护在上面第 1 步已经松手，不会被拉起来）
+        let fresh_exe = crate::local_ports::process_path(target).ok_or_else(|| {
+            format!("读不到 PID {target} 的程序路径（它可能刚退出），没有结束它")
+        })?;
+        if !same_exe(configured, &fresh_exe) {
+            return Err(format!(
+                "为了安全没有结束 PID {target}：它现在运行的是「{fresh_exe}」，不是这台服务配置的「{configured}」"
+            ));
+        }
+
+        kill_process(target)?;
+        Ok(StopOutcome::ForeignStopped { pid: target })
     }
 
     /// 看护开关。
@@ -1157,10 +1289,261 @@ fn read_tail(path: &std::path::Path, lines: usize) -> String {
     let start = all.len().saturating_sub(lines);
     all[start..].join("\n")
 }
+
+// ---------- 停止外部进程的安全工具 ----------
+
+/// 停止自家进程时的端口轮询次数 / 间隔：留时间给 Job 清掉整棵进程树
+/// （`.cmd/.ps1` 包装脚本再拉起来的子孙进程也会晚一拍才退干净）。
+const STOP_PORT_POLLS: usize = 3;
+const STOP_PORT_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// 摸端口上现在的监听者；前面几次非空就歇 200ms 再看，最多看 `STOP_PORT_POLLS` 次。
+fn poll_port_owners(port: u16) -> Vec<u32> {
+    let mut owners = crate::local_ports::listening_pids(port);
+    for _ in 1..STOP_PORT_POLLS {
+        if owners.is_empty() {
+            break;
+        }
+        std::thread::sleep(STOP_PORT_POLL_INTERVAL);
+        owners = crate::local_ports::listening_pids(port);
+    }
+    owners
+}
+
+/// 进程 `root` 及其全部后代（ToolHelp 快照，只读）。
+///
+/// 用来区分「自家子进程树」和「真正的外部监听者」：包装脚本起的孙子进程也算自家树，
+/// 不能只排除直接子进程 pid，否则会把自家后代误判成外部进程去弹二次确认。
+fn process_tree(root: u32) -> HashSet<u32> {
+    let mut tree = HashSet::new();
+    tree.insert(root);
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return tree;
+        }
+        let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+        entry.dwSize = size_of::<PROCESSENTRY32W>() as u32;
+        let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut ok = Process32FirstW(snapshot, &mut entry);
+        while ok != 0 {
+            children
+                .entry(entry.th32ParentProcessID)
+                .or_default()
+                .push(entry.th32ProcessID);
+            ok = Process32NextW(snapshot, &mut entry);
+        }
+        CloseHandle(snapshot);
+
+        let mut pending: Vec<u32> = vec![root];
+        while let Some(pid) = pending.pop() {
+            if let Some(kids) = children.get(&pid) {
+                for &kid in kids {
+                    if tree.insert(kid) {
+                        pending.push(kid);
+                    }
+                }
+            }
+        }
+    }
+    tree
+}
+
+/// 端口有多个监听者、调用方又没指定 PID 时，挑出唯一“能确认是这台服务配置的程序”的那个。
+/// 挑不出来就给一句人话错误，绝不动手。
+fn pick_unique_owner(owners: &[u32], launch_exe: Option<&str>) -> Result<u32, String> {
+    if owners.len() == 1 {
+        return Ok(owners[0]);
+    }
+    let matched: Vec<u32> = match launch_exe {
+        Some(configured) => owners
+            .iter()
+            .copied()
+            .filter(|pid| {
+                crate::local_ports::process_path(*pid)
+                    .map(|exe| same_exe(configured, &exe))
+                    .unwrap_or(false)
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    pick_owner_by_matches(owners, launch_exe.is_some(), &matched)
+}
+
+/// [`pick_unique_owner`] 的纯选择逻辑：`owners` 是端口上全部监听者，`matched` 是其中
+/// 能确认是配置程序的子集。不碰 netstat / OpenProcess，可以对合成数据单测
+/// （matched = 0 / 1 / >1 三种分支）。
+fn pick_owner_by_matches(
+    owners: &[u32],
+    has_configured_exe: bool,
+    matched: &[u32],
+) -> Result<u32, String> {
+    if owners.len() == 1 {
+        return Ok(owners[0]);
+    }
+    if !has_configured_exe {
+        return Err(format!(
+            "这个端口同时被多个进程监听（PID {}），分不清该停哪一个；为避免误杀，我没有动它们",
+            join_pids(owners)
+        ));
+    }
+    match matched.len() {
+        0 => Err(format!(
+            "这个端口同时被多个进程监听（PID {}），其中没有能确认是这台服务配置的程序；为避免误杀，我没有动它们",
+            join_pids(owners)
+        )),
+        1 => Ok(matched[0]),
+        _ => Err(format!(
+            "这个端口有多个监听进程都像是这台服务配置的程序（PID {}），分不清该停哪一个；请手动处理",
+            join_pids(matched)
+        )),
+    }
+}
+
+fn join_pids(pids: &[u32]) -> String {
+    pids.iter()
+        .map(|pid| pid.to_string())
+        .collect::<Vec<_>>()
+        .join("、")
+}
+
+/// 程序路径规范化：去首尾引号/空白，能 canonicalize 就 canonicalize，
+/// 剥掉 `\\?\` 前缀，去掉尾部分隔符，用于忽略大小写的比较。
+fn normalize_exe_path(path: &str) -> String {
+    let raw = path.trim().trim_matches('"').trim();
+    let canonical = std::fs::canonicalize(raw).unwrap_or_else(|_| std::path::PathBuf::from(raw));
+    let mut text = canonical.to_string_lossy().to_string();
+    if let Some(stripped) = text.strip_prefix(r"\\?\") {
+        text = stripped.to_string();
+    }
+    text.trim_end_matches(['\\', '/']).to_string()
+}
+
+/// 配置的启动程序与端口上实际运行的 exe 是不是同一个（忽略大小写、规范化路径）。
+/// 配置里只写了程序名（没有目录）时，按文件名比。
+fn same_exe(configured: &str, running: &str) -> bool {
+    let a = normalize_exe_path(configured);
+    let b = normalize_exe_path(running);
+    if a.eq_ignore_ascii_case(&b) {
+        return true;
+    }
+    if !a.contains('\\') && !a.contains('/') {
+        return file_name_of(&a).eq_ignore_ascii_case(&file_name_of(&b));
+    }
+    false
+}
+
+fn file_name_of(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// 结束一个已经确认过的外部进程。失败一律映射成人话错误。
+fn kill_process(pid: u32) -> Result<(), String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return Err(terminate_error_text(pid, GetLastError()));
+        }
+        let ok = TerminateProcess(handle, 1);
+        let code = if ok == 0 { Some(GetLastError()) } else { None };
+        CloseHandle(handle);
+        match code {
+            None => Ok(()),
+            Some(code) => Err(terminate_error_text(pid, code)),
+        }
+    }
+}
+
+fn terminate_error_text(pid: u32, code: u32) -> String {
+    match code {
+        5 => format!(
+            "结束 PID {pid} 失败：权限不够（它可能是管理员或系统启动的进程）；可以试试用管理员身份运行『上线助手』"
+        ),
+        87 | 299 => format!("结束 PID {pid} 失败：这个进程已经退出了"),
+        _ => format!("结束 PID {pid} 失败（系统错误码 {code}）"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn exe_paths_compare_case_insensitively() {
+        let me = std::env::current_exe().expect("current_exe");
+        let text = me.to_string_lossy().to_string();
+        assert!(same_exe(&text, &text));
+        assert!(same_exe(&text.to_ascii_uppercase(), &text));
+        assert!(same_exe(&format!("\"{text}\""), &text));
+        assert!(!same_exe(r"C:\a\b.exe", r"C:\a\c.exe"));
+        // 配置里只写程序名时按文件名比
+        assert!(same_exe("cmd.exe", r"C:\Windows\System32\cmd.exe"));
+        assert!(!same_exe("cmd.exe", r"C:\Windows\System32\powershell.exe"));
+    }
+
+    #[test]
+    fn unique_owner_selection_covers_match_counts() {
+        // 单 owner：不用比路径，直接选
+        assert_eq!(pick_owner_by_matches(&[7], true, &[7]), Ok(7));
+        assert_eq!(pick_owner_by_matches(&[7], false, &[]), Ok(7));
+        // 多个 owner、恰好一个匹配配置程序 → 选它
+        assert_eq!(pick_owner_by_matches(&[7, 9], true, &[9]), Ok(9));
+        // 多个 owner、没有匹配 → 拒绝
+        let err = pick_owner_by_matches(&[7, 9], true, &[]).unwrap_err();
+        assert!(err.contains("没有能确认"), "err={err}");
+        // 多个 owner、多个匹配 → 分不清，拒绝
+        let err = pick_owner_by_matches(&[7, 9, 11], true, &[7, 11]).unwrap_err();
+        assert!(err.contains("都像是"), "err={err}");
+        // 没配程序：多个 owner 一律拒绝
+        let err = pick_owner_by_matches(&[7, 9], false, &[]).unwrap_err();
+        assert!(err.contains("分不清"), "err={err}");
+    }
+
+    #[test]
+    fn process_tree_contains_its_root() {
+        let me = std::process::id();
+        let tree = process_tree(me);
+        assert!(tree.contains(&me));
+    }
+
+    #[test]
+    fn process_tree_includes_a_spawned_child() {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/C", "ping", "127.0.0.1", "-n", "30", ">NUL"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("spawn cmd.exe");
+        let tree = process_tree(std::process::id());
+        let child_pid = child.id();
+        let included = tree.contains(&child_pid);
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(included, "ToolHelp 父链应该能枚举出直接子进程 {child_pid}");
+    }
+
+    #[test]
+    fn stop_outcome_serializes_with_kind_tag() {
+        let value = serde_json::to_value(StopOutcome::Stopped { pid: None }).unwrap();
+        assert_eq!(value, serde_json::json!({"kind": "stopped", "pid": null}));
+
+        let value = serde_json::to_value(StopOutcome::NeedsConfirm {
+            pid: 7,
+            exe: Some(r"D:\x\a.exe".into()),
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"kind": "needsConfirm", "pid": 7, "exe": r"D:\x\a.exe"})
+        );
+
+        let value = serde_json::to_value(StopOutcome::ForeignStopped { pid: 9 }).unwrap();
+        assert_eq!(value, serde_json::json!({"kind": "foreignStopped", "pid": 9}));
+    }
 
     #[test]
     fn check_tunnel_access_errors_are_plain_chinese() {

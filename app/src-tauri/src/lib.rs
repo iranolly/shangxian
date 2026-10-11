@@ -5,12 +5,13 @@ use std::sync::{Arc, Mutex};
 
 use shangxian_core::config::{default_data_dir, AppConfig};
 use shangxian_core::guardian::{
-    Guardian, NewTunnelInput, ServerInput, ServerView, ServiceInput, ServiceView, TunnelView,
-    UpdateTunnelInput,
+    Guardian, NewTunnelInput, ServerInput, ServerView, ServiceInput, ServiceView, StopOutcome,
+    TunnelView, UpdateTunnelInput,
 };
 use shangxian_core::import::ImportSuggestion;
 use shangxian_core::local_ports::{list_listening, LocalPort};
 use shangxian_core::nginx::NginxSnippet;
+use shangxian_core::proc_detail::LaunchInfo;
 use shangxian_core::protection::AccessCheck;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
@@ -66,10 +67,50 @@ fn service_start(id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.guardian.lock().unwrap().start_service(&id)
 }
 
-/// 停止一台本机服务（只停我们自己启动的进程）。
+/// 停止一台本机服务。
+///
+/// 默认只停我们自己启动的进程；端口上是外部进程时先返回 `needsConfirm`（带 pid/exe），
+/// 界面问过用户后带上 `killForeign=true` 和同一个 `expectedPid` 再调一次才会真的结束它。
+///
+/// 停止过程要走 netstat / OpenProcess / TerminateProcess，会阻塞一会儿，
+/// 所以和 `inspect_process_launch_info` 一样放 `spawn_blocking` 里，不占 Tauri 主线程。
 #[tauri::command]
-fn service_stop(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.guardian.lock().unwrap().stop_service(&id)
+async fn service_stop(
+    id: String,
+    kill_foreign: Option<bool>,
+    expected_pid: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<StopOutcome, String> {
+    let guardian = state.guardian.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        guardian
+            .lock()
+            .unwrap()
+            .stop_service(&id, kill_foreign.unwrap_or(false), expected_pid)
+    })
+    .await
+    .map_err(|e| format!("内部错误：{e}"))?
+}
+
+/// 自动读取某个端口上进程的启动方式（程序/参数/工作目录 + 警告）。
+///
+/// 读进程要走 PEB/ReadProcessMemory，可能卡住几十毫秒，放 `spawn_blocking` 里不堵界面。
+#[tauri::command]
+async fn inspect_process_launch_info(
+    port: u16,
+    expected_pid: Option<u32>,
+) -> Result<LaunchInfo, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        shangxian_core::proc_detail::launch_info(port, expected_pid)
+    })
+    .await
+    .map_err(|e| format!("内部错误：{e}"))
+}
+
+/// 给人看的「实际会执行的命令行」预览（走和启动完全一样的分支，仅供显示）。
+#[tauri::command]
+fn preview_launch_command(exe: String, args: String) -> String {
+    shangxian_core::localservice::preview_launch(&exe, &args)
 }
 
 /// 看护开关（进程掉了自动拉起）。
@@ -510,6 +551,8 @@ pub fn run() {
             remove_service,
             service_start,
             service_stop,
+            inspect_process_launch_info,
+            preview_launch_command,
             set_service_watch,
             set_service_autostart,
             get_service_logs,

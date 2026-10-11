@@ -71,8 +71,44 @@ pub fn list_listening() -> Vec<LocalPort> {
         .collect()
 }
 
+/// 重新跑一遍 netstat，收集这个端口上所有 LISTENING 的进程号（去重，保持 netstat 顺序）。
+///
+/// 和 `list_listening` 不同：这里不按主机地址/端口大小过滤——停止外部进程、核对端口主人时
+/// 需要拿到真实全部监听者，任何一个都不能漏。
+pub fn listening_pids(port: u16) -> Vec<u32> {
+    let Ok(out) = Command::new("netstat")
+        .args(["-ano", "-p", "tcp"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    else {
+        return Vec::new();
+    };
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut pids: Vec<u32> = Vec::new();
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 5 || cols[0] != "TCP" || cols[3] != "LISTENING" {
+            continue;
+        }
+        let Some((_, row_port)) = cols[1].rsplit_once(':') else {
+            continue;
+        };
+        if row_port.parse::<u16>() != Ok(port) {
+            continue;
+        }
+        let Ok(pid) = cols[4].parse::<u32>() else {
+            continue;
+        };
+        if !pids.contains(&pid) {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
 /// 由进程号拿到程序完整路径。
-fn process_path(pid: u32) -> Option<String> {
+pub(crate) fn process_path(pid: u32) -> Option<String> {
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {

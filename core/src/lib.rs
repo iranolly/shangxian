@@ -7,6 +7,7 @@
 //! - `supervisor`：单个隧道的状态机（启动、退出检测、退避重试、停止）。
 //! - `config`：应用配置（唯一事实来源，能手改、能备份）。
 //! - `guardian`：按配置管理全部隧道，输出给界面用的状态。
+//! - `proc_detail`：读取运行中进程的程序路径/命令行/工作目录（添加本机服务自动填充用）。
 
 pub mod cleanup;
 pub mod config;
@@ -19,6 +20,7 @@ pub mod local_ports;
 pub mod localservice;
 pub mod nginx;
 pub mod notify;
+pub mod proc_detail;
 pub mod protection;
 pub mod ssh;
 pub mod supervisor;
