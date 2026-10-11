@@ -272,6 +272,11 @@ body {
   text-decoration: underline;
 }
 
+.link-btn:disabled {
+  color: var(--text-3);
+  text-decoration: none;
+}
+
 .icon-btn {
   border: none;
   background: none;
@@ -890,6 +895,40 @@ body {
   color: var(--text-3);
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* ---------- 访问保护状态（发布隧道卡片 / 访问密码页共用） ---------- */
+
+.protect-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.protect-result {
+  flex: 1 1 100%;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.protect-result.ok {
+  color: var(--st-running-fg);
+}
+
+.protect-result.warn {
+  color: var(--st-disconnected-fg);
+}
+
+/* 两种保护都没开时的红色提醒（比 warn-line 更重，用错误色） */
+.danger-line {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border-radius: var(--r-control);
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+  font-size: 13px;
 }
 
 /* ---------- 本机服务 / 发布隧道 卡片补充 ---------- */

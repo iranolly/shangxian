@@ -79,6 +79,20 @@ fn handle(stream: TcpStream, guardian: &Arc<Mutex<Guardian>>, token: &str) -> st
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(json!({}));
 
+    // 核对云端要跑 SSH（最长 20 秒），不能占着看护轮询/界面快照的全局锁：
+    // 短锁里把连接信息克隆出来，放锁后再跑；dispatch 里那条分支保留作直接调用的兜底。
+    if method == "check_tunnel_access" {
+        let result = {
+            let g = guardian.lock().unwrap();
+            need_str(&params, "id").and_then(|tunnel_id| g.access_check_request(&tunnel_id))
+        }
+        .and_then(|req| shangxian_core::guardian::run_access_check(&req));
+        return match result {
+            Ok(v) => reply(&stream, &json!({"id": id, "ok": true, "result": to_json(v)})),
+            Err(e) => reply(&stream, &json!({"id": id, "ok": false, "error": e})),
+        };
+    }
+
     let result = {
         let mut g = guardian.lock().unwrap();
         dispatch(&mut g, method, &params)
@@ -179,6 +193,11 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     ("hash_password", "在服务器上生成访问密码的哈希（apr1，给 nginx 用）", "{serverId, password}"),
     ("get_nginx_snippet", "生成某条隧道的 nginx 配置片段", "{id}"),
+    (
+        "check_tunnel_access",
+        "核对云端 nginx 上这条隧道的实际访问保护",
+        "{id}",
+    ),
     ("get_notify_enabled", "掉线通知开着吗", "{}"),
     ("set_notify_enabled", "开关掉线通知", "{enabled}"),
     ("get_autostart", "开机自启开着吗", "{}"),
@@ -305,6 +324,10 @@ fn dispatch(g: &mut Guardian, method: &str, params: &Value) -> Result<Value, Str
         "get_nginx_snippet" => {
             let id = need_str(params, "id")?;
             g.nginx_snippet(&id).map(to_json)
+        }
+        "check_tunnel_access" => {
+            let id = need_str(params, "id")?;
+            g.check_tunnel_access(&id).map(to_json)
         }
 
         // ----- 应用 -----

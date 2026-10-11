@@ -40,7 +40,8 @@ export interface TunnelView {
   status: TunnelStatus;
   enabled: boolean;
   reason?: string | null;
-  access?: string | null;
+  /** 访问保护：可同时有 "password" 和 "ip"；空数组/缺失 = 无保护 */
+  access?: string[] | null;
   accessUser?: string | null;
   hasPassword: boolean;
   accessDetail?: string | null;
@@ -114,7 +115,7 @@ export interface NewTunnelInput {
   serverId: string;
   remotePort: number;
   url?: string | null;
-  access: string;
+  access: string[];
   accessUser?: string | null;
   accessHash?: string | null;
   accessDetail?: string | null;
@@ -126,7 +127,7 @@ export interface UpdateTunnelInput {
   name: string;
   remotePort: number;
   url?: string | null;
-  access: string;
+  access: string[];
   accessUser?: string | null;
   accessHash?: string | null;
   accessDetail?: string | null;
@@ -192,6 +193,60 @@ export async function addTunnel(input: NewTunnelInput): Promise<string> {
 
 export async function updateTunnel(input: UpdateTunnelInput): Promise<void> {
   if (inTauri) await invoke("update_tunnel", { input });
+}
+
+/** 云端 nginx 实际生效的访问保护（点「检查云端」时后端去服务器上读配置）。 */
+export interface AccessCheck {
+  /** 云端有没有找到这条隧道的站点配置 */
+  confFound: boolean;
+  /** 云端配置里开着密码保护 */
+  passwordOn: boolean;
+  /** 云端配置里开着 IP 白名单 */
+  ipOn: boolean;
+  /** 云端配置里允许的 IP 列表 */
+  allowIps: string[];
+  /** 服务器上密码文件在不在 */
+  htpasswdExists: boolean;
+}
+
+/** 浏览器预览模式：按隧道设置造一份演示结果，顺便覆盖几种要预警的情况。 */
+function previewAccessCheck(id: string): AccessCheck {
+  const t = MOCK_TUNNELS.find((x) => x.id === id);
+  const access = t?.access ?? [];
+  const passwordOn = access.includes("password");
+  const ipOn = access.includes("ip");
+  const allowIps =
+    ipOn && t?.accessDetail
+      ? t.accessDetail.split(/[,，\s]+/).filter(Boolean)
+      : [];
+  const consistent: AccessCheck = {
+    confFound: true,
+    passwordOn,
+    ipOn,
+    allowIps,
+    htpasswdExists: passwordOn,
+  };
+  // 特意造出「配置没找到 / 缺密码文件 / 云端和设置不一致」三种情况，预览时能看全提示
+  if (id === "tun-docs") {
+    return {
+      confFound: false,
+      passwordOn: false,
+      ipOn: false,
+      allowIps: [],
+      htpasswdExists: false,
+    };
+  }
+  if (id === "tun-album") return { ...consistent, htpasswdExists: false };
+  if (id === "tun-pi-web-spare") {
+    return { ...consistent, passwordOn: false, htpasswdExists: false };
+  }
+  return consistent;
+}
+
+/** 去云端服务器读 nginx 配置，看看访问保护实际有没有生效。 */
+export async function checkTunnelAccess(id: string): Promise<AccessCheck> {
+  if (!inTauri) return previewAccessCheck(id);
+  return await invoke<AccessCheck>("check_tunnel_access", { id });
 }
 
 export async function removeTunnel(id: string): Promise<void> {
@@ -271,8 +326,19 @@ export async function hashPassword(
   return await invoke<string>("hash_password", { serverId, password });
 }
 
+export interface NginxLine {
+  text: string;
+  /** true = 这行是新增内容（界面高亮）；false = 原配置的样子（界面灰显） */
+  isNew: boolean;
+}
+
 export interface NginxSnippet {
-  snippet: string;
+  /** 要新增的几行（复制按钮复制的就是它）；没有访问保护时为 null */
+  snippet?: string | null;
+  /** 证书自动续期要加的一行（放进 location /.well-known/ 里） */
+  acmeExempt?: string | null;
+  /** 简短示意：灰 = 原配置的样子，高亮 = 新增内容的位置 */
+  preview: NginxLine[];
   htpasswd?: string | null;
   steps: string[];
 }
@@ -280,10 +346,35 @@ export interface NginxSnippet {
 /** id 是隧道 id。 */
 export async function getNginxSnippet(id: string): Promise<NginxSnippet> {
   if (!inTauri) {
+    const gray = (text: string) => ({ text, isNew: false });
+    const add = (text: string) => ({ text, isNew: true });
     return {
-      snippet: `server {\n  listen 80;\n  server_name 演示.example.com;\n  location / {\n    proxy_pass http://127.0.0.1:13041;\n  }\n}\n# 浏览器预览：这是演示用的片段（${id}）`,
+      snippet:
+        '    # 访问密码（由「上线助手」新增）\n    auth_basic "需要密码";\n    auth_basic_user_file /xp/panel/vhost/演示.example.com.htpasswd;',
+      acmeExempt: "auth_basic off;",
+      preview: [
+        gray("server {"),
+        gray("    ..."),
+        gray("    server_name 演示.example.com;"),
+        add("    # ① 新增：访问密码（放在 server_name 下面）"),
+        add('    auth_basic "需要密码";'),
+        add(
+          "    auth_basic_user_file /xp/panel/vhost/演示.example.com.htpasswd;",
+        ),
+        gray("    ..."),
+        gray("    # SSL证书验证目录"),
+        gray("    location /.well-known/ {"),
+        add("        # ② 新增：证书续期用（放进这个目录里）"),
+        add("        auth_basic off;"),
+        gray("        allow all;"),
+        gray("    }"),
+        gray("    ..."),
+        gray("}"),
+      ],
       htpasswd: null,
-      steps: ["浏览器预览模式：这里是演示内容，真实运行时会给这条隧道生成配置。"],
+      steps: [
+        "浏览器预览模式：这里是演示内容，真实运行时会给这条隧道生成要新增的几行。",
+      ],
     };
   }
   return await invoke<NginxSnippet>("get_nginx_snippet", { id });

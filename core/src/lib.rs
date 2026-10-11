@@ -19,5 +19,6 @@ pub mod local_ports;
 pub mod localservice;
 pub mod nginx;
 pub mod notify;
+pub mod protection;
 pub mod ssh;
 pub mod supervisor;

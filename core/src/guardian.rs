@@ -8,11 +8,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::cleanup::{CleanupSpec, SshExec};
 use crate::config::{self, AppConfig, LaunchSpec, LocalService, ServerConfig, Tunnel};
 use crate::import::ImportSuggestion;
 use crate::localservice::{LocalRunner, LocalSpec};
+use crate::protection::AccessCheck;
 use crate::ssh::{self, TunnelTarget};
 use crate::supervisor::{service_log_path, Event, Phase, Tunnel as TunnelProc, TunnelSpec};
 
@@ -59,8 +61,8 @@ pub struct TunnelView {
     pub enabled: bool,
     /// 出错原因（人话），给「出错」状态的修复带用
     pub reason: Option<String>,
-    /// none | password | ip
-    pub access: Option<String>,
+    /// 访问保护：["password"]、["ip"] 或两者叠加；空 = 谁都能进
+    pub access: Vec<String>,
     pub access_user: Option<String>,
     /// 是否已经设过访问密码（密码本身不落盘）
     pub has_password: bool,
@@ -109,7 +111,9 @@ pub struct NewTunnelInput {
     pub server_id: String,
     pub remote_port: u16,
     pub url: Option<String>,
-    pub access: String,
+    /// 访问保护：可以同时要密码 + 只允许指定 IP；缺失 = 谁都能进
+    #[serde(default, deserialize_with = "config::deserialize_access")]
+    pub access: Vec<String>,
     pub access_user: Option<String>,
     pub access_hash: Option<String>,
     pub access_detail: Option<String>,
@@ -123,7 +127,9 @@ pub struct UpdateTunnelInput {
     pub name: String,
     pub remote_port: u16,
     pub url: Option<String>,
-    pub access: String,
+    /// 访问保护：缺失或 null = 保持原样；给了就替换（空数组或 ["none"] = 取消保护）
+    #[serde(default, deserialize_with = "config::deserialize_access_opt")]
+    pub access: Option<Vec<String>>,
     pub access_user: Option<String>,
     /// 新密码的哈希；None = 保持原密码
     pub access_hash: Option<String>,
@@ -660,6 +666,18 @@ impl Guardian {
         }
         let _ = local_port;
 
+        // 勾了保护就必须有对应的内容：密码要有哈希、白名单要有 IP
+        if input.access.iter().any(|a| a == "password")
+            && clean_optional(input.access_hash.clone()).is_none()
+        {
+            return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
+        }
+        if input.access.iter().any(|a| a == "ip")
+            && clean_optional(input.access_detail.clone()).is_none()
+        {
+            return Err("这条隧道选了「只允许指定 IP」，请先把允许访问的 IP 填上".into());
+        }
+
         let id = config::new_id("tun");
         self.config.tunnels.push(Tunnel {
             id: id.clone(),
@@ -669,7 +687,7 @@ impl Guardian {
             remote_port: input.remote_port,
             url: clean_optional(input.url),
             key_path: None,
-            access: Some(input.access),
+            access: input.access,
             access_user: clean_optional(input.access_user),
             access_hash: clean_optional(input.access_hash),
             access_detail: clean_optional(input.access_detail),
@@ -686,12 +704,18 @@ impl Guardian {
             return Err("请填写隧道名字".into());
         }
 
-        let (server_id, port_changed) = {
+        let (server_id, port_changed, old_access, old_hash, old_detail) = {
             let tun = self
                 .config
                 .tunnel(&input.id)
                 .ok_or_else(|| format!("找不到隧道：{}", input.id))?;
-            (tun.server_id.clone(), tun.remote_port != input.remote_port)
+            (
+                tun.server_id.clone(),
+                tun.remote_port != input.remote_port,
+                tun.access.clone(),
+                tun.access_hash.clone(),
+                tun.access_detail.clone(),
+            )
         };
 
         if self
@@ -705,21 +729,25 @@ impl Guardian {
             ));
         }
 
-        if input.access == "password" {
-            let old_has = self
-                .config
-                .tunnel(&input.id)
-                .and_then(|t| t.access_hash.as_deref())
-                .map(|h| !h.is_empty())
-                .unwrap_or(false);
-            let new_has = input
-                .access_hash
-                .as_deref()
-                .map(|h| !h.trim().is_empty())
-                .unwrap_or(false);
-            if !old_has && !new_has {
-                return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
-            }
+        // 没传 access 就保持原样；传了就整体替换。
+        let access = input.access.clone().unwrap_or(old_access);
+        let new_hash = clean_optional(input.access_hash.clone());
+        let wants_ip = access.iter().any(|a| a == "ip");
+        // IP 校验/写回都用「合并后的 detail」：新值优先，没传就用旧的（CLI 不传时保留原值）。
+        let final_detail = if wants_ip {
+            clean_optional(input.access_detail.clone()).or(old_detail)
+        } else {
+            // 不要 IP 保护了：把旧的 IP 列表清掉（等于界面传 null）。
+            None
+        };
+        if access.iter().any(|a| a == "password")
+            && new_hash.is_none()
+            && clean_optional(old_hash).is_none()
+        {
+            return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
+        }
+        if wants_ip && final_detail.is_none() {
+            return Err("这条隧道选了「只允许指定 IP」，请先把允许访问的 IP 填上".into());
         }
 
         {
@@ -732,12 +760,12 @@ impl Guardian {
             tun.name = name;
             tun.remote_port = input.remote_port;
             tun.url = clean_optional(input.url);
-            tun.access = Some(input.access);
+            tun.access = access;
             tun.access_user = clean_optional(input.access_user);
-            if let Some(hash) = clean_optional(input.access_hash) {
+            if let Some(hash) = new_hash {
                 tun.access_hash = Some(hash);
             }
-            tun.access_detail = clean_optional(input.access_detail);
+            tun.access_detail = final_detail;
         }
 
         if port_changed {
@@ -855,7 +883,7 @@ impl Guardian {
                 remote_port: item.remote_port,
                 url: item.url.clone(),
                 key_path: None,
-                access: None,
+                access: Vec::new(),
                 access_user: None,
                 access_hash: None,
                 access_detail: None,
@@ -974,6 +1002,54 @@ impl Guardian {
         crate::cleanup::hash_password(&exec, password)
     }
 
+    /// 只读地把核对需要的连接信息（目标、端口、密钥、域名）克隆出来，不联网。
+    ///
+    /// 真正跑 SSH 的是自由函数 [`run_access_check`]，调用方（Tauri 命令、控制通道）
+    /// 可以在短锁里拿到 request、放锁后再跑，别占着看护轮询的全局锁最长 20 秒。
+    pub fn access_check_request(&self, id: &str) -> Result<AccessCheckRequest, String> {
+        let tun = self
+            .config
+            .tunnel(id)
+            .ok_or_else(|| format!("找不到隧道：{id}"))?;
+        let raw_url = tun
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "隧道「{}」还没填公网网址，没法核对云端保护；先回应用里把网址填上",
+                    tun.name
+                )
+            })?;
+        let domain = normalize_domain(raw_url);
+        if domain.is_empty() {
+            return Err(format!(
+                "隧道「{}」还没填公网网址，没法核对云端保护；先回应用里把网址填上",
+                tun.name
+            ));
+        }
+        let server = self
+            .config
+            .servers
+            .iter()
+            .find(|s| s.id == tun.server_id)
+            .ok_or_else(|| "找不到这条隧道挂的云端服务器".to_string())?;
+        Ok(AccessCheckRequest {
+            target: format!("{}@{}", server.user, server.host),
+            ssh_port: server.ssh_port,
+            identity_file: server.key_path.clone().map(PathBuf::from),
+            domain,
+        })
+    }
+
+    /// 核对这条隧道的网站上实际开着的访问保护：通过 SSH 只读地看云端 nginx 配置，
+    /// 不改服务器上的任何东西。薄包装：先取连接信息，再跑核对。
+    pub fn check_tunnel_access(&self, id: &str) -> Result<AccessCheck, String> {
+        let req = self.access_check_request(id)?;
+        run_access_check(&req)
+    }
+
     fn save(&self) -> Result<(), String> {
         self.config
             .save(&self.config_path)
@@ -1011,6 +1087,68 @@ fn clean_optional(value: Option<String>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// 核对云端访问保护需要的最小连接信息（从配置里只读克隆出来，不联网）。
+#[derive(Debug, Clone)]
+pub struct AccessCheckRequest {
+    /// `user@host`
+    pub target: String,
+    pub ssh_port: u16,
+    pub identity_file: Option<PathBuf>,
+    /// 已规范化过的域名（去掉了协议前缀和路径）
+    pub domain: String,
+}
+
+/// 跑一次云端访问保护核对（只读 SSH，最长 20 秒后超时）。
+///
+/// 不碰 Guardian，也不持有任何锁，所以调用方可以放锁后再调（见 P2-2）。
+pub fn run_access_check(req: &AccessCheckRequest) -> Result<AccessCheck, String> {
+    let exec = SshExec {
+        ssh_exe: ssh::default_ssh_exe(),
+        target: req.target.clone(),
+        ssh_port: req.ssh_port,
+        identity_file: req.identity_file.clone(),
+    };
+    let out = crate::cleanup::run(
+        &exec,
+        &access_check_script(&req.domain),
+        Duration::from_secs(20),
+    )?;
+    Ok(crate::protection::parse(&out))
+}
+
+/// 网址 → 域名：去空白、去掉 http:// / https:// 前缀、砍掉第一个 `/` 或空白
+/// 后面的路径。例如 `https://karryn.iranol1.xyz/x` → `karryn.iranol1.xyz`。
+fn normalize_domain(raw: &str) -> String {
+    let mut domain = raw.trim();
+    for prefix in ["https://", "http://"] {
+        if let Some(rest) = domain.strip_prefix(prefix) {
+            domain = rest;
+            break;
+        }
+        // 大写写法（HTTP://...）也认；前缀是纯 ASCII，按下标切不会切坏字符
+        if domain.len() >= prefix.len()
+            && domain.as_bytes()[..prefix.len()].eq_ignore_ascii_case(prefix.as_bytes())
+        {
+            domain = &domain[prefix.len()..];
+            break;
+        }
+    }
+    let end = domain
+        .find(|c: char| c == '/' || c.is_whitespace())
+        .unwrap_or(domain.len());
+    domain[..end].trim().to_string()
+}
+
+/// 核对访问保护的远端脚本：只读地把站点配置夹在正文标记之间打印出来，
+/// 标记之外再报告配置文件 / 密码文件在不在。
+/// 域名用单引号包好，避免被 shell 当成命令解释。
+fn access_check_script(domain: &str) -> String {
+    format!(
+        "d={}; f=\"/xp/panel/vhost/nginx/$d.conf\"; if [ -f \"$f\" ]; then echo '===SHANGXIAN-CONF-BEGIN==='; cat \"$f\"; echo; echo '===SHANGXIAN-CONF-END==='; echo CONF_FOUND; else echo CONF_MISSING; fi; if [ -f \"/xp/panel/vhost/$d.htpasswd\" ]; then echo HTPASSWD_YES; else echo HTPASSWD_NO; fi",
+        crate::cleanup::shell_quote(domain)
+    )
+}
+
 fn read_tail(path: &std::path::Path, lines: usize) -> String {
     let Ok(text) = std::fs::read_to_string(path) else {
         return format!("（还没有日志：{}）", path.display());
@@ -1018,4 +1156,141 @@ fn read_tail(path: &std::path::Path, lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();
     let start = all.len().saturating_sub(lines);
     all[start..].join("\n")
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
+    #[test]
+    fn check_tunnel_access_errors_are_plain_chinese() {
+        let dir = std::env::temp_dir().join("sx-access-check-test");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // 找不到隧道
+        let g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+        let err = g.check_tunnel_access("tun-nope").unwrap_err();
+        assert!(err.contains("找不到隧道"), "err={err}");
+
+        // 隧道存在但没填网址 → 提醒先填网址（不去连服务器）
+        let cfg = AppConfig {
+            version: config::CONFIG_VERSION,
+            servers: Vec::new(),
+            services: Vec::new(),
+            tunnels: vec![Tunnel {
+                id: "tun-1".into(),
+                name: "相册".into(),
+                service_id: "svc-1".into(),
+                server_id: "srv-1".into(),
+                remote_port: 18080,
+                url: None,
+                key_path: None,
+                access: Vec::new(),
+                access_user: None,
+                access_hash: None,
+                access_detail: None,
+                enabled: true,
+            }],
+            notify_enabled: true,
+        };
+        let g = Guardian::new(cfg, dir.join("config.json"), dir.join("logs"));
+        let err = g.check_tunnel_access("tun-1").unwrap_err();
+        assert!(err.contains("网址"), "err={err}");
+    }
+
+    #[test]
+    fn normalize_domain_strips_scheme_path_and_spaces() {
+        assert_eq!(normalize_domain("https://karryn.iranol1.xyz/x"), "karryn.iranol1.xyz");
+        assert_eq!(normalize_domain("http://album.example.com"), "album.example.com");
+        assert_eq!(normalize_domain(" album.example.com/y/z?q=1 "), "album.example.com");
+        assert_eq!(normalize_domain("album.example.com 8080"), "album.example.com");
+        assert_eq!(normalize_domain("HTTPS://Album.example.com/x"), "Album.example.com");
+        assert_eq!(normalize_domain("/only-path"), "");
+        assert_eq!(normalize_domain("karryn.iranol1.xyz"), "karryn.iranol1.xyz");
+    }
+
+    #[test]
+    fn access_check_request_clones_connection_info() {
+        let dir = std::env::temp_dir().join("sx-access-request-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cfg = AppConfig {
+            version: config::CONFIG_VERSION,
+            servers: vec![ServerConfig {
+                id: "srv-1".into(),
+                name: "香港-1".into(),
+                host: "karryn.iranol1.xyz".into(),
+                ssh_port: 2222,
+                user: "root".into(),
+                key_path: Some("C:/k/id_ed25519".into()),
+            }],
+            services: Vec::new(),
+            tunnels: vec![Tunnel {
+                id: "tun-1".into(),
+                name: "相册".into(),
+                service_id: "svc-1".into(),
+                server_id: "srv-1".into(),
+                remote_port: 18080,
+                url: Some("  https://karryn.iranol1.xyz/album?q=1  ".into()),
+                key_path: None,
+                access: Vec::new(),
+                access_user: None,
+                access_hash: None,
+                access_detail: None,
+                enabled: true,
+            }],
+            notify_enabled: true,
+        };
+        let g = Guardian::new(cfg, dir.join("config.json"), dir.join("logs"));
+        let req = g.access_check_request("tun-1").unwrap();
+        assert_eq!(req.domain, "karryn.iranol1.xyz");
+        assert_eq!(req.target, "root@karryn.iranol1.xyz");
+        assert_eq!(req.ssh_port, 2222);
+        assert_eq!(
+            req.identity_file.as_deref(),
+            Some(std::path::Path::new("C:/k/id_ed25519"))
+        );
+    }
+
+    #[test]
+    #[ignore = "只读真机对照：需要能免密 SSH 到 api.iranol1.xyz；手动跑 --ignored"]
+    fn real_machine_karryn_access_check() {
+        // 真机对照（只读，不改服务器）：karryn.iranol1.xyz 的 conf 是
+        // server 级 auth_basic "需要密码" + .well-known 里 auth_basic off/allow all，
+        // 没有任何整站 allow/deny → passwordOn=true、ipOn=false、allowIps=[]。
+        let req = AccessCheckRequest {
+            target: "cgt@api.iranol1.xyz".into(),
+            ssh_port: 22,
+            identity_file: None,
+            domain: "karryn.iranol1.xyz".into(),
+        };
+        let check = run_access_check(&req).expect("真机 SSH 只读核对失败");
+        assert!(check.conf_found, "站点 conf 应该存在");
+        assert!(check.htpasswd_exists, "htpasswd 应该存在");
+        assert!(check.password_on, "server 级 auth_basic 应该算开密码");
+        assert!(!check.ip_on, ".well-known 里的 allow all 不能算整站白名单");
+        assert!(check.allow_ips.is_empty(), "没有整站白名单", );
+    }
+
+    #[test]
+    fn access_check_script_wraps_conf_in_markers() {
+        let script = access_check_script("album.example.com");
+        assert!(script.starts_with("d='album.example.com';"));
+        assert!(script.contains("/xp/panel/vhost/nginx/$d.conf"));
+        assert!(script.contains("/xp/panel/vhost/$d.htpasswd"));
+        assert!(
+            script.contains("===SHANGXIAN-CONF-BEGIN===")
+                && script.contains("===SHANGXIAN-CONF-END==="),
+            "script={script}"
+        );
+        assert!(script.contains("CONF_FOUND") && script.contains("CONF_MISSING"));
+        // 顺序：BEGIN → cat 正文 → END → 结果标记
+        let begin = script.find("===SHANGXIAN-CONF-BEGIN===").unwrap();
+        let cat = script.find("cat \"$f\"").unwrap();
+        let end = script.find("===SHANGXIAN-CONF-END===").unwrap();
+        let found = script.find("CONF_FOUND").unwrap();
+        assert!(begin < cat && cat < end && end < found, "script={script}");
+        // 域名里的单引号被转义，不会跑出 shell 命令
+        let tricky = access_check_script("a'b");
+        assert!(tricky.starts_with(r#"d='a'\''b';"#), "script={tricky}");
+    }
 }

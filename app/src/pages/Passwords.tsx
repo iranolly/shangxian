@@ -4,6 +4,11 @@ import { useState } from "react";
 
 import { EditTunnelModal } from "../components/EditTunnelModal";
 import { NginxModal } from "../components/NginxModal";
+import {
+  ProtectionStatus,
+  accessFlags,
+  protectionSummary,
+} from "../components/ProtectionStatus";
 import type { TunnelView } from "../api";
 
 interface Props {
@@ -11,41 +16,31 @@ interface Props {
   onRefresh: () => void;
 }
 
-interface Protection {
-  tone: "ok" | "warn";
-  label: string;
-  action: string;
-}
-
-function describe(t: TunnelView): Protection {
-  if (t.access === "password" && t.hasPassword) {
-    return {
-      tone: "ok",
-      label: `要密码（用户名 ${t.accessUser ?? "shangxian"}）`,
-      action: "换密码",
-    };
-  }
-  if (t.access === "password") {
-    return { tone: "warn", label: "选了要密码，但还没设", action: "设密码" };
-  }
-  if (t.access === "ip") {
-    return { tone: "ok", label: "只允许指定 IP", action: "改白名单" };
-  }
-  return { tone: "warn", label: "谁都能进", action: "加保护" };
+/** 编辑按钮的文案：按当前设置的组合给一个最合适的说法 */
+function actionFor(t: TunnelView): string {
+  const { password, ip } = accessFlags(t.access);
+  if (password && ip) return t.hasPassword ? "修改保护" : "设密码";
+  if (password) return t.hasPassword ? "换密码" : "设密码";
+  if (ip) return "改白名单";
+  return "加保护";
 }
 
 export function PasswordsPage({ tunnels, onRefresh }: Props) {
   const [editFor, setEditFor] = useState<TunnelView | null>(null);
   const [nginxFor, setNginxFor] = useState<TunnelView | null>(null);
 
-  const warnCount = tunnels.filter((t) => describe(t).tone === "warn").length;
+  const warnCount = tunnels.filter(
+    (t) => protectionSummary(t).tone === "warn",
+  ).length;
 
   return (
     <div className="page">
       <header className="page-head">
         <div>
           <h1 className="page-title">访问密码</h1>
-          <p className="page-sub">给每条隧道加一道门：要密码、或者只让指定的人进。</p>
+          <p className="page-sub">
+            给每条隧道加一道门：要密码、只让指定的人进，两种保护可以同时开。
+          </p>
         </div>
       </header>
       <div className="service-list">
@@ -65,14 +60,14 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                   <div className="server-meta">
                     {warnCount === 0
                       ? `${tunnels.length} 条隧道都设了保护。`
-                      : `有 ${warnCount} 条隧道没保护，网址一泄露谁都能看。`}
+                      : `有 ${warnCount} 条隧道还没设好保护，网址一泄露谁都能看。`}
                   </div>
                 </div>
               </div>
             </article>
 
             {tunnels.map((t) => {
-              const p = describe(t);
+              const ipOn = accessFlags(t.access).ip;
               return (
                 <article className="card" key={t.id}>
                   <div className="server-card">
@@ -80,18 +75,17 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                       <div className="server-name">{t.name}</div>
                       <div className="server-meta">
                         {t.url ?? "还没填公网网址"}
-                        {t.access === "ip" && t.accessDetail
+                        {ipOn && t.accessDetail
                           ? ` · 允许：${t.accessDetail}`
                           : ""}
                       </div>
                     </div>
-                    <span className={`chip ${p.tone}`}>{p.label}</span>
                     <span className="row-actions">
                       <button
                         className="btn btn-ghost btn-sm"
                         onClick={() => setEditFor(t)}
                       >
-                        {p.action}
+                        {actionFor(t)}
                       </button>
                       <button
                         className="btn btn-ghost btn-sm"
@@ -101,13 +95,14 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                       </button>
                     </span>
                   </div>
+                  <ProtectionStatus tunnel={t} />
                 </article>
               );
             })}
 
             <p className="page-hint">
               密码不会存在本地（只存加密结果），忘了就在这里点「换密码」重新设一个；
-              改完密码后，记得重新复制一次云端配置贴到面板里。
+              改完密码后，记得重新复制一次云端配置贴到面板里，再点「检查云端」确认真的生效了。
             </p>
           </>
         )}

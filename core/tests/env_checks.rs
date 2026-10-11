@@ -80,7 +80,7 @@ fn nginx_snippet_generation() {
         remote_port: 18080,
         url: Some("album.example.com".into()),
         key_path: None,
-        access: Some("password".into()),
+        access: vec!["password".into()],
         access_user: Some("shangxian".into()),
         access_hash: Some("$apr1$abc".into()),
         access_detail: None,
@@ -88,9 +88,27 @@ fn nginx_snippet_generation() {
     };
 
     let snip = shangxian_core::nginx::generate(&svc, 8080, &server);
-    assert!(snip.snippet.contains("server_name album.example.com;"));
-    assert!(snip.snippet.contains("proxy_pass http://127.0.0.1:18080;"));
-    assert!(snip.snippet.contains("auth_basic"));
+    // 只给「要新增的几行」，不是整段配置
+    let add = snip.snippet.as_deref().unwrap();
+    assert!(add.contains("auth_basic \"需要密码\";"));
+    assert!(add.contains("auth_basic_user_file /xp/panel/vhost/album.example.com.htpasswd;"));
+    assert_eq!(snip.acme_exempt.as_deref(), Some("auth_basic off;"));
+    // 简短示意里要看得到域名和新增位置
+    assert!(
+        snip.preview
+            .iter()
+            .any(|l| !l.is_new && l.text.contains("server_name album.example.com;"))
+    );
+    assert!(
+        snip.preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("auth_basic_user_file"))
+    );
+    assert!(
+        snip.preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("auth_basic off;"))
+    );
     assert!(snip
         .htpasswd
         .as_deref()
@@ -98,17 +116,81 @@ fn nginx_snippet_generation() {
         .contains("shangxian:$apr1$abc"));
 
     let mut open = svc.clone();
-    open.access = Some("none".into());
+    open.access = Vec::new();
     let snip2 = shangxian_core::nginx::generate(&open, 8080, &server);
-    assert!(snip2.snippet.contains("没有访问保护"));
+    assert!(snip2.snippet.is_none());
+    assert!(snip2.acme_exempt.is_none());
+    assert!(
+        snip2.preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("没有访问保护"))
+    );
 
     let mut ip = svc.clone();
-    ip.access = Some("ip".into());
+    ip.access = vec!["ip".into()];
     ip.access_detail = Some("1.2.3.4, 5.6.7.8".into());
     let snip3 = shangxian_core::nginx::generate(&ip, 8080, &server);
-    assert!(snip3.snippet.contains("allow 1.2.3.4;"));
-    assert!(snip3.snippet.contains("allow 5.6.7.8;"));
-    assert!(snip3.snippet.contains("deny all;"));
+    let add3 = snip3.snippet.as_deref().unwrap();
+    assert!(add3.contains("allow 1.2.3.4;"));
+    assert!(add3.contains("allow 5.6.7.8;"));
+    assert!(add3.contains("deny all;"));
+    // 只有 IP 白名单时不用给证书续期目录开口子
+    assert!(snip3.acme_exempt.is_none());
+}
+
+#[test]
+fn nginx_snippet_password_and_ip_together() {
+    use shangxian_core::config::{ServerConfig, Tunnel};
+
+    let server = ServerConfig {
+        id: "s".into(),
+        name: "s".into(),
+        host: "h".into(),
+        ssh_port: 22,
+        user: "u".into(),
+        key_path: None,
+    };
+    let tun = Tunnel {
+        id: "x".into(),
+        name: "相册".into(),
+        service_id: "svc-1".into(),
+        server_id: "s".into(),
+        remote_port: 18080,
+        url: Some("album.example.com".into()),
+        key_path: None,
+        // 两道门同时开：密码 + 只允许指定 IP
+        access: vec!["password".into(), "ip".into()],
+        access_user: Some("shangxian".into()),
+        access_hash: Some("$apr1$abc".into()),
+        access_detail: Some("1.2.3.4, 5.6.7.8".into()),
+        enabled: true,
+    };
+
+    let snip = shangxian_core::nginx::generate(&tun, 8080, &server);
+    let add = snip.snippet.as_deref().unwrap();
+    // 两块都要出现：密码块在前，IP 块在后
+    assert!(add.contains("auth_basic \"需要密码\";"), "add={add}");
+    assert!(add.contains("auth_basic_user_file /xp/panel/vhost/album.example.com.htpasswd;"));
+    assert!(add.contains("allow 1.2.3.4;"));
+    assert!(add.contains("allow 5.6.7.8;"));
+    assert!(add.contains("deny all;"));
+    let password_at = add.find("auth_basic").unwrap();
+    let ip_at = add.find("allow 1.2.3.4;").unwrap();
+    assert!(password_at < ip_at, "密码块应该在 IP 块前面：\n{add}");
+    // 密码开着时，证书续期目录里要保留 auth_basic off;
+    assert_eq!(snip.acme_exempt.as_deref(), Some("auth_basic off;"));
+    assert!(
+        snip.preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("auth_basic off;")),
+        "示意图里要让用户看到 .well-known 里的 auth_basic off;"
+    );
+    // 人话说明里要讲清「两道门都要过」
+    assert!(
+        snip.steps.iter().any(|s| s.contains("两道门都开着")),
+        "steps={:?}",
+        snip.steps
+    );
 }
 
 #[test]
@@ -173,13 +255,46 @@ fn service_and_tunnel_validations() {
             server_id: sid.clone(),
             remote_port: 18080,
             url: None,
-            access: "none".into(),
+            access: Vec::new(),
             access_user: None,
             access_hash: None,
             access_detail: None,
         })
         .unwrap();
     assert_eq!(g.tunnel_snapshot().len(), 1);
+
+    // 「要密码」但没给哈希 → 报错
+    let err = g
+        .add_tunnel(NewTunnelInput {
+            name: "缺密码".into(),
+            service_id: svc_a.clone(),
+            server_id: sid.clone(),
+            remote_port: 18081,
+            url: None,
+            access: vec!["password".into()],
+            access_user: Some("u".into()),
+            access_hash: None,
+            access_detail: None,
+        })
+        .unwrap_err();
+    assert!(err.contains("密码"), "err={err}");
+
+    // 「只允许指定 IP」但没填 IP → 报错
+    let err = g
+        .add_tunnel(NewTunnelInput {
+            name: "缺 IP".into(),
+            service_id: svc_a.clone(),
+            server_id: sid.clone(),
+            remote_port: 18082,
+            url: None,
+            access: vec!["ip".into()],
+            access_user: None,
+            access_hash: None,
+            access_detail: None,
+        })
+        .unwrap_err();
+    assert!(err.contains("IP"), "err={err}");
+    assert_eq!(g.tunnel_snapshot().len(), 1, "没写成的隧道不应该落盘");
     // 服务卡片上能看到"已发布到 1 条隧道"
     assert_eq!(g.snapshot()[0].tunnel_count, 1);
 
@@ -191,7 +306,7 @@ fn service_and_tunnel_validations() {
             server_id: sid.clone(),
             remote_port: 18080,
             url: None,
-            access: "none".into(),
+            access: Vec::new(),
             access_user: None,
             access_hash: None,
             access_detail: None,
@@ -356,4 +471,109 @@ fn monitor_only_service_reports_port_state() {
         sleep(Duration::from_millis(200));
     }
     assert!(stopped, "端口关了就该显示没启动：{:?}", g.snapshot()[0]);
+}
+
+/// P3-3：update_tunnel 的 IP 校验/写回要用「合并后的 detail」
+/// （新值优先，没传就用旧的），别把旧的 IP 列表误清空或误报错。
+#[test]
+fn update_tunnel_merges_access_detail() {
+    use shangxian_core::config::AppConfig;
+    use shangxian_core::guardian::{
+        Guardian, NewTunnelInput, ServerInput, ServiceInput, UpdateTunnelInput,
+    };
+
+    let dir = std::env::temp_dir().join("sx-update-tunnel-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+
+    let sid = g
+        .save_server(ServerInput {
+            id: None,
+            name: "测试".into(),
+            host: "example.com".into(),
+            ssh_port: 22,
+            user: "u".into(),
+            key_path: None,
+        })
+        .unwrap();
+    let svc = g
+        .save_service(ServiceInput {
+            id: None,
+            name: "服务A".into(),
+            local_port: 18094,
+            launch_exe: None,
+            launch_args: None,
+            launch_workdir: None,
+            watch: false,
+            autostart: false,
+            note: None,
+        })
+        .unwrap();
+
+    let tun = g
+        .add_tunnel(NewTunnelInput {
+            name: "相册".into(),
+            service_id: svc,
+            server_id: sid,
+            remote_port: 18094,
+            url: Some("album.example.com".into()),
+            access: vec!["password".into(), "ip".into()],
+            access_user: Some("u".into()),
+            access_hash: Some("$apr1$old".into()),
+            access_detail: Some("1.2.3.4".into()),
+        })
+        .unwrap();
+
+    let update = |g: &mut Guardian,
+                  access: Option<Vec<String>>,
+                  hash: Option<String>,
+                  detail: Option<String>|
+     -> Result<(), String> {
+        g.update_tunnel(UpdateTunnelInput {
+            id: tun.clone(),
+            name: "相册".into(),
+            remote_port: 18094,
+            url: Some("album.example.com".into()),
+            access,
+            access_user: Some("u".into()),
+            access_hash: hash,
+            access_detail: detail,
+        })
+    };
+
+    // 1) access=None：保持原模式，detail 和旧哈希都不能丢
+    update(&mut g, None, None, None).unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert_eq!(view.access, vec!["password", "ip"], "access 没传要保持原模式");
+    assert_eq!(view.access_detail.as_deref(), Some("1.2.3.4"), "没传 detail 要合并旧值");
+    assert!(view.has_password, "没传新哈希要保留旧哈希");
+
+    // 2) Some([])：取消保护，不报错，旧的 IP 列表一起清掉
+    update(&mut g, Some(Vec::new()), None, None).unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert!(view.access.is_empty(), "空数组应该清掉保护");
+    assert_eq!(view.access_detail, None, "不要 IP 保护了就该清掉 detail");
+
+    // 3) ip 模式但合并后 detail 为空 → 中文人话报错（不能静默写入）
+    let err = update(&mut g, Some(vec!["ip".into()]), None, None).unwrap_err();
+    assert!(err.contains("IP"), "err={err}");
+    assert!(err.contains("只允许指定 IP"), "err={err}");
+    assert_eq!(g.tunnel_snapshot()[0].access, Vec::<String>::new(), "报错后不能改配置");
+
+    // 4) ip 模式：新 detail 优先；不传就用旧的
+    update(&mut g, Some(vec!["ip".into()]), None, Some("5.6.7.8".into())).unwrap();
+    assert_eq!(g.tunnel_snapshot()[0].access_detail.as_deref(), Some("5.6.7.8"));
+    update(&mut g, Some(vec!["ip".into()]), None, None).unwrap();
+    assert_eq!(
+        g.tunnel_snapshot()[0].access_detail.as_deref(),
+        Some("5.6.7.8"),
+        "ip 模式不传 detail 要合并保留旧值"
+    );
+
+    // 5) password 模式：不传新哈希但旧哈希在 → 通过
+    update(&mut g, Some(vec!["password".into()]), None, None).unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert_eq!(view.access, vec!["password"]);
+    assert!(view.has_password, "旧哈希还在就不该报错");
+    assert_eq!(view.access_detail, None, "不想要 IP 时 detail 清掉");
 }

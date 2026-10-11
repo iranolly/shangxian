@@ -11,6 +11,7 @@ use shangxian_core::guardian::{
 use shangxian_core::import::ImportSuggestion;
 use shangxian_core::local_ports::{list_listening, LocalPort};
 use shangxian_core::nginx::NginxSnippet;
+use shangxian_core::protection::AccessCheck;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -249,6 +250,22 @@ fn hash_password(
 #[tauri::command]
 fn get_nginx_snippet(id: String, state: State<'_, AppState>) -> Result<NginxSnippet, String> {
     state.guardian.lock().unwrap().nginx_snippet(&id)
+}
+
+/// 核对云端 nginx 上这条隧道的实际访问保护（走 SSH 只读读配置，不改服务器）。
+///
+/// 核对要跑 SSH（最长 20 秒），不能占着看护轮询/界面快照的全局锁：
+/// 短锁里把连接信息克隆出来，放锁后再放 `spawn_blocking` 里跑（同 `service_stop`）。
+#[tauri::command]
+async fn check_tunnel_access(id: String, state: State<'_, AppState>) -> Result<AccessCheck, String> {
+    let guardian = state.guardian.clone();
+    let req = {
+        let g = guardian.lock().unwrap();
+        g.access_check_request(&id)?
+    };
+    tauri::async_runtime::spawn_blocking(move || shangxian_core::guardian::run_access_check(&req))
+        .await
+        .map_err(|e| format!("内部错误：{e}"))?
 }
 
 /// 是否已设置开机自启（HKCU Run 键，用户级、无需管理员）。
@@ -511,6 +528,7 @@ pub fn run() {
             delete_server,
             hash_password,
             get_nginx_snippet,
+            check_tunnel_access,
             get_notify_enabled,
             set_notify_enabled,
             test_notification,

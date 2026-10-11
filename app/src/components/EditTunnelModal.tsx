@@ -15,7 +15,10 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
   const [name, setName] = useState(tunnel.name);
   const [remotePort, setRemotePort] = useState(String(tunnel.remotePort));
   const [url, setUrl] = useState(tunnel.url ?? "");
-  const [access, setAccess] = useState(tunnel.access ?? "none");
+  const [wantPassword, setWantPassword] = useState(
+    (tunnel.access ?? []).includes("password"),
+  );
+  const [wantIp, setWantIp] = useState((tunnel.access ?? []).includes("ip"));
   const [accessUser, setAccessUser] = useState(
     tunnel.accessUser ?? "shangxian",
   );
@@ -37,19 +40,22 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
       setError("云端端口要填 1~65535 的数字");
       return;
     }
-    if (access === "password" && !tunnel.hasPassword && !password.trim()) {
-      setError("这条隧道选了「要密码才能进」，请先设置访问密码");
+    if (wantPassword && !tunnel.hasPassword && !password.trim()) {
+      setError("这条隧道勾了「要密码才能进」，请先设置访问密码");
       return;
     }
-    if (access === "ip" && !ips.trim()) {
-      setError("选「只允许指定 IP」时，要填至少一个 IP");
+    if (wantIp && !ips.trim()) {
+      setError("勾了「只允许指定 IP」的话，要填至少一个 IP");
       return;
     }
 
     setBusy(true);
     try {
+      const access: string[] = [];
+      if (wantPassword) access.push("password");
+      if (wantIp) access.push("ip");
       let hash: string | null = null;
-      if (access === "password" && password.trim()) {
+      if (wantPassword && password.trim()) {
         hash = await hashPassword(tunnel.serverId, password.trim());
       }
       await updateTunnel({
@@ -58,10 +64,9 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
         remotePort: rp,
         url: url.trim() || null,
         access,
-        accessUser:
-          access === "password" ? accessUser.trim() || "shangxian" : null,
+        accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
         accessHash: hash,
-        accessDetail: access === "ip" ? ips.trim() || null : null,
+        accessDetail: wantIp ? ips.trim() || null : null,
       });
       onSaved();
       onClose();
@@ -122,10 +127,10 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
             <label className="field-label">访问保护</label>
             <div className="option-list">
               <div
-                className={`option ${access === "password" ? "selected" : ""}`}
-                onClick={() => setAccess("password")}
+                className={`option ${wantPassword ? "selected" : ""}`}
+                onClick={() => setWantPassword(!wantPassword)}
               >
-                <input type="radio" checked={access === "password"} readOnly />
+                <input type="checkbox" checked={wantPassword} readOnly />
                 <div className="option-text">
                   要密码才能进（推荐）
                   {tunnel.hasPassword && (
@@ -134,26 +139,24 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
                 </div>
               </div>
               <div
-                className={`option ${access === "ip" ? "selected" : ""}`}
-                onClick={() => setAccess("ip")}
+                className={`option ${wantIp ? "selected" : ""}`}
+                onClick={() => setWantIp(!wantIp)}
               >
-                <input type="radio" checked={access === "ip"} readOnly />
+                <input type="checkbox" checked={wantIp} readOnly />
                 <div className="option-text">只允许指定 IP 访问</div>
               </div>
-              <div
-                className={`option ${access === "none" ? "selected" : ""}`}
-                onClick={() => setAccess("none")}
-              >
-                <input type="radio" checked={access === "none"} readOnly />
-                <div className="option-text">
-                  不用密码
-                  <span className="option-hint">不推荐：网址一泄露谁都看得到</span>
-                </div>
-              </div>
             </div>
+            <p className="field-hint">
+              两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
+            </p>
+            {!wantPassword && !wantIp && (
+              <div className="danger-line">
+                ⚠ 两种保护都没开：任何人知道网址就能访问，不要放私人内容
+              </div>
+            )}
           </div>
 
-          {access === "password" && (
+          {wantPassword && (
             <>
               <div className="field">
                 <label className="field-label">访问用户名</label>
@@ -181,7 +184,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
             </>
           )}
 
-          {access === "ip" && (
+          {wantIp && (
             <div className="field">
               <label className="field-label">允许访问的 IP（逗号分隔）</label>
               <textarea

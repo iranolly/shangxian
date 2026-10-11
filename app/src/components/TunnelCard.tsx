@@ -5,6 +5,7 @@ import { useState } from "react";
 
 import { TUNNEL_STATUS_META } from "../copy/status";
 import type { TunnelView } from "../api";
+import { ProtectionStatus } from "./ProtectionStatus";
 
 interface Props {
   tunnel: TunnelView;
@@ -130,6 +131,8 @@ export function TunnelCard({
           </>
         )}
       </div>
+
+      <ProtectionStatus tunnel={tunnel} />
 
       {!tunnel.serviceOk && (
         <div className="card-note">

@@ -159,15 +159,16 @@ enum TunnelCmd {
         /// 公网网址（可空）
         #[arg(long)]
         url: Option<String>,
-        /// none / password / ip
-        #[arg(long, default_value = "none")]
-        access: String,
+        /// 访问保护，可叠加：--access password --access ip（也可写成 --access password,ip）
+        /// 不加 = 谁都能进
+        #[arg(long, value_delimiter = ',', action = clap::ArgAction::Append)]
+        access: Vec<String>,
         #[arg(long = "access-user")]
         access_user: Option<String>,
         /// 访问密码（会先让服务器算出哈希再存，密码本身不落盘）
         #[arg(long = "access-password")]
         access_password: Option<String>,
-        /// 只允许这些 IP（access=ip 时用，例 "1.2.3.4,5.6.7.8"）
+        /// 只允许这些 IP（access 含 ip 时用，例 "1.2.3.4,5.6.7.8"）
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
     },
@@ -180,8 +181,10 @@ enum TunnelCmd {
         remote_port: Option<u16>,
         #[arg(long)]
         url: Option<String>,
-        #[arg(long)]
-        access: Option<String>,
+        /// 访问保护，可叠加：--access password --access ip；--access none = 取消保护
+        /// 不传 = 保持原样
+        #[arg(long, value_delimiter = ',', action = clap::ArgAction::Append)]
+        access: Vec<String>,
         #[arg(long = "access-user")]
         access_user: Option<String>,
         #[arg(long = "access-password")]
@@ -189,6 +192,8 @@ enum TunnelCmd {
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
     },
+    /// 核对云端 nginx 上这条隧道实际开着的访问保护（走 SSH 只读读配置）
+    Check { id: String },
     /// 开始发布
     Start { id: String },
     /// 暂停发布
@@ -330,9 +335,14 @@ fn run(cli: &Cli) -> Result<(), String> {
             if cli.json {
                 print_json(&v);
             } else {
-                println!("{}", v["snippet"].as_str().unwrap_or(""));
+                if let Some(s) = v["snippet"].as_str() {
+                    println!("这几行加进站点配置里（不要整段替换）：\n{s}");
+                }
+                if let Some(e) = v["acmeExempt"].as_str() {
+                    println!("\n证书自动续期用的一行（放进 location /.well-known/ 里）：\n{e}");
+                }
                 if let Some(h) = v["htpasswd"].as_str() {
-                    println!("\n# 密码文件内容（存到站点根目录，权限设成只有服务器能读）：\n{h}");
+                    println!("\n# 密码文件内容（保存到服务器上，路径见下面的步骤）：\n{h}");
                 }
                 for step in v["steps"].as_array().cloned().unwrap_or_default() {
                     println!("\n· {}", step.as_str().unwrap_or(""));
@@ -473,6 +483,7 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                 Some(pw) => Some(hash_password(server, pw)?),
                 None => None,
             };
+            let access = access_from_cli(access);
             let v = call(
                 "add_tunnel",
                 json!({
@@ -504,10 +515,21 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
             access_ips,
         } => {
             let old = find_tunnel(id)?;
-            let access_new = access
-                .clone()
-                .or_else(|| opt_str(&old, "access"))
-                .unwrap_or_else(|| "none".into());
+            // 不传 --access = 保持原样（从查到的那条隧道里把数组读回来）；
+            // 传 none / 空 = 清空；传别的 = 整体替换，可以叠加。
+            let access_new = if access.is_empty() {
+                old["access"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str())
+                            .map(|s| s.to_string())
+                            .collect::<Vec<String>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                access_from_cli(access)
+            };
             let server_id = str_of(&old, "serverId");
             let hash = match access_password {
                 Some(pw) => Some(hash_password(&server_id, pw)?),
@@ -527,6 +549,14 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                 }),
             )?;
             done(want_json, &v, &format!("✓ 已改好隧道「{id}」（会断一下再自动连上）"));
+        }
+        TunnelCmd::Check { id } => {
+            let v = call("check_tunnel_access", json!({"id": id}))?;
+            if want_json {
+                print_json(&v);
+            } else {
+                print_access_check(id, &v);
+            }
         }
         TunnelCmd::Start { id } => {
             let v = call("tunnel_start", json!({"id": id}))?;
@@ -814,6 +844,12 @@ fn hash_password(server_id: &str, password: &str) -> Result<String, String> {
         .ok_or_else(|| "服务器没给出哈希".into())
 }
 
+/// 合并命令行给的访问保护值（可重复、可逗号分隔）：只认 password / ip，
+/// none 和认不出的值直接忽略，结果按 password、ip 顺序去重。
+fn access_from_cli(values: &[String]) -> Vec<String> {
+    shangxian_core::config::access_from_text(&values.join(","))
+}
+
 /// 读密码：从标准输入读一行（不进命令行历史、不进日志）。
 fn read_secret(prompt: &str) -> Result<String, String> {
     eprint!("{prompt}");
@@ -977,12 +1013,52 @@ fn tunnel_word(status: &str) -> &'static str {
     }
 }
 
-fn access_word(access: &str) -> &'static str {
-    match access {
-        "password" => "要密码",
-        "ip" => "只允许指定 IP",
-        _ => "谁都能进",
+fn access_word(value: &Value) -> String {
+    let list: Vec<String> = value
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    let password = list.iter().any(|s| s == "password");
+    let ip = list.iter().any(|s| s == "ip");
+    match (password, ip) {
+        (true, true) => "要密码 + 只允许指定 IP".into(),
+        (true, false) => "要密码".into(),
+        (false, true) => "只允许指定 IP".into(),
+        (false, false) => "谁都能进".into(),
     }
+}
+
+/// 人话输出「云端实际保护」（cli tunnel check 用）。
+fn print_access_check(id: &str, v: &Value) {
+    let yes = |key: &str| v[key].as_bool().unwrap_or(false);
+    let allow_ips: Vec<String> = v["allowIps"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str())
+                .map(|s| s.to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    println!("隧道「{id}」云端实际保护：");
+    println!("  密码：{}", if yes("passwordOn") { "开" } else { "关" });
+    if yes("ipOn") {
+        let ips = if allow_ips.is_empty() {
+            "（没写具体 IP）".to_string()
+        } else {
+            allow_ips.join("、")
+        };
+        println!("  白名单：开（IP：{ips}）");
+    } else {
+        println!("  白名单：关");
+    }
+    println!("  密码文件：{}", if yes("htpasswdExists") { "有" } else { "无" });
+    println!("  站点配置：{}", if yes("confFound") { "找到" } else { "没找到" });
 }
 
 fn print_status(snap: &Value) {
@@ -1055,7 +1131,7 @@ fn print_tunnels(snap: &Value) {
             pad(&str_of(&t, "serviceName"), 16),
             pad(&server_name, 12),
             pad(&num_of(&t, "remotePort").to_string(), 6),
-            access_word(t["access"].as_str().unwrap_or("none"))
+            access_word(&t["access"])
         );
         if let Some(url) = t["url"].as_str() {
             if !url.is_empty() {
@@ -1112,7 +1188,7 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 2. 隧道暂停后别人就访问不了了；不确定要不要停就先问。
 3. 删除本机服务/服务器前，先看它有没有被隧道引用（有引用时应用会拒绝并告诉你）。
 
-## 最常用的十条
+## 最常用的命令
     cli status --json                       # 一次看全：应用 + 服务 + 隧道 + 服务器
     cli services --json                     # 本机服务清单（id、端口、状态、启动方式）
     cli tunnels --json                      # 发布隧道清单（服务→服务器、云端端口、状态）
@@ -1123,12 +1199,15 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
     cli service start <服务id>              # 拉起本机服务（用它登记的启动方式）
     cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志）
     cli nginx <隧道id>                      # 生成要贴到云端面板的 nginx 配置片段
+    cli tunnel check <隧道id>               # 去云端看实际开着的访问保护（只读，不改服务器）
 
 ## 配置类
     cli service add --name 我的网站 --port 8188 --exe C:\path\python.exe --args "main.py" --watch
     cli service edit <服务id> --port 8189 --watch true
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
+    cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两道门同时开
+    cli tunnel edit <隧道id> --access none   # 取消访问保护（不传 --access = 保持原样）
     cli server add --name 香港-1 --host api.example.com --user user
     echo 服务器密码 | cli server setup-key <服务器id>     # 用密码登录一次，自动配好免密
 
@@ -1147,3 +1226,78 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 - 失败时 `--json` 会输出 {"ok": false, "error": "人话原因"}，退出码 1。
 - 成功时 `--json` 输出 {"ok": true, "result": ...}。
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_tunnel_add(extra: &[&str]) -> Vec<String> {
+        let mut args = vec![
+            "cli",
+            "tunnel",
+            "add",
+            "--service",
+            "svc-1",
+            "--server",
+            "srv-1",
+            "--remote-port",
+            "13000",
+        ];
+        args.extend_from_slice(extra);
+        let cli = Cli::try_parse_from(args).unwrap();
+        match cli.cmd {
+            Cmd::Tunnel {
+                sub: TunnelCmd::Add { access, .. },
+            } => access_from_cli(&access),
+            _ => panic!("应该解析成 tunnel add"),
+        }
+    }
+
+    #[test]
+    fn access_flag_is_repeatable_and_comma_split() {
+        // 可重复：--access password --access ip
+        assert_eq!(
+            parse_tunnel_add(&["--access", "password", "--access", "ip"]),
+            vec!["password".to_string(), "ip".to_string()]
+        );
+        // 逗号分隔：--access password,ip（顺序会归一成 password、ip）
+        assert_eq!(
+            parse_tunnel_add(&["--access", "ip,password"]),
+            vec!["password".to_string(), "ip".to_string()]
+        );
+        // 不传 = 无保护
+        assert!(parse_tunnel_add(&[]).is_empty());
+    }
+
+    #[test]
+    fn access_cli_values_merge_to_normalized_array() {
+        let merge = |values: &[&str]| {
+            access_from_cli(&values.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        };
+        assert!(merge(&[]).is_empty());
+        assert!(merge(&["none"]).is_empty(), "none 应该是无保护");
+        assert!(merge(&["bogus"]).is_empty(), "认不出的值直接忽略");
+        assert_eq!(merge(&["ip"]), vec!["ip".to_string()]);
+        assert_eq!(merge(&["password"]), vec!["password".to_string()]);
+        assert_eq!(
+            merge(&["password", "ip"]),
+            vec!["password".to_string(), "ip".to_string()]
+        );
+        assert_eq!(
+            merge(&["none", "ip"]),
+            vec!["ip".to_string()],
+            "none 混在里面也不影响"
+        );
+    }
+
+    #[test]
+    fn access_word_reads_the_array() {
+        assert_eq!(access_word(&serde_json::json!([])), "谁都能进");
+        assert_eq!(access_word(&serde_json::json!(["password"])), "要密码");
+        assert_eq!(access_word(&serde_json::json!(["ip"])), "只允许指定 IP");
+        assert_eq!(
+            access_word(&serde_json::json!(["ip", "password"])),
+            "要密码 + 只允许指定 IP"
+        );
+    }
+}

@@ -44,7 +44,8 @@ export function NewTunnelWizard({
   const [serverId, setServerId] = useState(servers[0]?.id ?? "");
   const [remotePort, setRemotePort] = useState(0);
   const [url, setUrl] = useState("");
-  const [access, setAccess] = useState("password");
+  const [wantPassword, setWantPassword] = useState(true);
+  const [wantIp, setWantIp] = useState(false);
   const [accessUser, setAccessUser] = useState("shangxian");
   const [password, setPassword] = useState(generatePassword);
   const [ips, setIps] = useState("");
@@ -92,12 +93,12 @@ export function NewTunnelWizard({
       setError("刚才选的服务或服务器已经不存在了，关掉向导重新开一次");
       return;
     }
-    if (access === "password" && !password.trim()) {
+    if (wantPassword && !password.trim()) {
       setError("要密码才能进的话，密码不能为空；点「换一个」可以自动生成");
       return;
     }
-    if (access === "ip" && !ips.trim()) {
-      setError("选「只允许指定 IP 访问」时，要填至少一个 IP");
+    if (wantIp && !ips.trim()) {
+      setError("勾了「只允许指定 IP 访问」的话，要填至少一个 IP");
       return;
     }
     setBusy(true);
@@ -105,8 +106,11 @@ export function NewTunnelWizard({
     setHashWarning(false);
     let hashFailed = false;
     try {
+      const access: string[] = [];
+      if (wantPassword) access.push("password");
+      if (wantIp) access.push("ip");
       let accessHash: string | null = null;
-      if (access === "password") {
+      if (wantPassword) {
         try {
           accessHash = await hashPassword(server.id, password);
         } catch {
@@ -121,14 +125,14 @@ export function NewTunnelWizard({
         remotePort,
         url: url.trim() || null,
         access,
-        accessUser: access === "password" ? accessUser.trim() || "shangxian" : null,
+        accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
         accessHash,
-        accessDetail: access === "ip" ? ips.trim() || null : null,
+        accessDetail: wantIp ? ips.trim() || null : null,
       });
       setHashWarning(hashFailed);
       setDone({
         url: url.trim() || null,
-        password: access === "password" ? password : null,
+        password: wantPassword ? password : null,
         hashWarning: hashFailed,
       });
     } catch (e) {
@@ -294,17 +298,13 @@ export function NewTunnelWizard({
             <>
               <div className="option-list">
                 <div
-                  className={`option ${access === "password" ? "selected" : ""}`}
-                  onClick={() => setAccess("password")}
+                  className={`option ${wantPassword ? "selected" : ""}`}
+                  onClick={() => setWantPassword(!wantPassword)}
                 >
-                  <input
-                    type="radio"
-                    checked={access === "password"}
-                    readOnly
-                  />
+                  <input type="checkbox" checked={wantPassword} readOnly />
                   <div className="option-text">
                     要密码才能进（推荐）
-                    {access === "password" && (
+                    {wantPassword && (
                       <div
                         className="field-row"
                         style={{ marginTop: 6 }}
@@ -338,13 +338,13 @@ export function NewTunnelWizard({
                   </div>
                 </div>
                 <div
-                  className={`option ${access === "ip" ? "selected" : ""}`}
-                  onClick={() => setAccess("ip")}
+                  className={`option ${wantIp ? "selected" : ""}`}
+                  onClick={() => setWantIp(!wantIp)}
                 >
-                  <input type="radio" checked={access === "ip"} readOnly />
+                  <input type="checkbox" checked={wantIp} readOnly />
                   <div className="option-text">
                     只允许指定 IP 访问
-                    {access === "ip" && (
+                    {wantIp && (
                       <input
                         className="input mono"
                         style={{ marginTop: 6 }}
@@ -356,19 +356,16 @@ export function NewTunnelWizard({
                     )}
                   </div>
                 </div>
-                <div
-                  className={`option ${access === "none" ? "selected" : ""}`}
-                  onClick={() => setAccess("none")}
-                >
-                  <input type="radio" checked={access === "none"} readOnly />
-                  <div className="option-text">
-                    不用密码{" "}
-                    <span className="option-hint">
-                      ⚠ 任何人知道网址就能访问，不要放私人内容
-                    </span>
-                  </div>
-                </div>
               </div>
+
+              <p className="field-hint">
+                两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
+              </p>
+              {!wantPassword && !wantIp && (
+                <div className="danger-line">
+                  ⚠ 两种保护都没开：任何人知道网址就能访问，不要放私人内容
+                </div>
+              )}
 
               <div className="field" style={{ marginTop: 16 }}>
                 <label className="field-label">给这条隧道起个名字</label>

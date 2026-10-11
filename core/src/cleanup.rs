@@ -209,6 +209,7 @@ pub fn hash_password(exec: &SshExec, password: &str) -> Result<String, String> {
     }
 }
 
-fn shell_quote(s: &str) -> String {
+/// 把一段文本安全地包进单引号里（给远端 shell 用；域名等外部输入必须过这一道）。
+pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
