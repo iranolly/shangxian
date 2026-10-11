@@ -1,4 +1,4 @@
-// 访问保护状态（发布隧道卡片 / 访问密码页共用）：
+// 访问保护状态（只在「访问保护」页用）：
 // 上半行显示「当前设置」，点「检查云端」再去服务器上读 nginx 实际生效的保护。
 
 import { useEffect, useState } from "react";
@@ -145,7 +145,7 @@ export function ProtectionStatus({ tunnel }: { tunnel: TunnelView }) {
       )}
       {result?.htpasswdMissing && (
         <span className="protect-result warn">
-          ⚠ 服务器上还没有密码文件，密码可能进不去
+          ⚠ 服务器上还没有密码文件（htpasswd），密码可能进不去
         </span>
       )}
       {state?.phase === "error" && (

@@ -52,11 +52,9 @@ export function NewTunnelWizard({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [hashWarning, setHashWarning] = useState(false);
   const [done, setDone] = useState<{
     url: string | null;
     password: string | null;
-    hashWarning: boolean;
   } | null>(null);
 
   const service = services.find((s) => s.id === serviceId) ?? null;
@@ -103,8 +101,6 @@ export function NewTunnelWizard({
     }
     setBusy(true);
     setError("");
-    setHashWarning(false);
-    let hashFailed = false;
     try {
       const access: string[] = [];
       if (wantPassword) access.push("password");
@@ -113,9 +109,13 @@ export function NewTunnelWizard({
       if (wantPassword) {
         try {
           accessHash = await hashPassword(server.id, password);
-        } catch {
-          // 服务器暂时连不上也不挡创建；密码可以稍后到「访问密码」页补
-          hashFailed = true;
+        } catch (e) {
+          // 建隧道时服务器上必须已经有密码哈希，算不出来就绝不会创建成功；
+          // 这里直接拦住，不能让用户以为「稍后能补」。
+          setError(
+            `没能在服务器上把密码存好（可能是连不上服务器）。请先到「云端服务器」页确认这台服务器能连上，再回来重新发布。${e ? `（${String(e)}）` : ""}`,
+          );
+          return;
         }
       }
       await addTunnel({
@@ -129,11 +129,9 @@ export function NewTunnelWizard({
         accessHash,
         accessDetail: wantIp ? ips.trim() || null : null,
       });
-      setHashWarning(hashFailed);
       setDone({
         url: url.trim() || null,
         password: wantPassword ? password : null,
-        hashWarning: hashFailed,
       });
     } catch (e) {
       setError(String(e));
@@ -208,11 +206,9 @@ export function NewTunnelWizard({
                 </div>
               )}
               <p className="field-hint">
-                {done.hashWarning
-                  ? "密码没能存到服务器上（可能连不上服务器）。到「访问密码」页给这条隧道重新设一次。"
-                  : done.password
-                    ? "密码已经存好了；配置云端 nginx 时用它启用访问保护。"
-                    : "隧道已经开始发布，状态在「发布隧道」页能看到。"}
+                {done.password
+                  ? "密码已经存好了；配置云端 nginx 时用它启用访问保护。以后要改保护或换密码，到「访问保护」页。"
+                  : "隧道已经开始发布，状态在「发布隧道」页能看到。以后想加保护，到「访问保护」页设置。"}
               </p>
             </div>
           ) : step === 1 ? (
@@ -360,6 +356,8 @@ export function NewTunnelWizard({
 
               <p className="field-hint">
                 两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
+                这一步就要定好：开了「要密码才能进」，发布时必须已经在服务器上存好密码，
+                连不上服务器就发不出去（可以先关掉密码、建好后再到「访问保护」页补）。
               </p>
               {!wantPassword && !wantIp && (
                 <div className="danger-line">
@@ -386,11 +384,6 @@ export function NewTunnelWizard({
           )}
 
           {error && <div className="error-line">{error}</div>}
-          {hashWarning && (
-            <div className="warn-line">
-              密码暂时没能存到服务器上，可以先继续；稍后到「访问密码」页补一次。
-            </div>
-          )}
         </div>
 
         <div className="modal-foot">

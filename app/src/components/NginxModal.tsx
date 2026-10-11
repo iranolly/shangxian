@@ -136,7 +136,12 @@ export function NginxModal({ id, name, onClose }: Props) {
               )}
               {data.htpasswd && (
                 <div className="field" style={{ marginTop: 12 }}>
-                  <label className="field-label">密码文件内容</label>
+                  <label className="field-label">
+                    密码文件内容（htpasswd）
+                  </label>
+                  <p className="field-hint">
+                    这是别人打开网页时用的密码文件，不是「云端服务器」页里连服务器的登录密码。
+                  </p>
                   <div
                     className="success-line"
                     style={{ justifyContent: "flex-start" }}

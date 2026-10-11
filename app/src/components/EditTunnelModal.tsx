@@ -1,9 +1,11 @@
-// 编辑隧道弹层：改名 / 改云端端口 / 改网址 / 改访问保护。
-// 规则：密码留空 = 不换密码；云端端口改了会自动断开重连一次。
+// 编辑隧道弹层：只改发布相关的东西——名称 / 公网网址 / 云端端口。
+// 访问保护（网页密码、IP 白名单）请到「访问保护」页改；
+// 这里保存时把当前的 access / accessUser / accessDetail 原样回传，保证不误动保护。
+// 规则：云端端口改了会自动断开重连一次。
 
 import { useState } from "react";
 
-import { hashPassword, updateTunnel, type TunnelView } from "../api";
+import { updateTunnel, type TunnelView } from "../api";
 
 interface Props {
   tunnel: TunnelView;
@@ -15,15 +17,6 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
   const [name, setName] = useState(tunnel.name);
   const [remotePort, setRemotePort] = useState(String(tunnel.remotePort));
   const [url, setUrl] = useState(tunnel.url ?? "");
-  const [wantPassword, setWantPassword] = useState(
-    (tunnel.access ?? []).includes("password"),
-  );
-  const [wantIp, setWantIp] = useState((tunnel.access ?? []).includes("ip"));
-  const [accessUser, setAccessUser] = useState(
-    tunnel.accessUser ?? "shangxian",
-  );
-  const [password, setPassword] = useState("");
-  const [ips, setIps] = useState(tunnel.accessDetail ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -40,33 +33,19 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
       setError("云端端口要填 1~65535 的数字");
       return;
     }
-    if (wantPassword && !tunnel.hasPassword && !password.trim()) {
-      setError("这条隧道勾了「要密码才能进」，请先设置访问密码");
-      return;
-    }
-    if (wantIp && !ips.trim()) {
-      setError("勾了「只允许指定 IP」的话，要填至少一个 IP");
-      return;
-    }
 
     setBusy(true);
     try {
-      const access: string[] = [];
-      if (wantPassword) access.push("password");
-      if (wantIp) access.push("ip");
-      let hash: string | null = null;
-      if (wantPassword && password.trim()) {
-        hash = await hashPassword(tunnel.serverId, password.trim());
-      }
       await updateTunnel({
         id: tunnel.id,
         name: name.trim(),
         remotePort: rp,
         url: url.trim() || null,
-        access,
-        accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
-        accessHash: hash,
-        accessDetail: wantIp ? ips.trim() || null : null,
+        // 访问保护原样带回（不传 accessHash = 密码保持不变）：
+        // 这个弹层只负责发布相关字段，避免改名称/网址/端口时误改保护。
+        access: tunnel.access ?? [],
+        accessUser: tunnel.accessUser ?? null,
+        accessDetail: tunnel.accessDetail ?? null,
       });
       onSaved();
       onClose();
@@ -84,7 +63,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
           <h2 className="modal-title">编辑隧道 · {tunnel.name}</h2>
           <p className="modal-sub">
             本机服务：{tunnel.serviceName}（本机端口 {tunnel.localPort}）；
-            改端口保存后会断开重连一次。
+            改端口保存后会断开重连一次。访问保护（网页密码 / IP 白名单）在「访问保护」页改。
           </p>
         </div>
         <div className="modal-body">
@@ -121,80 +100,6 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
           </div>
           {portChanged && (
             <div className="warn-line">端口改了：保存后会断开重连一次。</div>
-          )}
-
-          <div className="field">
-            <label className="field-label">访问保护</label>
-            <div className="option-list">
-              <div
-                className={`option ${wantPassword ? "selected" : ""}`}
-                onClick={() => setWantPassword(!wantPassword)}
-              >
-                <input type="checkbox" checked={wantPassword} readOnly />
-                <div className="option-text">
-                  要密码才能进（推荐）
-                  {tunnel.hasPassword && (
-                    <span className="option-hint">已设过密码，不填就不换</span>
-                  )}
-                </div>
-              </div>
-              <div
-                className={`option ${wantIp ? "selected" : ""}`}
-                onClick={() => setWantIp(!wantIp)}
-              >
-                <input type="checkbox" checked={wantIp} readOnly />
-                <div className="option-text">只允许指定 IP 访问</div>
-              </div>
-            </div>
-            <p className="field-hint">
-              两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
-            </p>
-            {!wantPassword && !wantIp && (
-              <div className="danger-line">
-                ⚠ 两种保护都没开：任何人知道网址就能访问，不要放私人内容
-              </div>
-            )}
-          </div>
-
-          {wantPassword && (
-            <>
-              <div className="field">
-                <label className="field-label">访问用户名</label>
-                <input
-                  className="input"
-                  value={accessUser}
-                  onChange={(e) => setAccessUser(e.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label className="field-label">
-                  新密码{tunnel.hasPassword ? "（留空 = 不换）" : ""}
-                </label>
-                <input
-                  className="input"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder={tunnel.hasPassword ? "已设过密码" : "必须填"}
-                />
-                <p className="field-hint">
-                  密码不会存在本地：保存时立刻在服务器上算好，只存加密结果。
-                </p>
-              </div>
-            </>
-          )}
-
-          {wantIp && (
-            <div className="field">
-              <label className="field-label">允许访问的 IP（逗号分隔）</label>
-              <textarea
-                className="input"
-                rows={3}
-                value={ips}
-                onChange={(e) => setIps(e.target.value)}
-                placeholder="例：1.2.3.4, 5.6.7.8"
-              />
-            </div>
           )}
         </div>
         <div className="modal-foot">

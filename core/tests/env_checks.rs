@@ -548,10 +548,12 @@ fn update_tunnel_merges_access_detail() {
     assert_eq!(view.access_detail.as_deref(), Some("1.2.3.4"), "没传 detail 要合并旧值");
     assert!(view.has_password, "没传新哈希要保留旧哈希");
 
-    // 2) Some([])：取消保护，不报错，旧的 IP 列表一起清掉
+    // 2) Some([])：取消保护，不报错，旧的 IP 列表一起清掉；hash 和 user 也一并清空
     update(&mut g, Some(Vec::new()), None, None).unwrap();
     let view = g.tunnel_snapshot().remove(0);
     assert!(view.access.is_empty(), "空数组应该清掉保护");
+    assert!(!view.has_password, "关掉密码保护要清掉旧哈希，不能让旧密码复活");
+    assert_eq!(view.access_user, None, "关掉密码保护时 user 也要清掉");
     assert_eq!(view.access_detail, None, "不要 IP 保护了就该清掉 detail");
 
     // 3) ip 模式但合并后 detail 为空 → 中文人话报错（不能静默写入）
@@ -570,10 +572,155 @@ fn update_tunnel_merges_access_detail() {
         "ip 模式不传 detail 要合并保留旧值"
     );
 
-    // 5) password 模式：不传新哈希但旧哈希在 → 通过
-    update(&mut g, Some(vec!["password".into()]), None, None).unwrap();
+    // 5) 关过密码后旧哈希已被清掉：重开密码不传新哈希 → 报错，配置不变（旧密码不能复活）
+    let err = update(&mut g, Some(vec!["password".into()]), None, None).unwrap_err();
+    assert!(err.contains("访问密码"), "err={err}");
     let view = g.tunnel_snapshot().remove(0);
-    assert_eq!(view.access, vec!["password"]);
-    assert!(view.has_password, "旧哈希还在就不该报错");
+    assert_eq!(view.access, vec!["ip".to_string()], "报错后不能改配置");
+    assert!(!view.has_password, "旧哈希已经清掉，重开时必须给新哈希");
+
+    // 6) 重开密码：显式带新哈希才通过（user 显式给则覆盖）
+    update(
+        &mut g,
+        Some(vec!["password".into()]),
+        Some("$apr1$new".into()),
+        None,
+    )
+    .unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert_eq!(view.access, vec!["password".to_string()]);
+    assert!(view.has_password, "显式给了新哈希要写进去");
+    assert_eq!(view.access_user.as_deref(), Some("u"), "显式给 user 要覆盖");
     assert_eq!(view.access_detail, None, "不想要 IP 时 detail 清掉");
+}
+
+/// 关闭密码保护要清空 hash + user；重开必须给新哈希；
+/// 只改名称/端口（access 与 accessUser 都不传）时原 hash 与 user 保持不变。
+#[test]
+fn update_tunnel_password_toggle_semantics() {
+    use shangxian_core::config::AppConfig;
+    use shangxian_core::guardian::{
+        Guardian, NewTunnelInput, ServerInput, ServiceInput, UpdateTunnelInput,
+    };
+
+    let dir = std::env::temp_dir().join("sx-update-tunnel-password-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+
+    let sid = g
+        .save_server(ServerInput {
+            id: None,
+            name: "测试".into(),
+            host: "example.com".into(),
+            ssh_port: 22,
+            user: "u".into(),
+            key_path: None,
+        })
+        .unwrap();
+    let svc = g
+        .save_service(ServiceInput {
+            id: None,
+            name: "服务B".into(),
+            local_port: 18096,
+            launch_exe: None,
+            launch_args: None,
+            launch_workdir: None,
+            watch: false,
+            autostart: false,
+            note: None,
+        })
+        .unwrap();
+
+    let tun = g
+        .add_tunnel(NewTunnelInput {
+            name: "相册".into(),
+            service_id: svc,
+            server_id: sid,
+            remote_port: 18096,
+            url: None,
+            access: vec!["password".into()],
+            access_user: Some("u".into()),
+            access_hash: Some("$apr1$old".into()),
+            access_detail: None,
+        })
+        .unwrap();
+
+    let update = |g: &mut Guardian,
+                  name: &str,
+                  port: u16,
+                  access: Option<Vec<String>>,
+                  user: Option<String>,
+                  hash: Option<String>|
+     -> Result<(), String> {
+        g.update_tunnel(UpdateTunnelInput {
+            id: tun.clone(),
+            name: name.into(),
+            remote_port: port,
+            url: None,
+            access,
+            access_user: user,
+            access_hash: hash,
+            access_detail: None,
+        })
+    };
+
+    // 1) 只改名称/端口：access 与 accessUser 都不传 → 原密码模式、hash、user 全部保持
+    update(&mut g, "改过名", 18097, None, None, None).unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert_eq!(view.name, "改过名");
+    assert_eq!(view.remote_port, 18097);
+    assert_eq!(view.access, vec!["password".to_string()], "没传 access 要保持原模式");
+    assert!(view.has_password, "只改名称/端口不能丢旧哈希");
+    assert_eq!(view.access_user.as_deref(), Some("u"), "没传 accessUser 要保持旧 user");
+
+    // 2) 关闭密码保护：不传新哈希也要把旧 hash 和 user 清空
+    update(&mut g, "改过名", 18097, Some(Vec::new()), None, None).unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert!(view.access.is_empty(), "空数组应该关掉保护");
+    assert!(!view.has_password, "关掉密码后 has_password 必须为 false");
+    assert_eq!(view.access_user, None, "关掉密码后 user 必须清空");
+
+    // 3) 重新开启密码但没给新哈希 → 报错（旧哈希已清掉，不能复活）
+    let err = update(
+        &mut g,
+        "改过名",
+        18097,
+        Some(vec!["password".into()]),
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert!(err.contains("访问密码"), "err={err}");
+    let view = g.tunnel_snapshot().remove(0);
+    assert!(view.access.is_empty(), "报错后 access 不能变");
+    assert!(!view.has_password, "报错后不能凭空冒出旧哈希");
+    assert_eq!(view.access_user, None, "报错后 user 仍为空");
+
+    // 4) 重新开启密码 + 新哈希：通过；user 不传则保持（当前为空）
+    update(
+        &mut g,
+        "改过名",
+        18097,
+        Some(vec!["password".into()]),
+        None,
+        Some("$apr1$new1".into()),
+    )
+    .unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert!(view.has_password, "显式给了新哈希要写进去");
+    assert_eq!(view.access_user, None, "没传 accessUser 要保持现值（空）");
+
+    // 5) 密码模式不传新哈希 → 保留当前哈希；显式给 user → 覆盖
+    update(
+        &mut g,
+        "改过名",
+        18097,
+        Some(vec!["password".into()]),
+        Some("u2".into()),
+        None,
+    )
+    .unwrap();
+    let view = g.tunnel_snapshot().remove(0);
+    assert!(view.has_password, "没传新哈希要保持当前哈希");
+    assert_eq!(view.access_user.as_deref(), Some("u2"), "显式给 accessUser 要覆盖");
 }

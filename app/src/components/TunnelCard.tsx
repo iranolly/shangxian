@@ -1,11 +1,11 @@
 // 一张发布隧道卡片：服务名 → 服务器名 → 云端端口 → 网址 + 状态词。
 // 本机服务没在跑时明确标出来，出错时带原因 + 重连。
+// 访问保护状态与「检查云端」不在这里，统一在「访问保护」页看和改。
 
 import { useState } from "react";
 
 import { TUNNEL_STATUS_META } from "../copy/status";
 import type { TunnelView } from "../api";
-import { ProtectionStatus } from "./ProtectionStatus";
 
 interface Props {
   tunnel: TunnelView;
@@ -131,8 +131,6 @@ export function TunnelCard({
           </>
         )}
       </div>
-
-      <ProtectionStatus tunnel={tunnel} />
 
       {!tunnel.serviceOk && (
         <div className="card-note">

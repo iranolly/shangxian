@@ -1,9 +1,11 @@
-// 访问密码页：一眼看清每条隧道的访问保护状态，缺保护的当场能修。
+// 访问保护页：一眼看清每条隧道的门禁状态，缺保护的当场能修。
+// 这里只管门禁：网页访问密码、IP 白名单、检查云端是否生效；
+// 发布/启停/改名/改网址/改云端端口都在「发布隧道」页。
 
 import { useState } from "react";
 
-import { EditTunnelModal } from "../components/EditTunnelModal";
 import { NginxModal } from "../components/NginxModal";
+import { ProtectionModal } from "../components/ProtectionModal";
 import {
   ProtectionStatus,
   accessFlags,
@@ -16,17 +18,17 @@ interface Props {
   onRefresh: () => void;
 }
 
-/** 编辑按钮的文案：按当前设置的组合给一个最合适的说法 */
+/** 行按钮的文案：按当前设置的组合给一个最合适的说法 */
 function actionFor(t: TunnelView): string {
   const { password, ip } = accessFlags(t.access);
-  if (password && ip) return t.hasPassword ? "修改保护" : "设密码";
-  if (password) return t.hasPassword ? "换密码" : "设密码";
+  if (password && ip) return "改保护";
+  if (password) return "改密码 / 用户名";
   if (ip) return "改白名单";
   return "加保护";
 }
 
 export function PasswordsPage({ tunnels, onRefresh }: Props) {
-  const [editFor, setEditFor] = useState<TunnelView | null>(null);
+  const [protectFor, setProtectFor] = useState<TunnelView | null>(null);
   const [nginxFor, setNginxFor] = useState<TunnelView | null>(null);
 
   const warnCount = tunnels.filter(
@@ -37,7 +39,7 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
     <div className="page">
       <header className="page-head">
         <div>
-          <h1 className="page-title">访问密码</h1>
+          <h1 className="page-title">访问保护</h1>
           <p className="page-sub">
             给每条隧道加一道门：要密码、只让指定的人进，两种保护可以同时开。
           </p>
@@ -83,15 +85,9 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                     <span className="row-actions">
                       <button
                         className="btn btn-ghost btn-sm"
-                        onClick={() => setEditFor(t)}
+                        onClick={() => setProtectFor(t)}
                       >
                         {actionFor(t)}
-                      </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => setNginxFor(t)}
-                      >
-                        云端配置
                       </button>
                     </span>
                   </div>
@@ -101,18 +97,25 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
             })}
 
             <p className="page-hint">
-              密码不会存在本地（只存加密结果），忘了就在这里点「换密码」重新设一个；
-              改完密码后，记得重新复制一次云端配置贴到面板里，再点「检查云端」确认真的生效了。
+              这里的密码是别人打开网页时输的；连服务器用的登录密码在「云端服务器」页。
+              密码不会存在本地（只存加密结果），忘了就在这里点「改密码 / 用户名」重新设一个；
+              保存成功后会直接打开「云端配置」，把新的几行贴到面板里，再点「检查云端」确认真的生效了。
             </p>
           </>
         )}
       </div>
 
-      {editFor && (
-        <EditTunnelModal
-          tunnel={editFor}
-          onClose={() => setEditFor(null)}
-          onSaved={onRefresh}
+      {protectFor && (
+        <ProtectionModal
+          tunnel={protectFor}
+          onClose={() => setProtectFor(null)}
+          onSaved={() => {
+            const saved = protectFor;
+            setProtectFor(null);
+            // 保存成功后直接打开云端配置：贴到服务器面板里才算真的生效。
+            setNginxFor(saved);
+            onRefresh();
+          }}
         />
       )}
       {nginxFor && (

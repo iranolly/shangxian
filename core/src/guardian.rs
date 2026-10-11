@@ -960,7 +960,7 @@ impl Guardian {
             return Err("请填写隧道名字".into());
         }
 
-        let (server_id, port_changed, old_access, old_hash, old_detail) = {
+        let (server_id, port_changed, old_access, old_hash, old_user, old_detail) = {
             let tun = self
                 .config
                 .tunnel(&input.id)
@@ -970,6 +970,7 @@ impl Guardian {
                 tun.remote_port != input.remote_port,
                 tun.access.clone(),
                 tun.access_hash.clone(),
+                tun.access_user.clone(),
                 tun.access_detail.clone(),
             )
         };
@@ -988,6 +989,9 @@ impl Guardian {
         // 没传 access 就保持原样；传了就整体替换。
         let access = input.access.clone().unwrap_or(old_access);
         let new_hash = clean_optional(input.access_hash.clone());
+        let old_hash = clean_optional(old_hash);
+        let old_user = clean_optional(old_user);
+        let wants_password = access.iter().any(|a| a == "password");
         let wants_ip = access.iter().any(|a| a == "ip");
         // IP 校验/写回都用「合并后的 detail」：新值优先，没传就用旧的（CLI 不传时保留原值）。
         let final_detail = if wants_ip {
@@ -996,15 +1000,25 @@ impl Guardian {
             // 不要 IP 保护了：把旧的 IP 列表清掉（等于界面传 null）。
             None
         };
-        if access.iter().any(|a| a == "password")
-            && new_hash.is_none()
-            && clean_optional(old_hash).is_none()
-        {
+        if wants_password && new_hash.is_none() && old_hash.is_none() {
             return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
         }
         if wants_ip && final_detail.is_none() {
             return Err("这条隧道选了「只允许指定 IP」，请先把允许访问的 IP 填上".into());
         }
+
+        // 保护内容跟着「最终 access」走：
+        // - 不含 password：hash 和 user 一起清掉（关掉保护后旧密码不能复活）；
+        // - 含 password：hash 只在显式给了新值时替换，user 只在显式给了新值时覆盖
+        //   （None/null = 保持现值，跟 access_hash 对称）。
+        let (final_hash, final_user) = if wants_password {
+            (
+                new_hash.or(old_hash),
+                clean_optional(input.access_user.clone()).or(old_user),
+            )
+        } else {
+            (None, None)
+        };
 
         {
             let tun = self
@@ -1017,10 +1031,8 @@ impl Guardian {
             tun.remote_port = input.remote_port;
             tun.url = clean_optional(input.url);
             tun.access = access;
-            tun.access_user = clean_optional(input.access_user);
-            if let Some(hash) = new_hash {
-                tun.access_hash = Some(hash);
-            }
+            tun.access_user = final_user;
+            tun.access_hash = final_hash;
             tun.access_detail = final_detail;
         }
 

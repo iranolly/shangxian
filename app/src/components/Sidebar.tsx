@@ -1,4 +1,4 @@
-// 左侧导航：五个目的地（本机服务 / 发布隧道 / 云端服务器 / 访问密码 / 设置）
+// 左侧导航：五个目的地（本机服务 / 发布隧道 / 云端服务器 / 访问保护 / 设置）
 // 文案纪律：说人话，不用"反向隧道、端口转发、节点"等黑话。
 
 export type PageKey =
@@ -117,7 +117,7 @@ export function Sidebar({ current, onNavigate, counts }: Props) {
           onClick={() => onNavigate("passwords")}
         >
           <IconPasswords />
-          访问密码
+          访问保护
         </button>
       </nav>
 
