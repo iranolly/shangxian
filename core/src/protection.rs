@@ -3,8 +3,10 @@
 //! 纯文本解析（不联网、不改服务器），解析规则对着真实的小皮面板配置：
 //! - 密码保护看 `auth_basic`：值不是 off 才算开着（`location /.well-known/` 里会有一行
 //!   `auth_basic off;`，不能因为它就判成「关」）；
-//! - IP 白名单看 `deny all;`；`allow all;`（面板默认）不算白名单；
-//! - `allow X;` 里的 X（不是 all）收进白名单，去重、按配置里的先后顺序保留。
+//! - IP 白名单看 `deny all;` **加上至少一条有效的 `allow`**；`allow all;`、`0.0.0.0/0`
+//!   都不算白名单（等于没设防）；
+//! - `allow X;` 里的 X 通过 IP/CIDR 校验才收进来，去重、按配置里的先后顺序保留。也只
+//!   有同时有有效 allow 时 `ip_on` 才为真，避免界面上把「只有 deny all」报成已开。
 //!
 //! 只看 server 块顶层（大括号层级 == 1）的规则：`location` / `if` 等子块里的
 //! `deny all;` / `allow 1.2.3.4;` 是局部的，不能当成整站的保护。引号里的
@@ -15,6 +17,8 @@
 //! 这样正文里恰好写着「HTPASSWD_NO」之类的字样也不会翻转核对结果。
 
 use serde::Serialize;
+
+use crate::nginx::valid_allow_entry;
 
 /// 站点配置正文的开始标记（由 `guardian::access_check_script` 打印）。
 const CONF_BEGIN: &str = "===SHANGXIAN-CONF-BEGIN===";
@@ -29,7 +33,7 @@ pub struct AccessCheck {
     pub conf_found: bool,
     /// 有没有开密码保护（server 顶层存在不是 off 的 auth_basic）
     pub password_on: bool,
-    /// 有没有 IP 白名单（server 顶层存在 deny all;）
+    /// 有没有 IP 白名单（server 顶层存在 deny all; 且至少有一条有效 allow）
     pub ip_on: bool,
     /// 白名单里实际写着的 IP（去重、按配置里的先后顺序）
     pub allow_ips: Vec<String>,
@@ -76,6 +80,9 @@ pub fn parse(output: &str) -> AccessCheck {
             _ => {}
         }
     }
+
+    // 白名单要「deny all; + 至少一条有效 allow」同时成立才算开；只有 deny all; 等于全挡，不算保护。
+    check.ip_on = check.ip_on && !check.allow_ips.is_empty();
 
     check
 }
@@ -147,10 +154,8 @@ fn parse_directive(stmt: &str, check: &mut AccessCheck) {
             }
         }
         "allow" => {
-            if !value.is_empty()
-                && !value.eq_ignore_ascii_case("all")
-                && !check.allow_ips.iter().any(|ip| ip == &value)
-            {
+            // 只收合法的 IP / CIDR；all / 0.0.0.0/0 / 乱写的都不算白名单。
+            if valid_allow_entry(&value) && !check.allow_ips.iter().any(|ip| ip == &value) {
                 check.allow_ips.push(value);
             }
         }
@@ -404,5 +409,63 @@ HTPASSWD_YES
         let check = parse(text);
         assert!(check.conf_found && check.htpasswd_exists);
         assert!(!check.password_on && !check.ip_on);
+    }
+
+    #[test]
+    fn deny_all_alone_is_not_a_whitelist() {
+        // 只有 deny all; 没有有效 allow：等于把所有人都挡住，不能报「白名单已开」
+        let text = r#"===SHANGXIAN-CONF-BEGIN===
+server {
+    server_name x.example.com;
+    deny all;
+    allow all;
+    allow 0.0.0.0/0;
+    allow 1.2.3.4/0;
+    allow 乱写的;
+}
+===SHANGXIAN-CONF-END===
+CONF_FOUND
+HTPASSWD_NO
+"#;
+        let check = parse(text);
+        assert!(!check.ip_on, "没有有效 allow 就不算白名单：{check:?}");
+        assert!(check.allow_ips.is_empty(), "无效项不能收进白名单：{check:?}");
+    }
+
+    #[test]
+    fn invalid_allow_entries_are_ignored() {
+        let text = r#"===SHANGXIAN-CONF-BEGIN===
+server {
+    server_name x.example.com;
+    allow 1.2.3.4;
+    allow 999.999.999.999;
+    allow 10.0.0.0/8;
+    deny all;
+}
+===SHANGXIAN-CONF-END===
+CONF_FOUND
+HTPASSWD_NO
+"#;
+        let check = parse(text);
+        assert!(check.ip_on);
+        assert_eq!(check.allow_ips, vec!["1.2.3.4", "10.0.0.0/8"]);
+    }
+
+    #[test]
+    fn allow_after_deny_still_counts() {
+        // 顺序反过来也算：只要 deny all; 和有效 allow 都在
+        let text = r#"===SHANGXIAN-CONF-BEGIN===
+server {
+    server_name x.example.com;
+    deny all;
+    allow 1.2.3.4;
+}
+===SHANGXIAN-CONF-END===
+CONF_FOUND
+HTPASSWD_NO
+"#;
+        let check = parse(text);
+        assert!(check.ip_on);
+        assert_eq!(check.allow_ips, vec!["1.2.3.4"]);
     }
 }

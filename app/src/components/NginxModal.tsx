@@ -2,23 +2,54 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { getNginxSnippet, type NginxSnippet } from "../api";
+import {
+  checkTunnelAccess,
+  getNginxSnippet,
+  type AccessCheck,
+  type NginxSnippet,
+  type TunnelView,
+} from "../api";
 import { copyText } from "../copy/clipboard";
+import { cloudCheck, cloudLabel } from "./ProtectionStatus";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   id: string;
   name: string;
+  /** 传进来就能把云端实际配置和本机设置对比；不传只报「云端找到没找到」 */
+  tunnel?: TunnelView;
   onClose: () => void;
 }
 
 /** 弹层里能复制的内容 */
 type CopyTarget = "htpasswd" | `block-${number}`;
 
-export function NginxModal({ id, name, onClose }: Props) {
+/** 同一个隧道上次检查的结果：弹层关了再开还能看到「上次检查」 */
+const lastChecks = new Map<string, { check: AccessCheck; at: number }>();
+
+type CheckState =
+  | { phase: "idle" }
+  | { phase: "loading" }
+  | { phase: "done"; check: AccessCheck; at: number }
+  | { phase: "error"; message: string };
+
+function timeText(at: number): string {
+  return new Date(at).toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+export function NginxModal({ id, name, tunnel, onClose }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const [data, setData] = useState<NginxSnippet | null>(null);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<CopyTarget | null>(null);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [checkState, setCheckState] = useState<CheckState>(() => {
+    const cached = lastChecks.get(id);
+    return cached
+      ? { phase: "done", check: cached.check, at: cached.at }
+      : { phase: "idle" };
+  });
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -43,6 +74,45 @@ export function NginxModal({ id, name, onClose }: Props) {
       timer.current = window.setTimeout(() => setCopied(null), 1600);
     }
   };
+
+  /** 去云端读一遍 nginx 实际配置，看贴好没有 */
+  const runCheck = async () => {
+    setCheckState({ phase: "loading" });
+    try {
+      const check = await checkTunnelAccess(id);
+      const at = Date.now();
+      lastChecks.set(id, { check, at });
+      setCheckState({ phase: "done", check, at });
+    } catch (e) {
+      setCheckState({ phase: "error", message: String(e) });
+    }
+  };
+
+  // 有本机设置就对比；没有就只报云端状态
+  const checkResult =
+    checkState.phase === "done" && tunnel
+      ? cloudCheck(tunnel, checkState.check)
+      : null;
+  const checkTone = (() => {
+    if (checkState.phase === "error") return "warn";
+    if (checkState.phase !== "done") return "";
+    if (checkResult) return checkResult.tone;
+    return checkState.check.confFound ? "ok" : "warn";
+  })();
+  const statusText = (() => {
+    if (checkState.phase === "idle") {
+      return "还没检查过云端：贴完上面的配置、保存并重载 nginx 后，点右边「检查云端」看生效没有。";
+    }
+    if (checkState.phase === "loading") return "正在连服务器检查…";
+    if (checkState.phase === "error") return `检查失败：${checkState.message}`;
+    const { check, at } = checkState;
+    const head = `上次检查 ${timeText(at)}：`;
+    if (checkResult) return `${head}${checkResult.text}`;
+    if (!check.confFound) {
+      return `${head}云端还没找到这条隧道的站点配置（可能站点还没建，或者改了没保存、没重载）。`;
+    }
+    return `${head}云端已找到站点配置，当前生效：${cloudLabel(check)}。`;
+  })();
 
   // 复制按钮上的字：复制成功后显示"已复制"，1.6 秒后恢复
   const label = (target: CopyTarget, idle: string) =>
@@ -79,7 +149,13 @@ export function NginxModal({ id, name, onClose }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" style={{ width: 720 }}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        ref={dialogRef}
+        style={{ width: 720 }}
+      >
         <div className="modal-head">
           <h2 className="modal-title">云端配置 · {name}</h2>
           <p className="modal-sub">
@@ -88,6 +164,21 @@ export function NginxModal({ id, name, onClose }: Props) {
         </div>
         <div className="modal-body">
           {error && <div className="error-line">{error}</div>}
+          <div className={`nginx-check ${checkTone}`}>
+            <span className="nginx-check-text">{statusText}</span>
+            <button
+              className="link-btn"
+              disabled={checkState.phase === "loading"}
+              onClick={() => void runCheck()}
+            >
+              {checkState.phase === "loading" ? "检查中…" : "检查云端"}
+            </button>
+          </div>
+          {checkResult?.htpasswdMissing && (
+            <div className="warn-line">
+              ⚠ 服务器上还没有密码文件（htpasswd），密码可能进不去。
+            </div>
+          )}
           {data && (
             <>
               <ol className="steps-list">

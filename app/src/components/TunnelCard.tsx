@@ -2,10 +2,11 @@
 // 本机服务没在跑时明确标出来，出错时带原因 + 重连。
 // 访问保护状态与「检查云端」不在这里，统一在「访问保护」页看和改。
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { TUNNEL_STATUS_META } from "../copy/status";
 import type { TunnelView } from "../api";
+import { useDismissOnOutside } from "./useModalA11y";
 
 interface Props {
   tunnel: TunnelView;
@@ -17,6 +18,8 @@ interface Props {
   onRemove: () => void;
   onLogs: () => void;
   onNginx: () => void;
+  /** 跳到「本机服务」页（由页面传入） */
+  onGoToServices?: () => void;
   /** 删除失败时后端返回的原文（原样展示） */
   notice?: string;
   onDismissNotice?: () => void;
@@ -32,12 +35,18 @@ export function TunnelCard({
   onRemove,
   onLogs,
   onNginx,
+  onGoToServices,
   notice,
   onDismissNotice,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLSpanElement | null>(null);
+  useDismissOnOutside(menuRef, menuOpen, () => setMenuOpen(false));
   const meta = TUNNEL_STATUS_META[tunnel.status];
   const isBad = tunnel.status === "disconnected" || tunnel.status === "error";
+  // 有失败原因时，「连接中」也要把原因摆出来，不能只让人干等
+  const showFix =
+    isBad || (tunnel.status === "connecting" && Boolean(tunnel.reason));
 
   return (
     <article className="card">
@@ -55,7 +64,7 @@ export function TunnelCard({
               开始发布
             </button>
           )}
-          <span className="menu-anchor">
+          <span className="menu-anchor" ref={menuRef}>
             <button
               className="icon-btn"
               aria-label="更多操作"
@@ -134,9 +143,12 @@ export function TunnelCard({
 
       {!tunnel.serviceOk && (
         <div className="card-note">
-          <span className="chip warn">
-            本机服务没在跑（访问会失败，先去看本机服务页）
-          </span>
+          <span className="chip warn">本机服务没在跑（访问会失败）</span>
+          {onGoToServices && (
+            <button className="link-btn" onClick={onGoToServices}>
+              去本机服务页看看
+            </button>
+          )}
         </div>
       )}
 
@@ -149,12 +161,16 @@ export function TunnelCard({
             </button>
           </span>
         </div>
-      ) : isBad ? (
+      ) : showFix ? (
         <div className={`fix-ribbon ${tunnel.status}`}>
           <span className="fix-text">
             ⚠{" "}
-            {tunnel.status === "error" && tunnel.reason
-              ? `发布失败：${tunnel.reason}。`
+            {tunnel.reason
+              ? tunnel.status === "error"
+                ? `发布失败：${tunnel.reason}。`
+                : tunnel.status === "connecting"
+                  ? `上次连接失败：${tunnel.reason}。正在重试。`
+                  : `连不上云端：${tunnel.reason}。`
               : meta.sentence}
           </span>
           <span className="fix-actions">

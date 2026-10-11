@@ -16,7 +16,10 @@ use shangxian_core::protection::AccessCheck;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, State, WindowEvent,
+    Emitter, Manager, State, WindowEvent,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MessageBoxW,
 };
 
 mod ctl;
@@ -35,6 +38,125 @@ struct Snapshot {
 
 struct AppState {
     guardian: Arc<Mutex<Guardian>>,
+}
+
+// ---------- 短锁 + 锁外跑 SSH ----------
+// 全局锁后面等的是看护轮询（150ms 一次）和界面快照（800ms 一次）。
+// 任何要联网的 SSH 操作都得：短锁里克隆连接信息 → 放锁 → 跑完再短锁写回。
+
+/// 一台服务器跑 SSH 需要的连接信息（从 Guardian 里克隆出来，不占着锁）。
+pub(crate) struct ServerConn {
+    pub(crate) host: String,
+    pub(crate) ssh_port: u16,
+    pub(crate) user: String,
+    pub(crate) identity_file: Option<std::path::PathBuf>,
+}
+
+impl ServerConn {
+    /// ssh 的目标写法：`user@host`。
+    pub(crate) fn target(&self) -> String {
+        format!("{}@{}", self.user, self.host)
+    }
+
+    /// 装成 core 的 ssh 执行器（参数跟隧道走的是同一套）。
+    pub(crate) fn exec(&self) -> shangxian_core::cleanup::SshExec {
+        shangxian_core::cleanup::SshExec {
+            ssh_exe: shangxian_core::ssh::default_ssh_exe(),
+            target: self.target(),
+            ssh_port: self.ssh_port,
+            identity_file: self.identity_file.clone(),
+        }
+    }
+}
+
+/// 短锁里克隆一台服务器的连接信息（不联网）。
+pub(crate) fn server_conn(
+    guardian: &Arc<Mutex<Guardian>>,
+    server_id: &str,
+) -> Result<ServerConn, String> {
+    let g = guardian.lock().unwrap();
+    let s = g
+        .servers()
+        .into_iter()
+        .find(|s| s.id == server_id)
+        .ok_or_else(|| format!("找不到云端服务器：{server_id}"))?;
+    Ok(ServerConn {
+        host: s.host,
+        ssh_port: s.ssh_port,
+        user: s.user,
+        identity_file: s.key_path.map(std::path::PathBuf::from),
+    })
+}
+
+/// 「测试连接」真正干活的部分：跑一次 SSH，成功返回人话 + 用时。
+/// 必须在锁外调（Tauri 那边放 `spawn_blocking`，控制通道那边放连接线程里）。
+pub(crate) fn run_server_test(conn: &ServerConn) -> Result<String, String> {
+    let started = std::time::Instant::now();
+    let out = shangxian_core::cleanup::run(
+        &conn.exec(),
+        "echo shangxian-ok",
+        std::time::Duration::from_secs(15),
+    )
+    .map_err(|e| ssh_error_human(&e, conn))?;
+    if !out.contains("shangxian-ok") {
+        return Err(format!(
+            "连上了，但服务器回的话看不懂（{}）。看看这台服务器的默认 shell 是不是被改过。",
+            out.trim()
+        ));
+    }
+    Ok(format!("连接成功，用时 {:.1} 秒", started.elapsed().as_secs_f64()))
+}
+
+/// 把 ssh 的报错翻成用户能懂的话（原始报错附在后面，对不上时好排查）。
+fn ssh_error_human(raw: &str, conn: &ServerConn) -> String {
+    let low = raw.to_ascii_lowercase();
+    let target = conn.target();
+    if low.contains("无法启动 ssh") || low.contains("cannot find the file") {
+        return "这台电脑上找不到 ssh 命令：去「设置 → 应用 → 可选功能」里装上「OpenSSH 客户端」再试".into();
+    }
+    if low.contains("timed out") || low.contains("timeout") {
+        return format!(
+            "连不上 {target}（端口 {}）：超时了。检查地址、SSH 端口填得对不对，服务器防火墙有没有放行",
+            conn.ssh_port
+        );
+    }
+    if low.contains("permission denied") || low.contains("authentication failed") {
+        return "登录被拒绝了：这台服务器还没配免密，或者密钥不对。先在这台服务器上用密码配一次免密，再点测试".into();
+    }
+    if low.contains("host key verification failed") {
+        return "服务器指纹对不上：可能服务器重装过、或者换成另一台机器了。核对清楚再连".into();
+    }
+    if low.contains("connection refused") {
+        return format!(
+            "{target}（端口 {}）拒绝连接：SSH 端口可能填错了，或者服务器上 sshd 没开",
+            conn.ssh_port
+        );
+    }
+    if low.contains("could not resolve") || low.contains("name or service not known") {
+        return format!("找不到服务器地址：{target} 解析不了，检查主机名/IP 有没有写错");
+    }
+    if low.contains("no such file") || low.contains("identity file") {
+        let key = conn
+            .identity_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "（还没配）".to_string());
+        return format!("密钥文件用不了（{key}）：重新用密码配一次免密，或者手动核对这个路径");
+    }
+    format!("连不上 {target}：{}", raw.trim())
+}
+
+// ---------- 配置读坏时的红条 ----------
+
+/// 配置读坏的原因（界面加载完会由 `on_page_load` 补发一次，免得事件比界面先到）。
+static CONFIG_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+/// 告诉界面「配置文件读不出来」：事件名 `config-error`，payload `{ message: string }`。
+fn report_config_error(app: &tauri::AppHandle, message: &str) {
+    *CONFIG_ERROR.lock().unwrap() = Some(message.to_string());
+    if let Err(e) = app.emit("config-error", serde_json::json!({ "message": message })) {
+        eprintln!("[配置] 通知界面失败（界面可能还没起来）：{e}");
+    }
 }
 
 #[tauri::command]
@@ -330,14 +452,44 @@ fn delete_server(id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.guardian.lock().unwrap().delete_server(&id)
 }
 
-/// 在服务器上生成访问密码的哈希。
+/// 在本机生成访问密码的哈希（bcrypt `$2y$…`，给 nginx 用）；密码只在本机算，不发给服务器。
+///
+/// 生成走本机 bcrypt（不再把密码发到服务器上跑 openssl），很快；但也不占全局锁：
+/// 短锁里拿连接信息，计算放锁外（Tauri 线程池里跑），别卡住看护轮询和界面快照。
 #[tauri::command]
-fn hash_password(
+async fn hash_password(
     server_id: String,
     password: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    state.guardian.lock().unwrap().hash_password(&server_id, &password)
+    let guardian = state.guardian.clone();
+    let conn = server_conn(&guardian, &server_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        shangxian_core::cleanup::hash_password(&conn.exec(), &password)
+    })
+    .await
+    .map_err(|e| format!("内部错误：{e}"))?
+}
+
+/// 测试连接：真连一次这台服务器（SSH 跑一句 echo），给服务器页的「测试连接」按钮用。
+///
+/// 参数 `serverId`；也兼容 `id`（前端 api.ts 两个都传，怕后端认另一个名字）。
+/// 不占全局锁（短锁拿连接信息 → 锁外跑），界面不会卡；最长 15 秒。
+#[tauri::command]
+async fn test_server(
+    server_id: Option<String>,
+    id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let server_id = server_id
+        .or(id)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "缺少参数 serverId（要测哪台服务器的 id）".to_string())?;
+    let guardian = state.guardian.clone();
+    let conn = server_conn(&guardian, &server_id)?;
+    tauri::async_runtime::spawn_blocking(move || run_server_test(&conn))
+        .await
+        .map_err(|e| format!("内部错误：{e}"))?
 }
 
 /// 生成服务的 nginx 配置片段（人工应用到面板）。
@@ -478,11 +630,42 @@ pub fn run() {
             std::fs::create_dir_all(&data_dir)?;
             let config_path = data_dir.join("config.json");
             let config = if config_path.exists() {
-                AppConfig::load(&config_path).unwrap_or_else(|e| {
-                    eprintln!("[配置] 读取失败，先按空配置启动：{e}");
-                    AppConfig::default()
-                })
+                match AppConfig::load(&config_path) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        // 坏文件留底：新版 core 的 load 会自己改名；万一没有（旧版 core），
+                        // 我们兜一手，别让后面的保存把用户原来那份配置盖掉。
+                        let bad_path = data_dir.join("config.json.bad");
+                        if config_path.exists() {
+                            let _ = std::fs::remove_file(&bad_path);
+                            let _ = std::fs::rename(&config_path, &bad_path);
+                        }
+                        let message = if bad_path.exists() {
+                            format!(
+                                "配置文件读不出来：{e}。已把原文件保留为 config.json.bad，请检查或恢复。现在先用空配置跑（本机服务和隧道都不会自动起来）。"
+                            )
+                        } else {
+                            format!(
+                                "配置文件读不出来：{e}，而且备份成 config.json.bad 也没成功。请先手动把 config.json 拷一份出来再改配置。现在先用空配置跑。"
+                            )
+                        };
+                        eprintln!("[配置] {message}");
+                        report_config_error(app.handle(), &message);
+                        AppConfig::default()
+                    }
+                }
+            } else if config_path.with_extension("json.bad").exists() {
+                // config.json 不在，但同目录留着 config.json.bad：说明上次打开时配置就读坏了，
+                // core 已经把原文件留底、删掉原文件。这次**不能**再建空配置：不然
+                // config_save_allowed 一看「文件在、能解析」就放行自动保存，保护链断了，
+                // 用户也再看不到红条。内存里拿默认配置继续跑（Guardian 会自动禁止保存），
+                // 等用户把原文件修回来。
+                let message = "上次的配置文件读坏了，已经保留成 config.json.bad；这次先用空白配置启动，本机服务和隧道都不会自动起来，也不会把空白配置写回磁盘。修好原文件、把 .bad 改回 config.json 再打开就能恢复。".to_string();
+                eprintln!("[配置] {message}");
+                report_config_error(app.handle(), &message);
+                AppConfig::default()
             } else {
+                // 第一次用：既没有 config.json 也没有 .bad，才允许建一份空配置。
                 let cfg = AppConfig::default();
                 let _ = cfg.save(&config_path);
                 cfg
@@ -535,12 +718,12 @@ pub fn run() {
                         for notice in notices {
                             let (title, body) = match &notice {
                                 shangxian_core::notify::Notice::Down { name } => (
-                                    "服务掉线",
-                                    format!("「{name}」连不上了，正在自动重试。"),
+                                    format!("发布掉线：{name}"),
+                                    "连不上了，正在自动重试。".to_string(),
                                 ),
                                 shangxian_core::notify::Notice::Recovered { name } => (
-                                    "服务已恢复",
-                                    format!("「{name}」重新发布成功。"),
+                                    format!("发布恢复：{name}"),
+                                    "重新发布成功。".to_string(),
                                 ),
                             };
                             match handle.notification().builder().title(title).body(&body).show()
@@ -554,7 +737,8 @@ pub fn run() {
             }
 
             // ---------- 托盘：图标 + 右键菜单 ----------
-            // 「退出」只退应用，本地服务照旧跑（保活）；
+            // 「退出（会停止发布）」会把发布（隧道）停掉，有隧道开着时先弹确认，
+            // 跟下面那个明确说「停止本地服务」的选项拉开差别；两者都不动对方管的东西。
             // 「退出并停止全部本地服务」先停掉应用自己启的本地服务（整棵进程树），再停
             // 能按程序路径核对出归属的认领进程；核对不过的（比如配置是 .bat/.cmd 包装脚本、
             // 实际监听者是子进程）不硬杀，计入「没能停」并把结果提示给用户，然后退出。
@@ -562,7 +746,7 @@ pub fn run() {
             let quit_stop_item =
                 MenuItemBuilder::with_id("quit_stop_services", "退出并停止全部本地服务")
                     .build(app)?;
-            let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "退出（会停止发布）").build(app)?;
             let menu = MenuBuilder::new(app)
                 .items(&[&show_item, &quit_stop_item, &quit_item])
                 .build()?;
@@ -573,7 +757,12 @@ pub fn run() {
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main(app),
-                    "quit" => app.exit(0),
+                    // 有隧道开着发布时先问一句：退出 = 发布停掉、公网访问中断
+                    "quit" => {
+                        if confirm_quit_with_publishing(app) {
+                            app.exit(0);
+                        }
+                    }
                     // 先把应用启动/认领的本地服务停掉，再退出
                     "quit_stop_services" => {
                         let state = app.state::<AppState>();
@@ -598,7 +787,17 @@ pub fn run() {
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
-            tray.build(app)?;
+            let tray_icon = tray.build(app)?;
+
+            // 托盘 tooltip 跟着发布状态走：鼠标一悬停就能看到几条在发布、几条掉线。
+            {
+                let tray = tray_icon.clone();
+                let guardian = guardian.clone();
+                std::thread::spawn(move || loop {
+                    let _ = tray.set_tooltip(Some(tray_tooltip(&guardian)));
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                });
+            }
 
             // ---------- 自绘标题栏：圆角 + 最大化按钮命中测试（贴靠布局要用） ----------
             if let Some(window) = app.get_webview_window("main") {
@@ -606,11 +805,22 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_page_load(|webview, payload| {
+            // 界面加载好了：把启动时没送到的配置错误补发一次
+            if payload.event() == tauri::webview::PageLoadEvent::Finished {
+                let message = CONFIG_ERROR.lock().unwrap().clone();
+                if let Some(message) = message {
+                    let _ = webview.emit("config-error", serde_json::json!({ "message": message }));
+                }
+            }
+        })
         .on_window_event(|window, event| {
             // 关闭按钮 = 缩到托盘，不退出程序（真正退出走托盘菜单）
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                // 头一回缩到托盘时说一声，别让人以为程序被关掉了（只在数据目录记一次）
+                notify_tray_hint_once(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -632,6 +842,7 @@ pub fn run() {
             tunnel_restart,
             list_local_ports,
             setup_passwordless,
+            test_server,
             scan_imports,
             import_services,
             get_logs,
@@ -654,6 +865,79 @@ pub fn run() {
     // 退出时把控制通道的通行证文件删掉（命令行就不会再连一个已经关了的应用）
     shangxian_core::ctl::remove_ctl_info(&default_data_dir());
     result.expect("error while running tauri application");
+}
+
+/// 托盘 tooltip：几条在发布、几条掉线（没开发布就还是原来那句）。
+fn tray_tooltip(guardian: &Arc<Mutex<Guardian>>) -> String {
+    let health = guardian.lock().unwrap().health_snapshot();
+    let publishing = health.iter().filter(|(_, _, ok)| *ok).count();
+    let down = health.len() - publishing;
+    if health.is_empty() {
+        "上线助手".to_string()
+    } else {
+        format!("{publishing} 条发布中 · {down} 条掉线")
+    }
+}
+
+/// 退出前确认：有隧道开着发布时弹个原生确认框（模态，弹在主窗口上）。
+/// 没有在发布的隧道就直接放行，不打扰。
+fn confirm_quit_with_publishing(app: &tauri::AppHandle) -> bool {
+    let publishing = app
+        .state::<AppState>()
+        .guardian
+        .lock()
+        .unwrap()
+        .health_snapshot()
+        .len();
+    if publishing == 0 {
+        return true;
+    }
+    let text = format!(
+        "现在有 {publishing} 条隧道开着发布。\n\n退出后发布就停了，公网访问会中断；本机服务不受影响。\n\n确定要退出吗？"
+    );
+    let owner = app
+        .get_webview_window("main")
+        .and_then(|w| w.hwnd().ok())
+        .map(|h| h.0 as *mut core::ffi::c_void)
+        .unwrap_or(std::ptr::null_mut());
+    let text_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let caption_w: Vec<u16> = "上线助手"
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let answer = unsafe {
+        MessageBoxW(
+            owner,
+            text_w.as_ptr(),
+            caption_w.as_ptr(),
+            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2 | MB_SETFOREGROUND | MB_TOPMOST,
+        )
+    };
+    answer == IDYES
+}
+
+/// 头一回点关闭缩到托盘时提醒一次：怎么找回窗口、怎么真正退出。
+/// 只在数据目录留个小标记文件，提示过就不再打扰（不碰 config.json）。
+fn notify_tray_hint_once(app: &tauri::AppHandle) {
+    let marker = default_data_dir().join("tray-hint-shown");
+    if marker.exists() {
+        return;
+    }
+    if let Some(dir) = marker.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    // 先把标记写上：通知发不出去也不再反复弹
+    let _ = std::fs::write(&marker, b"1");
+
+    use tauri_plugin_notification::NotificationExt;
+    let body = "已缩到托盘，右键图标可退出；左键点图标可以打开主界面。";
+    match app.notification().builder().title("上线助手").body(body).show() {
+        Ok(()) => eprintln!("[通知] 已发送：{body}"),
+        Err(e) => {
+            eprintln!("[通知] 发送失败：{e}");
+            append_app_log(&format!("[托盘] {body}"));
+        }
+    }
 }
 
 fn show_main(app: &tauri::AppHandle) {

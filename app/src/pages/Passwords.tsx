@@ -60,9 +60,17 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                 <div className="server-main">
                   <div className="server-name">保护情况</div>
                   <div className="server-meta">
-                    {warnCount === 0
-                      ? `${tunnels.length} 条隧道都设了保护。`
-                      : `有 ${warnCount} 条隧道还没设好保护，网址一泄露谁都能看。`}
+                    {warnCount === 0 ? (
+                      <>
+                        {tunnels.length} 条隧道本地设置都齐全。
+                        <span className="chip warn" style={{ margin: "0 6px" }}>
+                          待核对
+                        </span>
+                        点每条下面的「检查云端」，云端真的生效了才算数。
+                      </>
+                    ) : (
+                      `有 ${warnCount} 条隧道还没设好保护，网址一泄露谁都能看。`
+                    )}
                   </div>
                 </div>
               </div>
@@ -122,6 +130,7 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
         <NginxModal
           id={nginxFor.id}
           name={nginxFor.name}
+          tunnel={nginxFor}
           onClose={() => setNginxFor(null)}
         />
       )}

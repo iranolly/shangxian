@@ -1,10 +1,11 @@
 // 一张本机服务卡片：状态三件套（圆点 + 中文状态词 + 一句人话）+ 看护/自启开关 + 坏状态修复带。
 // 规则：坏状态在卡片内就能修，最多两个动作，第一个必须是动词。
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { SERVICE_STATUS_META } from "../copy/status";
 import type { ServiceView } from "../api";
+import { useDismissOnOutside } from "./useModalA11y";
 
 interface Props {
   service: ServiceView;
@@ -39,7 +40,11 @@ export function ServiceCard({
   onDismissNotice,
 }: Props) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLSpanElement | null>(null);
+  useDismissOnOutside(menuRef, menuOpen, () => setMenuOpen(false));
   const meta = SERVICE_STATUS_META[service.status];
+  // 没填启动程序 = 只监控：看护 / 开机自启都用不上
+  const noLaunch = !service.launchExe;
   const isBad =
     service.status === "not_listening" || service.status === "failed";
   // 「正在跑」的三种状态（启动中/在跑/端口不通）都显示「停止」
@@ -64,7 +69,7 @@ export function ServiceCard({
               启动
             </button>
           )}
-          <span className="menu-anchor">
+          <span className="menu-anchor" ref={menuRef}>
             <button
               className="icon-btn"
               aria-label="更多操作"
@@ -126,18 +131,23 @@ export function ServiceCard({
       </div>
 
       <div className="card-row3">
-        <label className="switch">
+        <label className="switch" title={noLaunch ? "没填启动程序，用不了" : undefined}>
           <input
             type="checkbox"
             checked={service.watch}
+            disabled={noLaunch}
             onChange={(e) => onToggleWatch(e.target.checked)}
           />
           看护
         </label>
-        <label className="switch">
+        <label
+          className="switch"
+          title={noLaunch ? "没填启动程序，用不了" : undefined}
+        >
           <input
             type="checkbox"
             checked={service.autostart}
+            disabled={noLaunch}
             onChange={(e) => onToggleAutostart(e.target.checked)}
           />
           开机自启
@@ -151,6 +161,12 @@ export function ServiceCard({
             : "还没发布"}
         </span>
       </div>
+
+      {noLaunch && (
+        <p className="card-no-launch">
+          只监控，不帮你启动：没填启动程序时「看护」和「开机自启」用不上。想用的话，点「⋯」→「编辑本机服务」把启动程序填上。
+        </p>
+      )}
 
       {notice ? (
         <div className="fix-ribbon error">

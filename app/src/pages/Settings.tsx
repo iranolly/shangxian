@@ -110,9 +110,9 @@ export function SettingsPage() {
         <article className="card">
           <div className="server-card">
             <div className="server-main">
-              <div className="server-name">掉线提醒</div>
+              <div className="server-name">发布掉线提醒</div>
               <div className="server-meta">
-                服务连不上超过 3 分钟、或恢复连接时，弹一条系统通知。
+                发布掉线超过 3 分钟、或发布恢复时，弹一条系统通知。
               </div>
             </div>
             <span className="row-actions">

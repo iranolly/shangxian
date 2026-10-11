@@ -11,6 +11,7 @@ import { PasswordsPage } from "./pages/Passwords";
 import { SettingsPage } from "./pages/Settings";
 import {
   getSnapshot,
+  onConfigError,
   serviceStart,
   serviceStop,
   setServiceAutostart,
@@ -66,6 +67,26 @@ export default function App() {
     };
   }, []);
 
+  // 后端读配置失败时会发一条 config-error：用固定红条告诉用户，不挡操作
+  useEffect(() => {
+    let alive = true;
+    let unlisten: (() => void) | undefined;
+    void onConfigError((message) => {
+      if (alive) setNotice(message);
+    })
+      .then((fn) => {
+        if (alive) unlisten = fn;
+        else fn();
+      })
+      .catch(() => {
+        // 监听失败不影响其它功能
+      });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, []);
+
   const act = useCallback(
     (fn: () => Promise<void>) => {
       void (async () => {
@@ -82,9 +103,48 @@ export default function App() {
     [refresh],
   );
 
+  // 侧栏要的两条统计：正在发布中的、以及掉线/出错的
+  const tunnelsRunning = snapshot.tunnels.filter(
+    (t) => t.status === "running",
+  ).length;
+  const tunnelsDown = snapshot.tunnels.filter(
+    (t) => t.status === "disconnected" || t.status === "error",
+  ).length;
+
   return (
     <div className="app-shell">
       <TitleBar />
+      {/* 报错固定浮在最上层：滚到列表下面也看得见 */}
+      {notice && (
+        <div
+          style={{
+            position: "fixed",
+            top: 44,
+            left: 0,
+            right: 0,
+            zIndex: 1000,
+            display: "flex",
+            justifyContent: "center",
+            padding: "0 16px",
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            className="banner-error"
+            style={{
+              width: "100%",
+              maxWidth: 696,
+              pointerEvents: "auto",
+              boxShadow: "0 6px 20px rgba(0, 0, 0, 0.28)",
+            }}
+          >
+            <span>{notice}</span>
+            <button className="link-btn" onClick={() => setNotice("")}>
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
       <div className="app">
         <Sidebar
           current={page}
@@ -96,22 +156,19 @@ export default function App() {
             services: snapshot.services.length,
             tunnels: snapshot.tunnels.length,
             servers: snapshot.servers.length,
+            tunnelsRunning,
+            tunnelsDown,
           }}
         />
         <main className="main">
-          {notice && (
-            <div className="page banner-page">
-              <div className="banner-error">
-                <span>{notice}</span>
-                <button className="link-btn" onClick={() => setNotice("")}>
-                  知道了
-                </button>
-              </div>
-            </div>
-          )}
           {page === "services" ? (
             <ServicesPage
               services={snapshot.services}
+              hasServers={snapshot.servers.length > 0}
+              onNavigate={(p) => {
+                setNotice("");
+                setPage(p);
+              }}
               onStart={(id) => act(() => serviceStart(id))}
               onStop={(id, killForeign, expectedPid) =>
                 serviceStop(id, killForeign, expectedPid)
@@ -132,6 +189,10 @@ export default function App() {
               onStart={(id) => act(() => tunnelStart(id))}
               onStop={(id) => act(() => tunnelStop(id))}
               onRestart={(id) => act(() => tunnelRestart(id))}
+              onNavigate={(p) => {
+                setNotice("");
+                setPage(p);
+              }}
               onRefresh={() => void refresh()}
             />
           ) : page === "servers" ? (

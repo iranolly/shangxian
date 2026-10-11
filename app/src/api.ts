@@ -2,6 +2,7 @@
 // 在 Tauri 窗口里走真实命令；在普通浏览器里（纯前端预览）退回演示数据。
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { MOCK_SERVERS, MOCK_SERVICES, MOCK_TUNNELS } from "./mock/services";
 import type { ServiceStatus, TunnelStatus } from "./copy/status";
@@ -58,6 +59,8 @@ export interface ServerView {
   user: string;
   sshPort: number;
   keyPath?: string | null;
+  /** 这台服务器上的站点目录（可空） */
+  vhostDir?: string | null;
 }
 
 export interface Snapshot {
@@ -120,6 +123,8 @@ export interface ServerInput {
   sshPort: number;
   user: string;
   keyPath?: string | null;
+  /** 这台服务器上的站点目录（可空） */
+  vhostDir?: string | null;
 }
 
 /** 新增/编辑一台本机服务（id 为空 = 新建） */
@@ -385,6 +390,15 @@ export async function setupPasswordless(
   return await invoke<string>("setup_passwordless", { serverId, password });
 }
 
+/**
+ * 测试能不能连上这台服务器（真实去 SSH 连一次）。
+ * 兼容两种参数名：后端用 id 或 serverId 都能取到。
+ */
+export async function testServer(id: string): Promise<string> {
+  if (!inTauri) return "（浏览器预览不会真的连服务器）";
+  return await invoke<string>("test_server", { id, serverId: id });
+}
+
 export async function deleteServer(id: string): Promise<void> {
   if (inTauri) await invoke("delete_server", { id });
 }
@@ -480,4 +494,18 @@ export async function setNotifyEnabled(enabled: boolean): Promise<void> {
 
 export async function testNotification(): Promise<void> {
   if (inTauri) await invoke("test_notification");
+}
+
+/**
+ * 监听后端的「配置读不出来」事件：后端发 config-error 时把大白话错误交给界面。
+ * 返回取消监听的函数；浏览器预览下什么也不做。
+ */
+export async function onConfigError(
+  handler: (message: string) => void,
+): Promise<UnlistenFn> {
+  if (!inTauri) return () => {};
+  return await listen<{ message?: string }>("config-error", (e) => {
+    const msg = e.payload?.message?.trim();
+    handler(msg || "配置文件读不出来，已保留原文件；请到「设置」页打开配置文件夹看看。");
+  });
 }

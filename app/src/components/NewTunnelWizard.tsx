@@ -1,7 +1,7 @@
 // 发布新隧道向导：3 步 + 成功屏。
 // 第 1 步选本机服务，第 2 步选云端服务器和端口，第 3 步定访问保护。
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   addTunnel,
@@ -10,6 +10,8 @@ import {
   type ServiceView,
   type TunnelView,
 } from "../api";
+import { NginxModal } from "./NginxModal";
+import { useModalA11y } from "./useModalA11y";
 
 function generatePassword(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -52,10 +54,19 @@ export function NewTunnelWizard({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 选了「无保护」发布时的确认勾选：不勾不让发布 */
+  const [ackNoProtect, setAckNoProtect] = useState(false);
+  const [nginxOpen, setNginxOpen] = useState(false);
   const [done, setDone] = useState<{
+    id: string;
+    name: string;
     url: string | null;
     password: string | null;
   } | null>(null);
+
+  // 弹层无障碍：Esc 关闭 + 焦点圈定；成功屏再开「云端配置」时由内层接管
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
 
   const service = services.find((s) => s.id === serviceId) ?? null;
   const server = servers.find((s) => s.id === serverId) ?? null;
@@ -91,6 +102,12 @@ export function NewTunnelWizard({
       setError("刚才选的服务或服务器已经不存在了，关掉向导重新开一次");
       return;
     }
+    if (!wantPassword && !wantIp && !ackNoProtect) {
+      setError(
+        "没开任何访问保护：任何人拿到网址都能访问。要发布的话，先勾选下面的确认。",
+      );
+      return;
+    }
     if (wantPassword && !password.trim()) {
       setError("要密码才能进的话，密码不能为空；点「换一个」可以自动生成");
       return;
@@ -110,16 +127,18 @@ export function NewTunnelWizard({
         try {
           accessHash = await hashPassword(server.id, password);
         } catch (e) {
-          // 建隧道时服务器上必须已经有密码哈希，算不出来就绝不会创建成功；
+          // 这一步只在本机算 bcrypt 哈希，不连服务器；失败基本是密码本身不合格
+          // （bcrypt 只认前 72 个字节）或者这台服务器在配置里找不到了。
           // 这里直接拦住，不能让用户以为「稍后能补」。
           setError(
-            `没能在服务器上把密码存好（可能是连不上服务器）。请先到「云端服务器」页确认这台服务器能连上，再回来重新发布。${e ? `（${String(e)}）` : ""}`,
+            `本机算密码哈希没成功，密码没有保存。常见原因：密码超过 72 字节（bcrypt 装不下），或这台服务器已经不在配置里了。换成短一点的密码，或重新选服务器，再回来发布。${e ? `（${String(e)}）` : ""}`,
           );
           return;
         }
       }
-      await addTunnel({
-        name: name.trim() || `${service.name} 发布`,
+      const tunnelName = name.trim() || `${service.name} 发布`;
+      const id = await addTunnel({
+        name: tunnelName,
         serviceId: service.id,
         serverId: server.id,
         remotePort,
@@ -130,6 +149,8 @@ export function NewTunnelWizard({
         accessDetail: wantIp ? ips.trim() || null : null,
       });
       setDone({
+        id,
+        name: tunnelName,
         url: url.trim() || null,
         password: wantPassword ? password : null,
       });
@@ -146,7 +167,7 @@ export function NewTunnelWizard({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <div
             style={{
@@ -182,8 +203,11 @@ export function NewTunnelWizard({
           {done ? (
             <div className="success">
               <div className="success-mark">✓</div>
-              <p className="success-title">发布成功，现在就能访问了</p>
-              {done.url && (
+              <p className="success-title">隧道建好了，还差最后一步</p>
+              <p className="success-sub">
+                把云端 nginx 配置贴到服务器面板里并重载，网址才会正式生效，别人才能打开。
+              </p>
+              {done.url ? (
                 <div className="success-line">
                   <span className="success-url">https://{done.url}</span>
                   <button
@@ -193,6 +217,11 @@ export function NewTunnelWizard({
                     复制
                   </button>
                 </div>
+              ) : (
+                <p className="field-hint">
+                  没填公网网址：这条隧道现在还没有对外地址，别人暂时打不开。
+                  下一步贴配置时会提醒你先补网址——到「发布隧道」页编辑这条隧道就能补。
+                </p>
               )}
               {done.password && (
                 <div className="success-line">
@@ -207,8 +236,8 @@ export function NewTunnelWizard({
               )}
               <p className="field-hint">
                 {done.password
-                  ? "密码已经存好了；配置云端 nginx 时用它启用访问保护。以后要改保护或换密码，到「访问保护」页。"
-                  : "隧道已经开始发布，状态在「发布隧道」页能看到。以后想加保护，到「访问保护」页设置。"}
+                  ? "密码已经存好了；贴云端配置时用它启用访问保护。以后要改保护或换密码，到「访问保护」页。"
+                  : "以后想给这条隧道加访问保护，到「访问保护」页设置。"}
               </p>
             </div>
           ) : step === 1 ? (
@@ -222,15 +251,19 @@ export function NewTunnelWizard({
             ) : (
               <div className="option-list">
                 {services.map((s) => (
-                  <div
+                  <label
                     key={s.id}
                     className={`option ${serviceId === s.id ? "selected" : ""}`}
-                    onClick={() => setServiceId(s.id)}
                   >
-                    <input type="radio" checked={serviceId === s.id} readOnly />
+                    <input
+                      type="radio"
+                      name="wizard-service"
+                      checked={serviceId === s.id}
+                      onChange={() => setServiceId(s.id)}
+                    />
                     <span className="option-text">{s.name}</span>
                     <span className="mono">本机 {s.localPort}</span>
-                  </div>
+                  </label>
                 ))}
                 <p className="field-hint">
                   只会发布你选中的这台服务；它没在跑的时候，别人访问会失败。
@@ -295,9 +328,18 @@ export function NewTunnelWizard({
               <div className="option-list">
                 <div
                   className={`option ${wantPassword ? "selected" : ""}`}
-                  onClick={() => setWantPassword(!wantPassword)}
+                  onClick={() => {
+                    setWantPassword(!wantPassword);
+                    setAckNoProtect(false);
+                  }}
                 >
-                  <input type="checkbox" checked={wantPassword} readOnly />
+                  <input
+                    type="checkbox"
+                    checked={wantPassword}
+                    aria-label="要密码才能进（推荐）"
+                    onChange={(e) => setWantPassword(e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
                   <div className="option-text">
                     要密码才能进（推荐）
                     {wantPassword && (
@@ -335,9 +377,18 @@ export function NewTunnelWizard({
                 </div>
                 <div
                   className={`option ${wantIp ? "selected" : ""}`}
-                  onClick={() => setWantIp(!wantIp)}
+                  onClick={() => {
+                    setWantIp(!wantIp);
+                    setAckNoProtect(false);
+                  }}
                 >
-                  <input type="checkbox" checked={wantIp} readOnly />
+                  <input
+                    type="checkbox"
+                    checked={wantIp}
+                    aria-label="只允许指定 IP 访问"
+                    onChange={(e) => setWantIp(e.target.checked)}
+                    onClick={(e) => e.stopPropagation()}
+                  />
                   <div className="option-text">
                     只允许指定 IP 访问
                     {wantIp && (
@@ -356,12 +407,20 @@ export function NewTunnelWizard({
 
               <p className="field-hint">
                 两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
-                这一步就要定好：开了「要密码才能进」，发布时必须已经在服务器上存好密码，
-                连不上服务器就发不出去（可以先关掉密码、建好后再到「访问保护」页补）。
+                这一步就要定好：开了「要密码才能进」，发布时立刻在本机算好密码、
+                只把结果写进服务器上的密码文件，写不进去就发不出去（可以先关掉密码、建好后再到「访问保护」页补）。
               </p>
               {!wantPassword && !wantIp && (
                 <div className="danger-line">
-                  ⚠ 两种保护都没开：任何人知道网址就能访问，不要放私人内容
+                  ⚠ 两种保护都没开：任何人拿到网址都能访问，不要放私人内容。
+                  <label className="switch">
+                    <input
+                      type="checkbox"
+                      checked={ackNoProtect}
+                      onChange={(e) => setAckNoProtect(e.target.checked)}
+                    />
+                    我知道了，这样发布（不推荐）
+                  </label>
                 </div>
               )}
 
@@ -388,13 +447,18 @@ export function NewTunnelWizard({
 
         <div className="modal-foot">
           {done ? (
-            <button
-              className="btn btn-primary"
-              style={{ marginLeft: "auto" }}
-              onClick={onDone}
-            >
-              完成
-            </button>
+            <>
+              <button className="btn btn-ghost" onClick={onDone}>
+                稍后再说
+              </button>
+              <span className="grow" />
+              <button
+                className="btn btn-primary"
+                onClick={() => setNginxOpen(true)}
+              >
+                下一步：贴云端配置
+              </button>
+            </>
           ) : (
             <>
               <button className="btn btn-ghost" onClick={onClose}>
@@ -422,7 +486,7 @@ export function NewTunnelWizard({
               ) : (
                 <button
                   className="btn btn-primary"
-                  disabled={busy}
+                  disabled={busy || (!wantPassword && !wantIp && !ackNoProtect)}
                   onClick={() => void submit()}
                 >
                   {busy ? "发布中…" : "开始发布"}
@@ -432,6 +496,14 @@ export function NewTunnelWizard({
           )}
         </div>
       </div>
+
+      {nginxOpen && done && (
+        <NginxModal
+          id={done.id}
+          name={done.name}
+          onClose={() => setNginxOpen(false)}
+        />
+      )}
     </div>
   );
 }

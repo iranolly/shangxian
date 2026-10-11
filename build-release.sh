@@ -5,8 +5,7 @@
 #   bash build-release.sh
 #
 # 出来的东西：
-#   target/release/bundle/nsis/Shangxian_<版本>_x64-setup.exe   安装包（推荐）
-#   target/release/bundle/msi/Shangxian_<版本>_x64_en-US.msi    安装包（备用）
+#   target/release/bundle/nsis/Shangxian_<版本>_x64-setup.exe   安装包
 # 装完以后，应用和 cli.exe 在同一个文件夹里。
 set -e
 cd "$(dirname "$0")"
@@ -34,7 +33,6 @@ echo "③ 打应用安装包（第一次会下载打包工具，之后很快）�
 echo
 echo "✓ 完成，安装包在："
 ls -1 target/release/bundle/nsis/*.exe 2>/dev/null || true
-ls -1 target/release/bundle/msi/*.msi 2>/dev/null || true
 echo
 echo "提示：装完以后 cli.exe 跟应用在同一个文件夹；命令行在任何地方都能用"
 echo "      （它靠 %APPDATA%\\Shangxian\\ctl.json 找到正在跑的应用）。"

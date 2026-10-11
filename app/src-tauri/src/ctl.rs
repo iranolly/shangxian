@@ -3,9 +3,11 @@
 //! 跟界面用的是同一份状态（同一个 Guardian），所以命令行改完，界面立刻能看到，
 //! 反过来也一样。协议见 `shangxian_core::ctl`。
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use shangxian_core::config::default_data_dir;
@@ -13,6 +15,32 @@ use shangxian_core::ctl as core_ctl;
 use shangxian_core::guardian::{
     Guardian, NewTunnelInput, ServerInput, ServiceInput, StopOutcome, UpdateTunnelInput,
 };
+
+/// 一行请求最多 64KB（防着有人塞个超大 JSON 把内存撑爆）。
+const MAX_LINE_BYTES: usize = 64 * 1024;
+/// 连上之后最多 10 秒要把请求发完（防着连上就不说话）。
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+/// 同时在处理的连接数上限（一条连接一个线程，不能让人无限开）。
+const MAX_CONNECTIONS: usize = 8;
+
+/// 连接名额：拿到就占一个，线程结束（哪怕 panic）自动还回去。
+struct ConnSlot(Arc<AtomicUsize>);
+
+impl ConnSlot {
+    fn try_acquire(live: &Arc<AtomicUsize>) -> Option<Self> {
+        if live.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
+            live.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(live.clone()))
+    }
+}
+
+impl Drop for ConnSlot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// 开控制通道：绑定随机端口 → 写 ctl.json → 等连接。
 pub fn spawn(guardian: Arc<Mutex<Guardian>>) {
@@ -41,11 +69,21 @@ pub fn spawn(guardian: Arc<Mutex<Guardian>>) {
         }
         eprintln!("[控制通道] 已开启：127.0.0.1:{port}（命令行/agent 可以连了）");
 
+        let live = Arc::new(AtomicUsize::new(0));
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
+            // 名额满了就不接了，回一句人话把人打发走，别把线程数撑爆。
+            let Some(slot) = ConnSlot::try_acquire(&live) else {
+                let _ = reply(
+                    &stream,
+                    &json!({"id": 0, "ok": false, "error": format!("同时处理的连接太多了（最多 {MAX_CONNECTIONS} 条），稍后再试")}),
+                );
+                continue;
+            };
             let guardian = guardian.clone();
             let token = info.token.clone();
             std::thread::spawn(move || {
+                let _slot = slot; // 线程结束（哪怕 panic）自动把名额还回去
                 if let Err(e) = handle(stream, &guardian, &token) {
                     eprintln!("[控制通道] 这条请求处理失败：{e}");
                 }
@@ -56,9 +94,32 @@ pub fn spawn(guardian: Arc<Mutex<Guardian>>) {
 
 /// 一条连接 = 一条请求。
 fn handle(stream: TcpStream, guardian: &Arc<Mutex<Guardian>>, token: &str) -> std::io::Result<()> {
+    // 读请求既限时也限量：连上一直不发、或者发一行没边的巨型 JSON，都不能拖住应用。
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(READ_TIMEOUT))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    let mut limited = reader.by_ref().take((MAX_LINE_BYTES + 1) as u64);
+    match limited.read_line(&mut line) {
+        Ok(0) => return Ok(()), // 连上了但什么都没发
+        Ok(_) => {}
+        Err(e)
+            if e.kind() == std::io::ErrorKind::TimedOut
+                || e.kind() == std::io::ErrorKind::WouldBlock =>
+        {
+            return reply(
+                &stream,
+                &json!({"id": 0, "ok": false, "error": "读请求超时了（连上了但一直没把请求发过来）"}),
+            );
+        }
+        Err(e) => return Err(e),
+    }
+    if line.len() > MAX_LINE_BYTES {
+        return reply(
+            &stream,
+            &json!({"id": 0, "ok": false, "error": "请求太长了：一行最多 64KB"}),
+        );
+    }
 
     let req: Value = match serde_json::from_str(&line) {
         Ok(v) => v,
@@ -79,27 +140,52 @@ fn handle(stream: TcpStream, guardian: &Arc<Mutex<Guardian>>, token: &str) -> st
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or(json!({}));
 
-    // 核对云端要跑 SSH（最长 20 秒），不能占着看护轮询/界面快照的全局锁：
-    // 短锁里把连接信息克隆出来，放锁后再跑；dispatch 里那条分支保留作直接调用的兜底。
-    if method == "check_tunnel_access" {
-        let result = {
-            let g = guardian.lock().unwrap();
-            need_str(&params, "id").and_then(|tunnel_id| g.access_check_request(&tunnel_id))
+    // 要联网跑 SSH 的方法全在这拦下（最长 20 秒）：短锁里只克隆连接信息，真干活放锁外。
+    // 界面 800ms 快照、看护 150ms 轮询都在等这把全局锁，占着就是界面卡死。
+    match method {
+        "check_tunnel_access" => {
+            let result = {
+                let g = guardian.lock().unwrap();
+                need_str(&params, "id").and_then(|tunnel_id| g.access_check_request(&tunnel_id))
+            }
+            .and_then(|req| shangxian_core::guardian::run_access_check(&req).map(to_json));
+            return reply_result(&stream, &id, result);
         }
-        .and_then(|req| shangxian_core::guardian::run_access_check(&req));
-        return match result {
-            Ok(v) => reply(&stream, &json!({"id": id, "ok": true, "result": to_json(v)})),
-            Err(e) => reply(&stream, &json!({"id": id, "ok": false, "error": e})),
-        };
+        "hash_password" => {
+            let result = need_server_id(&params)
+                .and_then(|server_id| crate::server_conn(guardian, &server_id))
+                .and_then(|conn| {
+                    let password = need_str(&params, "password")?;
+                    shangxian_core::cleanup::hash_password(&conn.exec(), &password)
+                        .map(|hash| json!({"hash": hash}))
+                });
+            return reply_result(&stream, &id, result);
+        }
+        "setup_passwordless" => {
+            return reply_result(&stream, &id, setup_passwordless(guardian, &params));
+        }
+        "test_server" => {
+            let result = need_server_id(&params)
+                .and_then(|server_id| crate::server_conn(guardian, &server_id))
+                .and_then(|conn| crate::run_server_test(&conn).map(|msg| json!({"message": msg})));
+            return reply_result(&stream, &id, result);
+        }
+        _ => {}
     }
 
+    // 其余方法都是读内存/改配置，很快，按老规矩在锁里跑。
     let result = {
         let mut g = guardian.lock().unwrap();
         dispatch(&mut g, method, &params)
     };
+    reply_result(&stream, &id, result)
+}
+
+/// 统一的回包格式：成功给 result，失败给 error，id 原样带回。
+fn reply_result(stream: &TcpStream, id: &Value, result: Result<Value, String>) -> std::io::Result<()> {
     match result {
-        Ok(v) => reply(&stream, &json!({"id": id, "ok": true, "result": v})),
-        Err(e) => reply(&stream, &json!({"id": id, "ok": false, "error": e})),
+        Ok(v) => reply(stream, &json!({"id": id, "ok": true, "result": v})),
+        Err(e) => reply(stream, &json!({"id": id, "ok": false, "error": e})),
     }
 }
 
@@ -125,6 +211,16 @@ fn need_bool(params: &Value, key: &str) -> Result<bool, String> {
         .get(key)
         .and_then(|v| v.as_bool())
         .ok_or_else(|| format!("缺少参数 {key}（要 true/false）"))
+}
+
+/// 服务器 id：标准写法是 `serverId`，也兼容 `id`（各调用方写法不一，认就行）。
+fn need_server_id(params: &Value) -> Result<String, String> {
+    params
+        .get("serverId")
+        .or_else(|| params.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "缺少参数 serverId".to_string())
 }
 
 fn opt_usize(params: &Value, key: &str, fallback: usize) -> usize {
@@ -197,7 +293,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     (
         "save_server",
         "新增/编辑云端服务器（不填 id 就是新增）",
-        "{id?, name, host, sshPort, user, keyPath?}",
+        "{id?, name, host, sshPort, user, keyPath?, vhostDir?}",
     ),
     ("delete_server", "删除云端服务器（有隧道在用会拒绝）", "{id}"),
     (
@@ -205,7 +301,12 @@ const METHODS: &[(&str, &str, &str)] = &[
         "用密码登录一次，自动配好免密（密码不落盘）",
         "{serverId, password}",
     ),
-    ("hash_password", "在服务器上生成访问密码的哈希（apr1，给 nginx 用）", "{serverId, password}"),
+    (
+        "test_server",
+        "测试连接：真连一次这台服务器的 SSH",
+        "{serverId}",
+    ),
+    ("hash_password", "生成访问密码的哈希（bcrypt，本机算好、给 nginx 用）", "{serverId, password}"),
     ("get_nginx_snippet", "生成某条隧道的 nginx 配置片段", "{id}"),
     (
         "check_tunnel_access",
@@ -367,20 +468,15 @@ fn dispatch(g: &mut Guardian, method: &str, params: &Value) -> Result<Value, Str
             let id = need_str(params, "id")?;
             g.delete_server(&id).map(|_| json!({"ok": true}))
         }
-        "setup_passwordless" => setup_passwordless(g, params),
-        "hash_password" => {
-            let server_id = need_str(params, "serverId")?;
-            let password = need_str(params, "password")?;
-            g.hash_password(&server_id, &password)
-                .map(|hash| json!({"hash": hash}))
-        }
         "get_nginx_snippet" => {
             let id = need_str(params, "id")?;
             g.nginx_snippet(&id).map(to_json)
         }
-        "check_tunnel_access" => {
-            let id = need_str(params, "id")?;
-            g.check_tunnel_access(&id).map(to_json)
+        // 这几条都要联网跑 SSH，统一在 handle 里走「短锁 + 锁外执行」那条路。
+        // 万一有调用方绕过那条路走到这儿，直接拒绝：占着全局锁跑 SSH 最长 20 秒，
+        // 界面会卡死——不能再从这个口子回去。
+        "check_tunnel_access" | "hash_password" | "setup_passwordless" | "test_server" => {
+            Err("这条方法要联网跑 SSH，得走锁外那条路，不能占着全局锁跑".to_string())
         }
 
         // ----- 应用 -----
@@ -413,15 +509,21 @@ fn app_info(g: &Guardian) -> Value {
     })
 }
 
-/// 配免密：锁只拿两次（拿服务器信息、写回密钥路径），中间那段连服务器不占锁。
-fn setup_passwordless(g: &mut Guardian, params: &Value) -> Result<Value, String> {
-    let server_id = need_str(params, "serverId")?;
+/// 配免密：锁只拿两次（拿连接信息、写回密钥路径），中间那段 SSH（最长十几秒）不占锁。
+fn setup_passwordless(guardian: &Arc<Mutex<Guardian>>, params: &Value) -> Result<Value, String> {
+    let server_id = need_server_id(params)?;
     let password = need_str(params, "password")?;
-    let (host, port, user) = g.server_basics(&server_id)?;
     let key_path = shangxian_core::config::key_path_for(&default_data_dir(), &server_id);
+    let conn = crate::server_conn(guardian, &server_id)?;
 
-    let result = shangxian_core::keyboot::bootstrap_key(&host, port, &user, &password, &key_path)?;
-    g.set_server_key(&server_id, &result.key_path)?;
+    let result = shangxian_core::keyboot::bootstrap_key(
+        &conn.host,
+        conn.ssh_port,
+        &conn.user,
+        &password,
+        &key_path,
+    )?;
+    guardian.lock().unwrap().set_server_key(&server_id, &result.key_path)?;
     Ok(json!({
         "keyPath": result.key_path,
         "message": format!("配好了！以后连这台服务器都走密钥，不用再输密码。密钥放在：{}", result.key_path),

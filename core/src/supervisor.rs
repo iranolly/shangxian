@@ -22,9 +22,17 @@ use crate::job::Job;
 /// 创建进程时不弹控制台窗口。
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// 单个 ssh 日志文件的上限，超过就轮转。
+const LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
+/// 轮转保留的备份份数（x.ssh.log.1、x.ssh.log.2）。
+const LOG_BACKUPS: usize = 2;
+
 /// 一条隧道的启动参数。
 #[derive(Debug, Clone)]
 pub struct TunnelSpec {
+    /// 稳定标识（隧道 id）：日志文件名用它，改名不换日志文件。
+    /// 空 = 没传，退回用名字（老调用方还能跑）。
+    pub id: String,
     /// 展示用名字（服务名）。
     pub name: String,
     /// ssh.exe 路径（固定系统路径）。
@@ -44,6 +52,7 @@ pub struct TunnelSpec {
 impl TunnelSpec {
     pub fn new(name: impl Into<String>, ssh_exe: PathBuf, args: Vec<String>) -> Self {
         Self {
+            id: String::new(),
             name: name.into(),
             ssh_exe,
             args,
@@ -57,6 +66,12 @@ impl TunnelSpec {
     /// 附带远端清理参数（链式调用）。
     pub fn with_cleanup(mut self, spec: crate::cleanup::CleanupSpec) -> Self {
         self.cleanup = Some(spec);
+        self
+    }
+
+    /// 指定隧道 id：日志文件按 id 命名，改名不换日志文件（链式调用）。
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
         self
     }
 }
@@ -345,6 +360,8 @@ impl Tunnel {
         let job = Job::new()?;
 
         let log_path = self.log_path();
+        // 日志太大先轮转，别让它无限长。
+        rotate_log_if_needed(&log_path);
         let log = OpenOptions::new()
             .create(true)
             .append(true)
@@ -404,7 +421,13 @@ impl Drop for Tunnel {
 
 impl Tunnel {
     fn log_path(&self) -> PathBuf {
-        service_log_path(&self.log_dir, &self.spec.name)
+        // 有隧道 id 就用 id（改名不换文件）；没有就退回用名字。
+        let key = if self.spec.id.trim().is_empty() {
+            self.spec.name.as_str()
+        } else {
+            self.spec.id.as_str()
+        };
+        service_log_path(&self.log_dir, key)
     }
 
     /// 从 `from` 开始扫日志，看有没有“远端转发成功”的标志。
@@ -441,20 +464,24 @@ impl Tunnel {
     /// 往服务日志里追加一行（清理结果等）。
     fn log_line(&self, line: &str) {
         use std::io::Write;
+        let path = self.log_path();
+        rotate_log_if_needed(&path);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(self.log_path())
+            .open(&path)
         {
             let _ = writeln!(f, "{line}");
         }
     }
 }
 
+/// 文件名里能留的字符：Unicode 字母数字 + `-` `_`。
+/// 中文名不再全变下划线（全变下划线会让不同隧道挤进同一个日志文件）。
 fn sanitize(name: &str) -> String {
     name.chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
                 c
             } else {
                 '_'
@@ -463,9 +490,44 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
+/// FNV-1a 32 位：给文件名加一个跟原始 key 绑定的短尾巴，
+/// 保证不同名字/不同 id 落到不同文件（光靠 sanitize 还会撞）。
+fn short_hash(text: &str) -> u32 {
+    let mut hash: u32 = 0x811c_9dc5;
+    for b in text.as_bytes() {
+        hash ^= *b as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+    }
+    hash
+}
+
 /// 某个服务的 ssh 日志文件路径（界面看日志、清理读原因都用它）。
+/// 文件名 = 可读前缀 + 原始 key 的短哈希。
 pub fn service_log_path(log_dir: &std::path::Path, name: &str) -> PathBuf {
-    log_dir.join(format!("{}.ssh.log", sanitize(name)))
+    log_dir.join(format!("{}-{:08x}.ssh.log", sanitize(name), short_hash(name)))
+}
+
+/// 备份文件名：x.ssh.log.1、x.ssh.log.2 …
+fn backup_path(path: &Path, n: usize) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(format!(".{n}"));
+    PathBuf::from(name)
+}
+
+/// 日志超过上限就轮转：最老的备份删掉，旧的依次后移，当前文件改成 .1。
+/// 文件被运行中的 ssh 占用时改名会失败，下次启动前再试（不会弄坏当前日志）。
+fn rotate_log_if_needed(path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    if meta.len() < LOG_MAX_BYTES {
+        return;
+    }
+    let _ = std::fs::remove_file(backup_path(path, LOG_BACKUPS));
+    for i in (1..LOG_BACKUPS).rev() {
+        let _ = std::fs::rename(backup_path(path, i), backup_path(path, i + 1));
+    }
+    let _ = std::fs::rename(path, backup_path(path, 1));
 }
 
 /// 方便调用方判断某路径是不是默认 ssh。
@@ -473,4 +535,66 @@ pub fn is_default_ssh(path: &Path) -> bool {
     path.as_os_str()
         .to_string_lossy()
         .eq_ignore_ascii_case(crate::ssh::DEFAULT_SSH_EXE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chinese_names_get_distinct_log_files() {
+        let dir = std::env::temp_dir();
+        let a = service_log_path(&dir, "测试隧道");
+        let b = service_log_path(&dir, "另一个隧道");
+        assert_ne!(a, b, "不同中文名不能落到同一个日志文件");
+        assert_eq!(service_log_path(&dir, "测试隧道"), a, "同名路径要稳定");
+        let file = a.file_name().unwrap().to_string_lossy().to_string();
+        assert!(file.starts_with("测试隧道-"), "文件名保留中文方便认：{file}");
+    }
+
+    #[test]
+    fn tunnel_log_path_prefers_id_over_name() {
+        let dir = std::env::temp_dir();
+        let spec =
+            TunnelSpec::new("中文名", PathBuf::from("ssh.exe"), Vec::new()).with_id("tun-1");
+        let tunnel = Tunnel::new(spec, dir.clone());
+        assert_eq!(tunnel.log_path(), service_log_path(&dir, "tun-1"));
+
+        // 没传 id 的老调用方：退回按名字（路径仍然唯一）
+        let spec = TunnelSpec::new("中文名", PathBuf::from("ssh.exe"), Vec::new());
+        let tunnel = Tunnel::new(spec, dir.clone());
+        assert_eq!(tunnel.log_path(), service_log_path(&dir, "中文名"));
+    }
+
+    #[test]
+    fn log_rotation_keeps_two_backups() {
+        let dir = std::env::temp_dir().join(format!("sx-rotate-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("x.ssh.log");
+        let big = || vec![b'a'; (LOG_MAX_BYTES + 1) as usize];
+
+        std::fs::write(&path, big()).unwrap();
+        rotate_log_if_needed(&path);
+        assert!(!path.exists(), "超上限的当前文件应该被移走");
+        assert!(backup_path(&path, 1).exists());
+
+        std::fs::write(&path, big()).unwrap();
+        rotate_log_if_needed(&path);
+        assert!(backup_path(&path, 1).exists());
+        assert!(backup_path(&path, 2).exists());
+
+        std::fs::write(&path, big()).unwrap();
+        rotate_log_if_needed(&path);
+        assert!(backup_path(&path, 2).exists(), "只保留两份备份");
+        assert!(!backup_path(&path, 3).exists());
+
+        // 没超上限就不动它
+        std::fs::write(&path, b"small").unwrap();
+        rotate_log_if_needed(&path);
+        assert!(path.exists());
+        assert_eq!(std::fs::read(&path).unwrap(), b"small");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

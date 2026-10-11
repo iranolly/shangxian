@@ -8,6 +8,8 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
+# 本地生成 nginx 访问密码的 bcrypt 哈希（明文密码不再上服务器、不进 ssh 命令行）
+bcrypt = "0.19"
 # 只用来做「密码登录一次 → 配好免密」这一步；隧道本身仍走系统 ssh.exe
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }

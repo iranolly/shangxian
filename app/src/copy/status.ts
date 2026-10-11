@@ -54,12 +54,12 @@ export const SERVICE_STATUS_META: Record<ServiceStatus, StatusMeta> = {
 export const TUNNEL_STATUS_META: Record<TunnelStatus, StatusMeta> = {
   running: {
     word: "正在发布",
-    sentence: "别人现在可以访问。",
+    sentence: "隧道通了；云端配置贴好、域名解析对了之后，别人才能打开。",
     action: "暂停",
   },
   connecting: {
     word: "连接中",
-    sentence: "正在和云端服务器建立连接，几秒钟就好。",
+    sentence: "正在和云端服务器建立连接；如果一直停在这里，多半是连不上，点「看日志」看原因。",
   },
   disconnected: {
     word: "掉线重连中",

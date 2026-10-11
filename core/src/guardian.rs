@@ -8,8 +8,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -28,6 +28,13 @@ use crate::ssh::{self, TunnelTarget};
 use crate::supervisor::{service_log_path, Event, Phase, Tunnel as TunnelProc, TunnelSpec};
 
 // ---------- 给界面看的视图 ----------
+
+/// 开机自启的宽限期：第一轮先认领「端口已经在监听」的服务，然后等这一小会儿，
+/// 给上个会话留下的进程一点绑端口的时间；到期后才真正拉起没认到的自启服务。
+const AUTOSTART_GRACE: Duration = Duration::from_secs(5);
+
+/// 隧道退出后，最多扫日志尾部多少行用来挑一句人话原因。
+const EXIT_REASON_SCAN_LINES: usize = 40;
 
 /// 一台本机服务（界面用）。
 #[derive(Debug, Clone, serde::Serialize)]
@@ -92,6 +99,8 @@ pub struct ServerView {
     pub user: String,
     pub ssh_port: u16,
     pub key_path: Option<String>,
+    /// 这台服务器上面板放站点的目录（可空 = 按环境变量/小皮默认找）
+    pub vhost_dir: Option<String>,
 }
 
 // ---------- 界面提交的输入 ----------
@@ -155,6 +164,8 @@ pub struct ServerInput {
     pub ssh_port: u16,
     pub user: String,
     pub key_path: Option<String>,
+    /// 面板放站点的目录（可空 = 小皮默认 /xp/panel/vhost）；空串按『没填』处理
+    pub vhost_dir: Option<String>,
 }
 
 /// 停止一台本机服务的结果。
@@ -180,25 +191,40 @@ pub struct Guardian {
     log_dir: PathBuf,
     /// 运行中的隧道（按隧道 id）
     tunnels: HashMap<String, TunnelProc>,
+    /// 运行中隧道「实际用的参数」指纹（按隧道 id）；和配置对不上就停掉按新参数重建
+    tunnel_fingerprints: HashMap<String, String>,
     /// 隧道最近一次出错原因
     reasons: HashMap<String, String>,
     /// 本机服务的运行时（按服务 id）
     local: HashMap<String, LocalRunner>,
-    /// 开机自启只做一次
+    /// 开机自启处理完了
     autostart_done: bool,
+    /// 第一次认领的结果（宽限到期时用它决定哪些不用再拉）
+    autostart_claimed: HashSet<String>,
+    /// 开机自启的宽限截止时间；None = 还没做第一次认领
+    autostart_deadline: Option<Instant>,
+    /// 配置能不能安全写回（读坏留底后是 false，此时禁止自动保存）
+    config_trusted: bool,
 }
 
 impl Guardian {
     pub fn new(config: AppConfig, config_path: PathBuf, log_dir: PathBuf) -> Self {
         let _ = std::fs::create_dir_all(&log_dir);
+        // 磁盘上现在读不出配置（读坏留过底）时禁止自动保存：不能拿内存里的空配置
+        // 把用户的配置冲掉。见 config::config_save_allowed。
+        let config_trusted = config::config_save_allowed(&config_path);
         Self {
             config,
             config_path,
             log_dir,
             tunnels: HashMap::new(),
+            tunnel_fingerprints: HashMap::new(),
             reasons: HashMap::new(),
             local: HashMap::new(),
             autostart_done: false,
+            autostart_claimed: HashSet::new(),
+            autostart_deadline: None,
+            config_trusted,
         }
     }
 
@@ -207,11 +233,22 @@ impl Guardian {
     /// 周期调用：先让隧道表和配置对齐，再推进每条隧道和每台本机服务。
     pub fn poll(&mut self) -> Vec<(String, Event)> {
         if !self.autostart_done {
-            self.autostart_done = true;
-            // 应用启动后的第一轮：先认领「端口已经在监听」的服务，再拉开机自启，
-            // 已经认领的绝不重复启动。
-            let claimed = self.claim_running_services();
-            self.start_autostart_services(&claimed);
+            match self.autostart_deadline {
+                None => {
+                    // 第一轮先把「端口已经在监听」的服务认领掉（可能是上个会话留下的）；
+                    // 还没在听的由 localservice 开认领窗口接着探。
+                    self.autostart_claimed = self.claim_running_services();
+                    self.autostart_deadline = Some(Instant::now() + AUTOSTART_GRACE);
+                }
+                Some(at) if Instant::now() >= at => {
+                    self.autostart_done = true;
+                    // 宽限期结束才真正拉：给上个会话留下的进程一点绑端口的时间；
+                    // 已经认到的绝不重复启动。
+                    let claimed = std::mem::take(&mut self.autostart_claimed);
+                    self.start_autostart_services(&claimed);
+                }
+                Some(_) => {}
+            }
         }
         self.sync_tunnels();
         self.sync_local();
@@ -219,12 +256,30 @@ impl Guardian {
         let ids: Vec<String> = self.tunnels.keys().cloned().collect();
         let mut events = Vec::new();
         for id in ids {
-            if let Some(tunnel) = self.tunnels.get_mut(&id) {
-                for event in tunnel.poll() {
-                    if let Event::SpawnFailed { error, .. } = &event {
+            let tunnel_events = self
+                .tunnels
+                .get_mut(&id)
+                .map(|tunnel| tunnel.poll())
+                .unwrap_or_default();
+            for event in &tunnel_events {
+                match event {
+                    Event::SpawnFailed { error, .. } => {
                         self.reasons.insert(id.clone(), error.clone());
                     }
-                    events.push((id.clone(), event));
+                    Event::Exited { exit_code, .. } => {
+                        // 进程退出了：从日志尾部挑一句人话原因，界面别一直只显示「连接中」
+                        if let Some(reason) = self.explain_exit(&id, *exit_code) {
+                            self.reasons.insert(id.clone(), reason);
+                        }
+                    }
+                    Event::Started { .. } => {}
+                }
+                events.push((id.clone(), event.clone()));
+            }
+            // 这次真的连上了 → 上一次的出错原因清掉，恢复正常显示
+            if let Some(tunnel) = self.tunnels.get(&id) {
+                if tunnel.connected() && matches!(tunnel.phase(), Phase::Running { .. }) {
+                    self.reasons.remove(&id);
                 }
             }
         }
@@ -232,6 +287,26 @@ impl Guardian {
             runner.poll();
         }
         events
+    }
+
+    /// 隧道退出后，从日志尾部挑一句人话原因（认证被拒 / 主机指纹变 / DNS 失败…）。
+    /// 认不出具体原因、但退出码像「连不上」时给一句通用提示；正常退出返回 None。
+    fn explain_exit(&self, id: &str, exit_code: Option<u32>) -> Option<String> {
+        // 日志文件按隧道 id 命名（见 supervisor::with_id），这里直接按 id 找
+        let tail = read_tail(
+            &service_log_path(&self.log_dir, id),
+            EXIT_REASON_SCAN_LINES,
+        );
+        if let Some(reason) = exit_reason_from_log(&tail) {
+            return Some(reason);
+        }
+        if exit_code == Some(255) {
+            return Some(
+                "这一轮没连上：网络不通、服务器地址或账号密钥不对都可能；详情看这条隧道的日志"
+                    .into(),
+            );
+        }
+        None
     }
 
     /// 开机自启：把勾了自启的服务拉起来（应用启动时做一次）。
@@ -275,7 +350,9 @@ impl Guardian {
         claimed
     }
 
-    /// 让运行中的隧道与配置保持一致：停掉被暂停/删除的，补上新增的。
+    /// 让运行中的隧道与配置保持一致：停掉被暂停/删除的，补上新增的；
+    /// 已经在跑但参数（服务器地址/端口/账号/密钥、本机端口、云端端口）变了的，
+    /// 停掉旧的、按新参数重建（否则改了端口/服务器，跑着的还是老一套）。
     fn sync_tunnels(&mut self) {
         let enabled: HashSet<String> = self
             .config
@@ -296,6 +373,7 @@ impl Guardian {
             if let Some(mut tunnel) = self.tunnels.remove(&id) {
                 tunnel.stop();
             }
+            self.tunnel_fingerprints.remove(&id);
         }
 
         let tunnels: Vec<Tunnel> = self
@@ -306,15 +384,30 @@ impl Guardian {
             .cloned()
             .collect();
         for tun in tunnels {
-            if self.tunnels.contains_key(&tun.id) {
-                continue;
-            }
             let Some(service) = self.config.service(&tun.service_id).cloned() else {
                 continue;
             };
+            let fingerprint = tunnel_fingerprint(&self.config, &tun, &service);
+            let running = self.tunnels.contains_key(&tun.id);
+            let same = self
+                .tunnel_fingerprints
+                .get(&tun.id)
+                .map(|old| old == &fingerprint)
+                .unwrap_or(false);
+            if running && same {
+                continue;
+            }
+            // 参数变了（或上次就没跑起来）：停掉旧的，按新参数重建。
+            // 顺带清掉旧原因，别让界面继续挂着上一次的错。
+            if let Some(mut old) = self.tunnels.remove(&tun.id) {
+                old.stop();
+            }
+            self.tunnel_fingerprints.remove(&tun.id);
+            self.reasons.remove(&tun.id);
             match self.build_tunnel(&tun, &service) {
                 Ok(tunnel) => {
                     self.tunnels.insert(tun.id.clone(), tunnel);
+                    self.tunnel_fingerprints.insert(tun.id.clone(), fingerprint);
                 }
                 Err(err) => {
                     self.reasons.insert(tun.id.clone(), err);
@@ -361,8 +454,10 @@ impl Guardian {
                     }
                 }
                 None => {
-                    self.local
-                        .insert(svc.id.clone(), LocalRunner::new(spec, &self.log_dir));
+                    // 日志按服务 id 命名（改端口不换日志文件），别用默认的 port-xxxx
+                    let mut runner = LocalRunner::new(spec, &self.log_dir);
+                    runner.set_id(svc.id.clone());
+                    self.local.insert(svc.id.clone(), runner);
                 }
             }
         }
@@ -403,6 +498,8 @@ impl Guardian {
             ssh::default_ssh_exe(),
             ssh::tunnel_args(&target),
         )
+        // 日志文件按隧道 id 命名：改名不换日志文件（见 supervisor::with_id）
+        .with_id(tun.id.clone())
         .with_cleanup(cleanup);
         Ok(TunnelProc::new(spec, &self.log_dir))
     }
@@ -529,8 +626,9 @@ impl Guardian {
     }
 
     pub fn set_notify_enabled(&mut self, enabled: bool) -> Result<(), String> {
-        self.config.notify_enabled = enabled;
-        self.save()
+        let mut next = self.config.clone();
+        next.notify_enabled = enabled;
+        self.commit_config(next)
     }
 
     pub fn servers(&self) -> Vec<ServerView> {
@@ -544,6 +642,7 @@ impl Guardian {
                 user: s.user.clone(),
                 ssh_port: s.ssh_port,
                 key_path: s.key_path.clone(),
+                vhost_dir: s.vhost_dir.clone(),
             })
             .collect()
     }
@@ -572,10 +671,18 @@ impl Guardian {
         }
 
         let launch = build_launch(&input);
+        // 没有启动程序就没有「看护」和「开机自启」可言（前端也会同步禁用这两个开关）
+        if launch.is_none() && (input.watch || input.autostart) {
+            return Err(
+                "这台服务没填启动程序（只能看状态），开不了看护或开机自启；先到编辑界面把启动程序填上"
+                    .into(),
+            );
+        }
+
+        let mut next = self.config.clone();
         let id = match input.id.clone() {
             Some(id) => {
-                let svc = self
-                    .config
+                let svc = next
                     .services
                     .iter_mut()
                     .find(|s| s.id == id)
@@ -590,7 +697,7 @@ impl Guardian {
             }
             None => {
                 let id = config::new_id("svc");
-                self.config.services.push(LocalService {
+                next.services.push(LocalService {
                     id: id.clone(),
                     name,
                     local_port: input.local_port,
@@ -602,7 +709,8 @@ impl Guardian {
                 id
             }
         };
-        self.save()?;
+        // 先落盘、成功了再换内存；存盘失败内存保持原样，界面不会虚报成功
+        self.commit_config(next)?;
         self.sync_local();
         Ok(id)
     }
@@ -618,11 +726,14 @@ impl Guardian {
                 names.join("、")
             ));
         }
+        let mut next = self.config.clone();
+        next.services.retain(|s| s.id != id);
+        // 先落盘，成功了再停运行中的进程；存盘失败就什么都不动
+        self.commit_config(next)?;
         if let Some(mut runner) = self.local.remove(id) {
             runner.stop_now();
         }
-        self.config.services.retain(|s| s.id != id);
-        self.save()
+        Ok(())
     }
 
     /// 启动一台本机服务。
@@ -763,34 +874,42 @@ impl Guardian {
         Ok(StopOutcome::ForeignStopped { pid: target })
     }
 
-    /// 看护开关。
+    /// 看护开关。没填启动程序的服务开不了看护（只能看状态）。
     pub fn set_service_watch(&mut self, id: &str, watch: bool) -> Result<(), String> {
-        {
-            let svc = self
-                .config
-                .services
-                .iter_mut()
-                .find(|s| s.id == id)
-                .ok_or_else(|| format!("找不到服务：{id}"))?;
-            svc.watch = watch;
+        let mut next = self.config.clone();
+        let svc = next
+            .services
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("找不到服务：{id}"))?;
+        if watch && svc.launch.is_none() {
+            return Err(
+                "这台服务没填启动程序（只能看状态），开不了看护；先到编辑界面把启动程序填上"
+                    .into(),
+            );
         }
-        self.save()?;
+        svc.watch = watch;
+        self.commit_config(next)?;
         self.sync_local();
         Ok(())
     }
 
-    /// 开机自启开关。
+    /// 开机自启开关。没填启动程序的服务开不了自启。
     pub fn set_service_autostart(&mut self, id: &str, autostart: bool) -> Result<(), String> {
-        {
-            let svc = self
-                .config
-                .services
-                .iter_mut()
-                .find(|s| s.id == id)
-                .ok_or_else(|| format!("找不到服务：{id}"))?;
-            svc.autostart = autostart;
+        let mut next = self.config.clone();
+        let svc = next
+            .services
+            .iter_mut()
+            .find(|s| s.id == id)
+            .ok_or_else(|| format!("找不到服务：{id}"))?;
+        if autostart && svc.launch.is_none() {
+            return Err(
+                "这台服务没填启动程序（只能看状态），开不了开机自启；先到编辑界面把启动程序填上"
+                    .into(),
+            );
         }
-        self.save()
+        svc.autostart = autostart;
+        self.commit_config(next)
     }
 
     /// 本机服务当前进程号（没有在跑就是 None）。
@@ -935,7 +1054,8 @@ impl Guardian {
         }
 
         let id = config::new_id("tun");
-        self.config.tunnels.push(Tunnel {
+        let mut next = self.config.clone();
+        next.tunnels.push(Tunnel {
             id: id.clone(),
             name,
             service_id: input.service_id,
@@ -949,7 +1069,7 @@ impl Guardian {
             access_detail: clean_optional(input.access_detail),
             enabled: true,
         });
-        self.save()?;
+        self.commit_config(next)?;
         Ok(id)
     }
 
@@ -1020,9 +1140,9 @@ impl Guardian {
             (None, None)
         };
 
+        let mut next = self.config.clone();
         {
-            let tun = self
-                .config
+            let tun = next
                 .tunnels
                 .iter_mut()
                 .find(|t| t.id == input.id)
@@ -1035,64 +1155,73 @@ impl Guardian {
             tun.access_hash = final_hash;
             tun.access_detail = final_detail;
         }
+        // 先落盘，成功了再动运行中的隧道；存盘失败时旧隧道照跑，界面不会虚报成功
+        self.commit_config(next)?;
 
         if port_changed {
             if let Some(mut tunnel) = self.tunnels.remove(&input.id) {
                 tunnel.stop();
             }
+            self.tunnel_fingerprints.remove(&input.id);
+            self.reasons.remove(&input.id);
         }
-
-        self.save()
+        Ok(())
     }
 
     /// 开始发布 / 暂停发布。
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<(), String> {
-        {
-            let tun = self
-                .config
-                .tunnels
-                .iter_mut()
-                .find(|t| t.id == id)
-                .ok_or_else(|| format!("找不到隧道：{id}"))?;
-            tun.enabled = enabled;
-        }
-        self.save()
+        let mut next = self.config.clone();
+        let tun = next
+            .tunnels
+            .iter_mut()
+            .find(|t| t.id == id)
+            .ok_or_else(|| format!("找不到隧道：{id}"))?;
+        tun.enabled = enabled;
+        self.commit_config(next)
     }
 
     /// 立刻重连：停掉当前隧道并重新开始（配置里顺带恢复发布）。
     pub fn restart(&mut self, id: &str) -> Result<(), String> {
+        let mut next = self.config.clone();
         {
-            let tun = self
-                .config
+            let tun = next
                 .tunnels
                 .iter_mut()
                 .find(|t| t.id == id)
                 .ok_or_else(|| format!("找不到隧道：{id}"))?;
             tun.enabled = true;
         }
+        self.commit_config(next)?;
         if let Some(mut tunnel) = self.tunnels.remove(id) {
             tunnel.stop();
         }
-        self.save()
+        self.tunnel_fingerprints.remove(id);
+        self.reasons.remove(id);
+        Ok(())
     }
 
     /// 停止并删除一条隧道（配置一起删）。
     pub fn remove_tunnel(&mut self, id: &str) -> Result<(), String> {
+        let mut next = self.config.clone();
+        next.tunnels.retain(|t| t.id != id);
+        // 先落盘，成功了再停运行中的进程；存盘失败就什么都不动
+        self.commit_config(next)?;
         if let Some(mut tunnel) = self.tunnels.remove(id) {
             tunnel.stop();
         }
-        self.config.tunnels.retain(|t| t.id != id);
-        self.save()
+        self.tunnel_fingerprints.remove(id);
+        self.reasons.remove(id);
+        Ok(())
     }
 
     // ---------- 导入 ----------
 
     /// 导入接管：把扫描到的建议写成「已暂停」的服务 + 隧道（用户确认后手动开始发布）。
     pub fn import_services(&mut self, items: Vec<ImportSuggestion>) -> Result<usize, String> {
+        let mut next = self.config.clone();
         let mut added = 0usize;
         for item in items {
-            let server_id = match self
-                .config
+            let server_id = match next
                 .servers
                 .iter()
                 .find(|s| s.host == item.server_host && s.user == item.server_user)
@@ -1100,19 +1229,19 @@ impl Guardian {
                 Some(s) => s.id.clone(),
                 None => {
                     let id = config::new_id("srv");
-                    self.config.servers.push(ServerConfig {
+                    next.servers.push(ServerConfig {
                         id: id.clone(),
                         name: format!("{}（导入）", item.server_host),
                         host: item.server_host.clone(),
                         ssh_port: item.ssh_port,
                         user: item.server_user.clone(),
                         key_path: None,
+                        vhost_dir: None,
                     });
                     id
                 }
             };
-            if self
-                .config
+            if next
                 .tunnels
                 .iter()
                 .any(|t| t.server_id == server_id && t.remote_port == item.remote_port)
@@ -1121,8 +1250,7 @@ impl Guardian {
             }
 
             // 同一个本机端口只建一台本机服务
-            let service_id = match self
-                .config
+            let service_id = match next
                 .services
                 .iter()
                 .find(|s| s.local_port == item.local_port)
@@ -1130,7 +1258,7 @@ impl Guardian {
                 Some(s) => s.id.clone(),
                 None => {
                     let id = config::new_id("svc");
-                    self.config.services.push(LocalService {
+                    next.services.push(LocalService {
                         id: id.clone(),
                         name: item.name.clone(),
                         local_port: item.local_port,
@@ -1143,7 +1271,7 @@ impl Guardian {
                 }
             };
 
-            self.config.tunnels.push(Tunnel {
+            next.tunnels.push(Tunnel {
                 id: config::new_id("tun"),
                 name: item.name.clone(),
                 service_id,
@@ -1159,34 +1287,53 @@ impl Guardian {
             });
             added += 1;
         }
-        self.save()?;
+        // 先落盘、成功了再换内存；存盘失败就整个导入回滚，界面不会虚报成功
+        self.commit_config(next)?;
         Ok(added)
     }
 
     // ---------- 服务器管理 ----------
 
     pub fn save_server(&mut self, input: ServerInput) -> Result<String, String> {
-        if input.host.trim().is_empty() || input.user.trim().is_empty() {
+        let host = input.host.trim().to_string();
+        let user = input.user.trim().to_string();
+        if host.is_empty() || user.is_empty() {
             return Err("服务器地址和登录账号都不能为空".into());
         }
+        // 名字不填就按地址生成一个默认名，列表里不出现无名服务器
+        let name = {
+            let name = input.name.trim();
+            if name.is_empty() {
+                host.clone()
+            } else {
+                name.to_string()
+            }
+        };
         let id = input.id.clone().unwrap_or_else(|| config::new_id("srv"));
-        if let Some(server) = self.config.servers.iter_mut().find(|s| s.id == id) {
-            server.name = input.name;
-            server.host = input.host;
-            server.ssh_port = input.ssh_port;
-            server.user = input.user;
-            server.key_path = clean_optional(input.key_path);
+        let ssh_port = input.ssh_port;
+        let key_path = clean_optional(input.key_path);
+        let vhost_dir = clean_optional(input.vhost_dir);
+
+        let mut next = self.config.clone();
+        if let Some(server) = next.servers.iter_mut().find(|s| s.id == id) {
+            server.name = name;
+            server.host = host;
+            server.ssh_port = ssh_port;
+            server.user = user;
+            server.key_path = key_path;
+            server.vhost_dir = vhost_dir;
         } else {
-            self.config.servers.push(ServerConfig {
+            next.servers.push(ServerConfig {
                 id: id.clone(),
-                name: input.name,
-                host: input.host,
-                ssh_port: input.ssh_port,
-                user: input.user,
-                key_path: clean_optional(input.key_path),
+                name,
+                host,
+                ssh_port,
+                user,
+                key_path,
+                vhost_dir,
             });
         }
-        self.save()?;
+        self.commit_config(next)?;
         Ok(id)
     }
 
@@ -1203,24 +1350,25 @@ impl Guardian {
 
     /// 配好免密后，把密钥路径记到这台服务器上（隧道就会用它）。
     pub fn set_server_key(&mut self, id: &str, key_path: &str) -> Result<(), String> {
+        let mut next = self.config.clone();
         {
-            let s = self
-                .config
+            let s = next
                 .servers
                 .iter_mut()
                 .find(|s| s.id == id)
                 .ok_or_else(|| format!("找不到服务器：{id}"))?;
             s.key_path = Some(key_path.to_string());
         }
-        self.save()
+        self.commit_config(next)
     }
 
     pub fn delete_server(&mut self, id: &str) -> Result<(), String> {
         if self.config.tunnels.iter().any(|t| t.server_id == id) {
             return Err("还有隧道挂在这台服务器上，先处理它们".into());
         }
-        self.config.servers.retain(|s| s.id != id);
-        self.save()
+        let mut next = self.config.clone();
+        next.servers.retain(|s| s.id != id);
+        self.commit_config(next)
     }
 
     // ---------- 日志 / 密码 / nginx ----------
@@ -1230,7 +1378,7 @@ impl Guardian {
         let Some(tun) = self.config.tunnel(id) else {
             return String::new();
         };
-        read_tail(&service_log_path(&self.log_dir, &tun.name), lines)
+        read_tail(&service_log_path(&self.log_dir, &tun.id), lines)
     }
 
     /// 生成这条隧道的 nginx 配置片段（人工应用到面板）。
@@ -1253,7 +1401,7 @@ impl Guardian {
         Ok(crate::nginx::generate(tun, local_port, server))
     }
 
-    /// 在服务器上生成 apr1 密码哈希（新建/编辑隧道用）。
+    /// 在本机生成 bcrypt 密码哈希、结果写进服务器上的密码文件（新建/编辑隧道用）。
     pub fn hash_password(&self, server_id: &str, password: &str) -> Result<String, String> {
         let server = self
             .config
@@ -1308,6 +1456,7 @@ impl Guardian {
             ssh_port: server.ssh_port,
             identity_file: server.key_path.clone().map(PathBuf::from),
             domain,
+            vhost_dir: crate::nginx::htpasswd_dir_for(server),
         })
     }
 
@@ -1318,11 +1467,48 @@ impl Guardian {
         run_access_check(&req)
     }
 
-    fn save(&self) -> Result<(), String> {
-        self.config
-            .save(&self.config_path)
-            .map_err(|e| format!("保存配置失败：{e}"))
+    /// 配置现在能不能安全写回（界面可以用来提示用户）。
+    pub fn config_trusted(&self) -> bool {
+        self.config_trusted
     }
+
+    /// 先把新配置落盘，成功了再换进内存；失败就保持原样并返回错误。
+    ///
+    /// 这样界面不会出现「提示保存成功、其实没写上」的假象，也不会让一份没写成功的
+    /// 配置留在内存里、被下一次保存悄悄带出去。
+    fn commit_config(&mut self, next: AppConfig) -> Result<(), String> {
+        if !self.config_trusted {
+            return Err(
+                "配置文件上次没读成功（已经留底成 config.json.bad），这次没有把新配置写回磁盘；请先修好配置文件再重开应用"
+                    .into(),
+            );
+        }
+        next.save(&self.config_path)
+            .map_err(|e| format!("保存配置失败：{e}"))?;
+        self.config = next;
+        Ok(())
+    }
+}
+
+/// 一条隧道「实际跑起来用的参数」：任何一项变了，运行中的旧进程都得停掉、按新参数重建。
+/// 包含：服务器地址 / SSH 端口 / 登录账号 / 密钥、本机端口、云端端口。
+/// （隧道名不算：日志文件按 id 命名，改名不需要重连。）
+fn tunnel_fingerprint(config: &AppConfig, tun: &Tunnel, service: &LocalService) -> String {
+    let server = config.servers.iter().find(|s| s.id == tun.server_id);
+    let key = tun
+        .key_path
+        .clone()
+        .or_else(|| server.and_then(|s| s.key_path.clone()))
+        .unwrap_or_default();
+    format!(
+        "host={}|ssh_port={}|user={}|key={}|local_port={}|remote_port={}",
+        server.map(|s| s.host.as_str()).unwrap_or(""),
+        server.map(|s| s.ssh_port).unwrap_or(0),
+        server.map(|s| s.user.as_str()).unwrap_or(""),
+        key,
+        service.local_port,
+        tun.remote_port
+    )
 }
 
 fn build_launch(input: &ServiceInput) -> Option<LaunchSpec> {
@@ -1364,6 +1550,8 @@ pub struct AccessCheckRequest {
     pub identity_file: Option<PathBuf>,
     /// 已规范化过的域名（去掉了协议前缀和路径）
     pub domain: String,
+    /// 面板放站点的目录（nginx 配置在它下面的 nginx/ 里，htpasswd 直接在它下面）
+    pub vhost_dir: String,
 }
 
 /// 跑一次云端访问保护核对（只读 SSH，最长 20 秒后超时）。
@@ -1378,7 +1566,7 @@ pub fn run_access_check(req: &AccessCheckRequest) -> Result<AccessCheck, String>
     };
     let out = crate::cleanup::run(
         &exec,
-        &access_check_script(&req.domain),
+        &access_check_script(&req.domain, &req.vhost_dir),
         Duration::from_secs(20),
     )?;
     Ok(crate::protection::parse(&out))
@@ -1409,21 +1597,91 @@ fn normalize_domain(raw: &str) -> String {
 
 /// 核对访问保护的远端脚本：只读地把站点配置夹在正文标记之间打印出来，
 /// 标记之外再报告配置文件 / 密码文件在不在。
-/// 域名用单引号包好，避免被 shell 当成命令解释。
-fn access_check_script(domain: &str) -> String {
+/// 域名和站点目录都用单引号包好，避免被 shell 当成命令解释。
+/// 站点目录由 [`crate::nginx::htpasswd_dir_for`] 解析：nginx 配置在 <目录>/nginx/ 下，
+/// htpasswd 密码文件直接在 <目录> 下。
+fn access_check_script(domain: &str, vhost_dir: &str) -> String {
     format!(
-        "d={}; f=\"/xp/panel/vhost/nginx/$d.conf\"; if [ -f \"$f\" ]; then echo '===SHANGXIAN-CONF-BEGIN==='; cat \"$f\"; echo; echo '===SHANGXIAN-CONF-END==='; echo CONF_FOUND; else echo CONF_MISSING; fi; if [ -f \"/xp/panel/vhost/$d.htpasswd\" ]; then echo HTPASSWD_YES; else echo HTPASSWD_NO; fi",
-        crate::cleanup::shell_quote(domain)
+        "d={}; dir={}; f=\"$dir/nginx/$d.conf\"; if [ -f \"$f\" ]; then echo '===SHANGXIAN-CONF-BEGIN==='; cat \"$f\"; echo; echo '===SHANGXIAN-CONF-END==='; echo CONF_FOUND; else echo CONF_MISSING; fi; if [ -f \"$dir/$d.htpasswd\" ]; then echo HTPASSWD_YES; else echo HTPASSWD_NO; fi",
+        crate::cleanup::shell_quote(domain),
+        crate::cleanup::shell_quote(vhost_dir)
     )
 }
 
-fn read_tail(path: &std::path::Path, lines: usize) -> String {
-    let Ok(text) = std::fs::read_to_string(path) else {
+/// 读日志尾部：只从文件末尾读 `MAX_TAIL_BYTES`，不把整个大日志读进内存；
+/// 调用方（界面看日志、退出原因）可能是拿着锁调的，这里必须快。行数也有上限，
+/// 免得日志只要一行、却有几兆长。
+fn read_tail(path: &Path, lines: usize) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+
+    // 尾部最多读 64KB
+    const MAX_TAIL_BYTES: u64 = 64 * 1024;
+    // 最多回多少行
+    const MAX_TAIL_LINES: usize = 2000;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
         return format!("（还没有日志：{}）", path.display());
     };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let from = len.saturating_sub(MAX_TAIL_BYTES);
+    if file.seek(SeekFrom::Start(from)).is_err() {
+        return format!("（读不到日志：{}）", path.display());
+    }
+    let mut buf = Vec::new();
+    if file.take(MAX_TAIL_BYTES).read_to_end(&mut buf).is_err() {
+        return format!("（读不到日志：{}）", path.display());
+    }
+    let mut text = String::from_utf8_lossy(&buf).into_owned();
+    // 从中间截出来时，第一行可能是半截：只保留第一个换行之后的内容
+    if from > 0 {
+        if let Some(pos) = text.find('\n') {
+            text = text[pos + 1..].to_string();
+        } else {
+            text.clear(); // 尾部连一个完整行都没有
+        }
+    }
     let all: Vec<&str> = text.lines().collect();
-    let start = all.len().saturating_sub(lines);
+    let want = lines.min(MAX_TAIL_LINES);
+    let start = all.len().saturating_sub(want);
     all[start..].join("\n")
+}
+
+/// 从日志尾部挑一句人话的退出原因（都是 ssh 常见的报错）；认不出来返回 None，
+/// 让调用方按退出码兜底。
+fn exit_reason_from_log(tail: &str) -> Option<String> {
+    let lower = tail.to_ascii_lowercase();
+    let has = |needle: &str| lower.contains(needle);
+
+    if has("permission denied") || has("authentication failed") || has("no supported authentication")
+    {
+        return Some("登录被服务器拒绝了：账号或密钥不对（也可能服务器关掉了这种登录方式）".into());
+    }
+    if has("remote host identification has changed") || has("host key verification failed") {
+        return Some("服务器指纹变了：可能换了机器，也可能有人在冒名顶替；核对清楚再连".into());
+    }
+    if has("could not resolve hostname")
+        || has("name or service not known")
+        || has("temporary failure in name resolution")
+    {
+        return Some("服务器地址解析不了：域名写错了，或者本机网络/DNS 有问题".into());
+    }
+    if has("connection refused") {
+        return Some("服务器拒绝连接：SSH 端口可能不对，或者服务器上没开 SSH 服务".into());
+    }
+    if has("connection timed out")
+        || has("operation timed out")
+        || has("network is unreachable")
+        || has("no route to host")
+    {
+        return Some("连服务器超时/不通：网络有问题，或者地址、SSH 端口不对".into());
+    }
+    if has("remote port forwarding failed") {
+        return Some("云端端口被别的东西占了：换一个云端端口再试".into());
+    }
+    if has("connection closed by remote host") || has("connection reset by peer") {
+        return Some("服务器把连接掐断了：可能是网络抖动或服务器限流，稍后会自动重连".into());
+    }
+    None
 }
 
 // ---------- 停止外部进程的安全工具 ----------
@@ -1752,6 +2010,7 @@ mod tests {
                 ssh_port: 2222,
                 user: "root".into(),
                 key_path: Some("C:/k/id_ed25519".into()),
+                vhost_dir: Some("/custom/vhost".into()),
             }],
             services: Vec::new(),
             tunnels: vec![Tunnel {
@@ -1779,6 +2038,8 @@ mod tests {
             req.identity_file.as_deref(),
             Some(std::path::Path::new("C:/k/id_ed25519"))
         );
+        // 服务器里填的站点目录要跟着请求走，检查云端才会找对地方
+        assert_eq!(req.vhost_dir, "/custom/vhost");
     }
 
     #[test]
@@ -1792,6 +2053,7 @@ mod tests {
             ssh_port: 22,
             identity_file: None,
             domain: "karryn.iranol1.xyz".into(),
+            vhost_dir: "/xp/panel/vhost".into(),
         };
         let check = run_access_check(&req).expect("真机 SSH 只读核对失败");
         assert!(check.conf_found, "站点 conf 应该存在");
@@ -1803,10 +2065,11 @@ mod tests {
 
     #[test]
     fn access_check_script_wraps_conf_in_markers() {
-        let script = access_check_script("album.example.com");
+        let script = access_check_script("album.example.com", "/xp/panel/vhost");
         assert!(script.starts_with("d='album.example.com';"));
-        assert!(script.contains("/xp/panel/vhost/nginx/$d.conf"));
-        assert!(script.contains("/xp/panel/vhost/$d.htpasswd"));
+        assert!(script.contains("dir='/xp/panel/vhost';"));
+        assert!(script.contains("$dir/nginx/$d.conf"));
+        assert!(script.contains("$dir/$d.htpasswd"));
         assert!(
             script.contains("===SHANGXIAN-CONF-BEGIN===")
                 && script.contains("===SHANGXIAN-CONF-END==="),
@@ -1819,8 +2082,250 @@ mod tests {
         let end = script.find("===SHANGXIAN-CONF-END===").unwrap();
         let found = script.find("CONF_FOUND").unwrap();
         assert!(begin < cat && cat < end && end < found, "script={script}");
-        // 域名里的单引号被转义，不会跑出 shell 命令
-        let tricky = access_check_script("a'b");
+        // 域名/目录里的单引号被转义，不会跑出 shell 命令
+        let tricky = access_check_script("a'b", "/o' ops");
         assert!(tricky.starts_with(r#"d='a'\''b';"#), "script={tricky}");
+        assert!(tricky.contains(r#"dir='/o'\'' ops';"#), "script={tricky}");
+    }
+
+    // ---------- 新逻辑的单元测试（不拉真进程） ----------
+
+    /// 构造一份「一台服务器 + 一台本机服务 + 一条隧道」的测试配置。
+    fn fingerprint_fixture() -> (AppConfig, Tunnel, LocalService) {
+        let cfg = AppConfig {
+            version: config::CONFIG_VERSION,
+            servers: vec![ServerConfig {
+                id: "srv-1".into(),
+                name: "香港-1".into(),
+                host: "a.example.com".into(),
+                ssh_port: 22,
+                user: "root".into(),
+                key_path: Some("C:/k/id".into()),
+                vhost_dir: None,
+            }],
+            services: vec![LocalService {
+                id: "svc-1".into(),
+                name: "相册".into(),
+                local_port: 8080,
+                launch: None,
+                watch: false,
+                autostart: false,
+                note: None,
+            }],
+            tunnels: Vec::new(),
+            notify_enabled: true,
+        };
+        let tun = Tunnel {
+            id: "tun-1".into(),
+            name: "相册发布".into(),
+            service_id: "svc-1".into(),
+            server_id: "srv-1".into(),
+            remote_port: 18080,
+            url: None,
+            key_path: None,
+            access: Vec::new(),
+            access_user: None,
+            access_hash: None,
+            access_detail: None,
+            enabled: true,
+        };
+        let svc = cfg.service("svc-1").unwrap().clone();
+        (cfg, tun, svc)
+    }
+
+    #[test]
+    fn tunnel_fingerprint_changes_with_connection_params() {
+        let (cfg, mut tun, svc) = fingerprint_fixture();
+        let base = tunnel_fingerprint(&cfg, &tun, &svc);
+
+        // 配置没动 → 指纹不变
+        assert_eq!(base, tunnel_fingerprint(&cfg, &tun, &svc));
+
+        // 云端端口变了
+        tun.remote_port = 18081;
+        assert_ne!(base, tunnel_fingerprint(&cfg, &tun, &svc));
+        tun.remote_port = 18080;
+
+        // 本机端口变了
+        let mut svc2 = svc.clone();
+        svc2.local_port = 8081;
+        assert_ne!(base, tunnel_fingerprint(&cfg, &tun, &svc2));
+
+        // 服务器地址 / SSH 端口 / 账号 / 密钥变了
+        let mutations: Vec<fn(&mut AppConfig)> = vec![
+            |c| c.servers[0].host = "b.example.com".into(),
+            |c| c.servers[0].ssh_port = 2222,
+            |c| c.servers[0].user = "ubuntu".into(),
+            |c| c.servers[0].key_path = Some("C:/k/other".into()),
+        ];
+        for mutate in mutations {
+            let mut cfg2 = cfg.clone();
+            mutate(&mut cfg2);
+            assert_ne!(base, tunnel_fingerprint(&cfg2, &tun, &svc));
+        }
+
+        // 改客户端端口以外的名字不算参数变化（日志文件按 id 命名）
+        let before_name = tunnel_fingerprint(&cfg, &tun, &svc);
+        tun.name = "新名字".into();
+        assert_eq!(before_name, tunnel_fingerprint(&cfg, &tun, &svc));
+        tun.name = "相册发布".into();
+
+        // 隧道自己的密钥覆盖也要算进去
+        tun.key_path = Some("C:/k/tunnel".into());
+        assert_ne!(base, tunnel_fingerprint(&cfg, &tun, &svc));
+    }
+
+    #[test]
+    fn sync_tunnels_rebuilds_when_params_change() {
+        let dir = std::env::temp_dir().join("sx-guardian-rebuild-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (mut cfg, tun, _) = fingerprint_fixture();
+        cfg.tunnels.push(tun.clone());
+        let mut g = Guardian::new(cfg, dir.join("config.json"), dir.join("logs"));
+        g.sync_tunnels();
+        assert!(g.tunnels.contains_key("tun-1"), "第一次同步应该建起隧道");
+
+        // 没改参数：指纹不变
+        let before = g.tunnel_fingerprints.get("tun-1").cloned().unwrap();
+        g.sync_tunnels();
+        assert_eq!(g.tunnel_fingerprints.get("tun-1").unwrap(), &before);
+
+        // 改服务器地址 → 参数指纹变了 → 重建
+        g.config.servers[0].host = "b.example.com".into();
+        g.sync_tunnels();
+        let after = g.tunnel_fingerprints.get("tun-1").cloned().unwrap();
+        assert_ne!(before, after, "服务器地址变了，指纹必须跟着变");
+
+        // 改本机端口 → 也要重建
+        g.config.services[0].local_port = 8081;
+        g.sync_tunnels();
+        let after2 = g.tunnel_fingerprints.get("tun-1").cloned().unwrap();
+        assert_ne!(after, after2, "本机端口变了，指纹必须跟着变");
+    }
+
+    #[test]
+    fn exit_reason_from_log_picks_human_reason() {
+        assert!(exit_reason_from_log("Permission denied (publickey).")
+            .unwrap()
+            .contains("拒绝"));
+        assert!(exit_reason_from_log("Host key verification failed.")
+            .unwrap()
+            .contains("指纹"));
+        assert!(exit_reason_from_log("ssh: Could not resolve hostname bad: ...")
+            .unwrap()
+            .contains("解析"));
+        assert!(exit_reason_from_log("connect to host x port 22: Connection refused")
+            .unwrap()
+            .contains("拒绝连接"));
+        assert!(
+            exit_reason_from_log("remote port forwarding failed for listen port 18080")
+                .unwrap()
+                .contains("占了")
+        );
+        assert!(exit_reason_from_log("everything is fine").is_none());
+    }
+
+    #[test]
+    fn read_tail_only_reads_file_end() {
+        let dir = std::env::temp_dir().join("sx-read-tail-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.log");
+        // 前面塞 200KB 垃圾（比尾部上限大），最后三行才是要看的
+        let mut text = "x".repeat(200 * 1024);
+        text.push('\n');
+        text.push_str("第一行\n第二行\n第三行\n");
+        std::fs::write(&path, text).unwrap();
+
+        let tail = read_tail(&path, 3);
+        assert_eq!(tail, "第一行\n第二行\n第三行", "tail={tail}");
+        // 不存在的文件也给一句人话
+        assert!(read_tail(&dir.join("nope.log"), 3).contains("还没有日志"));
+    }
+
+    #[test]
+    fn guardian_refuses_save_when_config_was_bad() {
+        let dir = std::env::temp_dir().join("sx-guardian-bad-config-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{ 这不是 json").unwrap();
+        // 读坏 → 留底成 config.json.bad，返回明确错误
+        let _ = AppConfig::load(&path).unwrap_err();
+
+        let mut g = Guardian::new(AppConfig::default(), path.clone(), dir.join("logs"));
+        assert!(!g.config_trusted());
+        let err = g.set_notify_enabled(false).unwrap_err();
+        assert!(err.contains("config.json.bad"), "err={err}");
+        // 内存没被改，磁盘上也没有新配置被写出来
+        assert!(g.notify_enabled());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn watch_and_autostart_need_a_launch_spec() {
+        let dir = std::env::temp_dir().join("sx-guardian-launch-guard-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+        // 先建一台只监控的服务（没填启动程序）
+        let id = g
+            .save_service(ServiceInput {
+                id: None,
+                name: "只监控".into(),
+                local_port: 18080,
+                launch_exe: None,
+                launch_args: None,
+                launch_workdir: None,
+                watch: false,
+                autostart: false,
+                note: None,
+            })
+            .unwrap();
+
+        let err = g.set_service_watch(&id, true).unwrap_err();
+        assert!(err.contains("启动程序"), "err={err}");
+        let err = g.set_service_autostart(&id, true).unwrap_err();
+        assert!(err.contains("启动程序"), "err={err}");
+        // 关开关永远允许
+        g.set_service_watch(&id, false).unwrap();
+        g.set_service_autostart(&id, false).unwrap();
+
+        // 直接通过编辑界面提交 watch=true、却把启动程序清空，也不行
+        let err = g
+            .save_service(ServiceInput {
+                id: Some(id.clone()),
+                name: "只监控".into(),
+                local_port: 18080,
+                launch_exe: Some("   ".into()),
+                launch_args: None,
+                launch_workdir: None,
+                watch: true,
+                autostart: false,
+                note: None,
+            })
+            .unwrap_err();
+        assert!(err.contains("启动程序"), "err={err}");
+    }
+
+    #[test]
+    fn empty_server_name_defaults_to_host() {
+        let dir = std::env::temp_dir().join("sx-guardian-server-name-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+        let id = g
+            .save_server(ServerInput {
+                id: None,
+                name: "   ".into(),
+                host: " api.example.com ".into(),
+                ssh_port: 22,
+                user: " root ".into(),
+                key_path: None,
+                vhost_dir: None,
+            })
+            .unwrap();
+        let srv = g.servers().into_iter().find(|s| s.id == id).unwrap();
+        assert_eq!(srv.name, "api.example.com");
+        assert_eq!(srv.host, "api.example.com");
+        assert_eq!(srv.user, "root");
     }
 }

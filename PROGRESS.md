@@ -10,7 +10,7 @@
 
 ## 已完成（全部有验证）
 
-- **核心库 shangxian-core**：`job`（作业对象，崩溃零孤儿）、`ssh`（写死 System32 ssh.exe、每服务独立连接）、`supervisor`（状态机+退避 2→30s+精确清理触发）、`config`（`%APPDATA%\Shangxian\config.json`，原子写入）、`guardian`（守护/启停/导入/服务器/日志）、`cleanup`（**按端口精确清理**残留 sshd 会话 + apr1 哈希）、`local_ports`、`import`（解析 ps1/sh 两种写法）、`nginx`（片段生成）。
+- **核心库 shangxian-core**：`job`（作业对象，崩溃零孤儿）、`ssh`（写死 System32 ssh.exe、每服务独立连接）、`supervisor`（状态机+退避 2→30s+精确清理触发）、`config`（`config.json` 放数据目录，原子写入，版本 5）、`guardian`（守护/启停/导入/服务器/日志）、`cleanup`（**按端口精确清理**残留 sshd 会话 + **本机 bcrypt** 访问密码哈希）、`local_ports`、`import`（解析 ps1/sh 两种写法）、`nginx`（片段生成 + `vhostDir` 解析）。
 - **Tauri 壳**：托盘常驻（关闭=缩托盘）、单实例锁、`--hidden` 静默启动；命令：get_snapshot、service_start/stop/restart、remove_service、list_local_ports、add_service、scan_imports、import_services、get_logs、save_server、delete_server、hash_password、get_nginx_snippet、get_autostart、set_autostart、get_data_dir、open_data_dir。
 - **前端**：设计系统（深浅色）、服务列表（五状态三件套+修复带）、3 步发布向导、导入弹层、日志弹层、nginx 配置弹层、服务器页（增删改）、设置页（主题/开机自启/配置文件夹）、卡片 ⋯ 菜单。
 - **验证证据**：残留清理端到端测试通过（撞端口→自动清理→重连稳定）；`env_checks` 4 测试、`guardian_docker` 2 测试全过；界面截图逐页检查过。
@@ -37,8 +37,9 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 
 ## 待办（按优先级）
 
-1. （可选）接管 viewer 的实战演练；nginx 片段目前按设计"人工应用"
+1. （可选）接管 viewer 的实战演练；nginx 片段目前按设计“人工应用”
 2. 第二台电脑（203.0.113.10）部署：导入 comfyui(18188)、409piweb(13042)
+3. 文档已随 v0.5 全景修复更新（README / DESIGN / PROGRESS / 使用手册 / AI-AGENT / SKILL，见下节）
 
 ## 自绘标题栏（2026-10-11 晚完成）
 
@@ -91,7 +92,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **Tauri 命令层**：`get_snapshot`（含 services/tunnels/servers）、`save_service`/`remove_service`/`service_start`/`service_stop`/`set_service_watch`/`set_service_autostart`/`get_service_logs`、`add_tunnel`/`update_tunnel`/`remove_tunnel`/`tunnel_start`/`tunnel_stop`/`tunnel_restart`、`list_local_ports`（现在带进程名和程序路径）、`setup_passwordless`。
 - **密码配免密**（core/src/keyboot.rs，新）：russh（ring 加密后端，默认的 aws-lc 在 Windows 要 NASM 不能用）+ 系统 ssh-keygen/ssh；流程=生成密钥 → 密码登录 → 幂等写 authorized_keys → 密钥登录验证；错误分类（密码错 vs 服务器不允许密码登录）。靶机实测通过（`keyboot_passwordless_flow`）。
 - **测试**：env_checks 6 项全过（含新的 `local_service_start_stop_and_watch`：启动→端口通→外部杀进程→看护拉起→用户停止不再拉起）；guardian_docker 3 项（含 keyboot）。
-- **访问保护可叠加 + 检查云端**（2026-10-11）：隧道的保护从「三选一」改成「要密码」和「只允许指定 IP」可同时开（同时开 = 两个条件都要满足；都不开 = 界面标红）；发布隧道页显示当前设置的保护，新增「检查云端」按钮（SSH 读云端站点配置和密码文件，列出实际生效状态，不一致提示重新贴配置）；配置 `access` 改数组、版本 4→5 自动迁移（备份 `config.json.v4.bak`）；CLI `--access` 可重复并新增 `tunnel check`，方法表 35 条。
+- **访问保护可叠加 + 检查云端**（2026-10-11）：隧道的保护从「三选一」改成「要密码」和「只允许指定 IP」可同时开（同时开 = 两个条件都要满足；都不开 = 界面标红）；发布隧道页显示当前设置的保护，新增「检查云端」按钮（SSH 读云端站点配置和密码文件，列出实际生效状态，不一致提示重新贴配置）；配置 `access` 改数组、版本 4→5 自动迁移（备份 `config.json.v4.bak`）；CLI `--access` 可重复并新增 `tunnel check`，方法表 35 条（v0.5 新增 `test_server` 后为 36 条）。
 
 ### 进行中 / 待办
 
@@ -150,7 +151,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 
 给一条隧道加「第二道门」（nginx basic auth）的完整流程走通了：
 
-1. 应用里「访问密码」页设置密码 → 只存 apr1 哈希；点「云端配置」拿到片段（含 htpasswd 内容 + 目标路径）。
+1. 应用里「访问密码」页设置密码 → 只存 bcrypt 哈希（`$2y$12$…`，本机算）；点「云端配置」拿到片段（含 htpasswd 内容 + 目标路径，路径按服务器的 `vhostDir` 解析）。
 2. 服务器的站点配置是 root 的，普通账号改不了、sudo 要密码——所以让用户在有终端的 SSH 会话里跑一次准备好的脚本（脚本里做了：备份 → 写 htpasswd → 插 auth_basic → `nginx -t` → reload）。
 3. 一个容易漏的坑：`auth_basic` 放在 server 层会连 `/.well-known/` 一起保护，**证书自动续期会失败**——脚本里给那个 location 加了 `auth_basic off`。
 4. 验证：公网不带密码 401 + `WWW-Authenticate`（浏览器弹框）；密码错仍 401；`/.well-known/` 不弹（豁免生效）；其他站点配置零改动。
@@ -162,7 +163,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **冻结接口落地**：Tauri `inspect_process_launch_info(port, expectedPid?)`（`core::proc_detail::LaunchInfo`）、`preview_launch_command(exe, args)`；`service_stop(id, killForeign?, expectedPid?)` 返回 `{kind: stopped|needsConfirm|foreignStopped, pid?, exe?}`。接口名/字段名未改。
 - **前端（app/）**：点监听端口行先照旧填端口/程序/名字，再自动读取启动方式；读不可靠（`pidMatched=false` 或 `multipleOwners`/`processGone`/`portOwnerChanged`）就不覆盖任何字段，只在警告区说明；`sensitiveArgs` 红字 + 勾选框，不勾不能保存；自动填的字段带「自动读取 · 未验证」，一编辑就消失；工作目录 hint 改成「读到的是现在的工作目录」；启动参数改两行 textarea；参数下方显示只读的「实际会执行的命令行」预览；已登记端口标「已登记：名字」，点击跳到那台服务编辑并自动补全；停止外部进程前弹人话确认框（程序名 + PID），确认后才 `killForeign=true`。
 - **CLI**：`service stop` 默认只停应用自己启动的；`needsConfirm` 时退出码 1 并提示 `--force`（`--force` 传 `killForeign=true`、省略 `expectedPid`）；`service restart` 遇 `needsConfirm` 提示先手动停。
-- **ctl.rs**：方法表更新 `service_stop` 参数/返回，新增 `inspect_process_launch_info`、`preview_launch_command`（共 34 条）；`lib.rs` 注册新命令（inspect 走 async + spawn_blocking）。
+- **ctl.rs**：方法表更新 `service_stop` 参数/返回，新增 `inspect_process_launch_info`、`preview_launch_command`（当时共 34 条；后续 v0.5 新增 `test_server`，现为 36 条）；`lib.rs` 注册新命令（inspect 走 async + spawn_blocking）。
 - **文档**：AI-AGENT.md（方法表 + 输出样例 + 自动读取纪律）、使用手册.md（字段文案与交互说明）、DESIGN.md §11（实现记录与已知边界：环境变量不捕获、workdir=当前目录、参数近似还原、32/64 位与权限边界）、skills/shangxian/SKILL.md（停止语义）。
 - **验证（含审查修复后复验）**：`cd app && npm run build` 通过；`cargo check --workspace --all-targets` 通过；core 单测 25 项 + `env_checks` 7 项 + 真机集成 `proc_features` 7 项 + `stop_foreign` 10 项全过（49 passed / 0 failed / 6 ignored），测试后无孤儿进程。
 - **独立审查修复**：审查提出 1 P1 + 4 P2 已修复并复验 PASS ——（1）停止时先停自家进程整棵树再轮询端口，包装脚本（.bat/.ps1）起的孙进程监听不再被误判成外部、不再弹假确认框；（2）只监控服务一律拒绝停止（无论 --force 与否），CLI 不再提示必然失败的 --force；（3）编辑模式点端口取消后启动程序/参数/工作目录三个字段原样保留；（4）参数因换行/超长被丢弃时在界面上展示只读的原始命令行；另有告警条件与文案对齐、service_stop 改异步等小修。
@@ -176,3 +177,18 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **CLI**：检查无退出应用命令（只有 `app start` / `app status`），无需改语义；停止认领进程与外部进程同路径（`needsConfirm` → `--force`）。
 - **文档**：使用手册新增「退出和重启应用时，本地服务会继续跑」+ 托盘菜单三行；DESIGN.md §11.4（认领不做归属核对、退出停全部语义、包装脚本/首轮认领/只停监听者三条边界）；AI-AGENT.md 铁律 5 / service stop / 离线行为 / 已知坑 11；SKILL.md 铁律 5、8。
 - **验证**：`cd app && npm run build` 通过；`cargo check -p app -p shangxian-cli` 通过，`cargo check --workspace --all-targets` 通过。core 测试 81 passed / 0 failed / 8 ignored（lib 49、env_checks 9、keep_alive 6、proc_features 7、stop_foreign 10；8 项 ignored 均按设计跳过：Docker 靶机 3、真机探针 1、真机对照 1、辅助进程在各测试二进制中共 3），测试后无孤儿进程。
+
+## v0.5 全景修复 + 文档同步（2026-10-12）
+
+52 条审查发现全部修完，行为定稿。详细梳理见 DESIGN.md §11.5；文档（README / DESIGN / PROGRESS / docs/使用手册.md / docs/AI-AGENT.md / skills/shangxian/SKILL.md）以这批行为为准重排：
+
+- **密码**：访问密码改**本机 bcrypt**（`$2y$12$…`），服务器不用装 openssl；明文不进命令行、不落盘。
+- **站点目录**：服务器 `vhostDir` → `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`；配置 `<目录>/nginx/<域名>.conf`、密码文件 `<目录>/<域名>.htpasswd`。
+- **配置读坏**：留底 `config.json.bad`、界面红条、读坏期间禁止自动保存；不再静默清空也不拿空配置覆盖。
+- **隧道重建**：改服务器地址/端口/账号/密钥或本机端口，跑着的隧道自动按新参数重建；失败原因（认证、解析、端口占用等）写进 `reason` 显示在卡片上。
+- **看护与自启**：看护/开机自启必须先填启动程序；自启先认领已在跑的端口（约 13 秒宽限）；假死（进程在但端口不通）开看护自动重启、没开只报警。
+- **日志**：按隧道/服务 id 命名（改名不换文件），隧道日志 >5MB 轮转保留 2 份；旧命名日志不再被界面/CLI 读取。
+- **CLI**：`--access` 拼错报错；回显最终保护状态；破坏性命令（tunnel stop/remove、service/server remove）要确认（交互 y/N，非交互 `--yes`）；JSON 统一 `{"ok":true,"result":...}`；退出码 0/1/2/3；`logs --kind` 只认 tunnel/service；输入密码不回显。
+- **应用**：托盘「退出（会停止发布）」带确认；关窗首次提示缩托盘；通知「发布掉线/恢复：名字」；托盘 tooltip「X 条发布中 · Y 条掉线」；向导成功屏「还差一步：贴云端配置」+ 直达按钮；无保护发布要勾选；保护绿色只在「检查云端」通过后；服务器页「测试连接」+「站点目录」；空页三步引导；ctl 新增 `test_server`（共 36 个方法）。
+
+> 文档阶段验证：只改文档，不跑应用、不做 git 操作；所有行为逐条对照现有代码（config.rs / nginx.rs / cleanup.rs / guardian.rs / supervisor.rs / localservice.rs / cli/main.rs / ctl.rs / 前端）。

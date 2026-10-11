@@ -71,6 +71,7 @@ fn nginx_snippet_generation() {
         ssh_port: 22,
         user: "u".into(),
         key_path: None,
+        vhost_dir: None,
     };
     let svc = Tunnel {
         id: "x".into(),
@@ -82,7 +83,7 @@ fn nginx_snippet_generation() {
         key_path: None,
         access: vec!["password".into()],
         access_user: Some("shangxian".into()),
-        access_hash: Some("$apr1$abc".into()),
+        access_hash: Some("$2y$12$abc".into()),
         access_detail: None,
         enabled: true,
     };
@@ -113,7 +114,7 @@ fn nginx_snippet_generation() {
         .htpasswd
         .as_deref()
         .unwrap()
-        .contains("shangxian:$apr1$abc"));
+        .contains("shangxian:$2y$12$abc"));
 
     let mut open = svc.clone();
     open.access = Vec::new();
@@ -149,6 +150,7 @@ fn nginx_snippet_password_and_ip_together() {
         ssh_port: 22,
         user: "u".into(),
         key_path: None,
+        vhost_dir: None,
     };
     let tun = Tunnel {
         id: "x".into(),
@@ -161,7 +163,7 @@ fn nginx_snippet_password_and_ip_together() {
         // 两道门同时开：密码 + 只允许指定 IP
         access: vec!["password".into(), "ip".into()],
         access_user: Some("shangxian".into()),
-        access_hash: Some("$apr1$abc".into()),
+        access_hash: Some("$2y$12$abc".into()),
         access_detail: Some("1.2.3.4, 5.6.7.8".into()),
         enabled: true,
     };
@@ -211,6 +213,7 @@ fn service_and_tunnel_validations() {
             ssh_port: 22,
             user: "u".into(),
             key_path: None,
+            vhost_dir: None,
         })
         .unwrap();
 
@@ -494,6 +497,7 @@ fn update_tunnel_merges_access_detail() {
             ssh_port: 22,
             user: "u".into(),
             key_path: None,
+            vhost_dir: None,
         })
         .unwrap();
     let svc = g
@@ -519,7 +523,7 @@ fn update_tunnel_merges_access_detail() {
             url: Some("album.example.com".into()),
             access: vec!["password".into(), "ip".into()],
             access_user: Some("u".into()),
-            access_hash: Some("$apr1$old".into()),
+            access_hash: Some("$2y$12$old".into()),
             access_detail: Some("1.2.3.4".into()),
         })
         .unwrap();
@@ -583,7 +587,7 @@ fn update_tunnel_merges_access_detail() {
     update(
         &mut g,
         Some(vec!["password".into()]),
-        Some("$apr1$new".into()),
+        Some("$2y$12$new".into()),
         None,
     )
     .unwrap();
@@ -615,6 +619,7 @@ fn update_tunnel_password_toggle_semantics() {
             ssh_port: 22,
             user: "u".into(),
             key_path: None,
+            vhost_dir: None,
         })
         .unwrap();
     let svc = g
@@ -640,7 +645,7 @@ fn update_tunnel_password_toggle_semantics() {
             url: None,
             access: vec!["password".into()],
             access_user: Some("u".into()),
-            access_hash: Some("$apr1$old".into()),
+            access_hash: Some("$2y$12$old".into()),
             access_detail: None,
         })
         .unwrap();
@@ -703,7 +708,7 @@ fn update_tunnel_password_toggle_semantics() {
         18097,
         Some(vec!["password".into()]),
         None,
-        Some("$apr1$new1".into()),
+        Some("$2y$12$new1".into()),
     )
     .unwrap();
     let view = g.tunnel_snapshot().remove(0);

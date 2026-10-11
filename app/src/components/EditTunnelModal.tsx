@@ -3,9 +3,10 @@
 // 这里保存时把当前的 access / accessUser / accessDetail 原样回传，保证不误动保护。
 // 规则：云端端口改了会自动断开重连一次。
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { updateTunnel, type TunnelView } from "../api";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   tunnel: TunnelView;
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const [name, setName] = useState(tunnel.name);
   const [remotePort, setRemotePort] = useState(String(tunnel.remotePort));
   const [url, setUrl] = useState(tunnel.url ?? "");
@@ -58,7 +61,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" style={{ width: 560 }}>
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 560 }}>
         <div className="modal-head">
           <h2 className="modal-title">编辑隧道 · {tunnel.name}</h2>
           <p className="modal-sub">

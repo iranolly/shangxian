@@ -1,8 +1,9 @@
 // 日志弹层：source 区分看的是「发布日志」（隧道）还是「程序日志」（本机服务）。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { getLogs, getServiceLogs } from "../api";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   /** 要看的对象 id：隧道用隧道 id，本机服务用服务 id */
@@ -14,6 +15,8 @@ interface Props {
 }
 
 export function LogsModal({ id, name, source, onClose }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const [text, setText] = useState("读取中…");
 
   const load = () => {
@@ -28,7 +31,7 @@ export function LogsModal({ id, name, source, onClose }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">
             {source === "tunnel" ? "发布日志" : "程序日志"} · {name}

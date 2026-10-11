@@ -16,6 +16,10 @@ import {
 
 interface Props {
   services: ServiceView[];
+  /** 已经加过云端服务器吗（引导第一步打勾用） */
+  hasServers: boolean;
+  /** 引导里点步骤直达别的页 */
+  onNavigate: (page: "servers" | "tunnels") => void;
   onStart: (id: string) => void;
   /** 停止：第一次只问后端；needsConfirm 时再弹确认框，确认后带 killForeign=true + pid 再来一次 */
   onStop: (
@@ -30,6 +34,8 @@ interface Props {
 
 export function ServicesPage({
   services,
+  hasServers,
+  onNavigate,
   onStart,
   onStop,
   onToggleWatch,
@@ -146,11 +152,104 @@ export function ServicesPage({
         <div className="empty">
           <p className="empty-title">还没有登记本机服务</p>
           <p className="empty-text">
-            先把你电脑上的程序记下来（端口 + 启动程序），再去「发布隧道」页让它能从公网访问。
+            第一次用？按下面三步走：先加云端服务器，再登记本机程序，最后发布。
           </p>
-          <button className="btn btn-primary" onClick={() => setModalOpen(true)}>
-            + 添加第一个本机服务
-          </button>
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 8,
+              maxWidth: 420,
+              margin: "0 auto",
+              textAlign: "left",
+            }}
+          >
+            <button
+              type="button"
+              className="card"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              onClick={() => onNavigate("servers")}
+            >
+              <span
+                style={{
+                  fontSize: 16,
+                  fontWeight: 700,
+                  color: hasServers ? "var(--st-running-fg)" : "var(--text-2)",
+                }}
+              >
+                {hasServers ? "✓" : "①"}
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span className="server-name" style={{ display: "block" }}>
+                  添加云端服务器
+                </span>
+                <span className="server-meta" style={{ display: "block" }}>
+                  先告诉助手：用哪台一直开着的电脑转发访问。
+                </span>
+              </span>
+              <span className="link-btn">
+                {hasServers ? "去看 →" : "去添加 →"}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className="card"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              onClick={() => setModalOpen(true)}
+            >
+              <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-2)" }}>
+                ②
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span className="server-name" style={{ display: "block" }}>
+                  登记本机服务
+                </span>
+                <span className="server-meta" style={{ display: "block" }}>
+                  要发布出去的程序：端口 + 启动方式。
+                </span>
+              </span>
+              <span className="link-btn">去添加 →</span>
+            </button>
+
+            <button
+              type="button"
+              className="card"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              onClick={() => onNavigate("tunnels")}
+            >
+              <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-2)" }}>
+                ③
+              </span>
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span className="server-name" style={{ display: "block" }}>
+                  发布隧道
+                </span>
+                <span className="server-meta" style={{ display: "block" }}>
+                  把本机服务接到云端服务器上，生成公网网址。
+                </span>
+              </span>
+              <span className="link-btn">去看看 →</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="service-list">

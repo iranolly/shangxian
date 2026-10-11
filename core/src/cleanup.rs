@@ -1,7 +1,8 @@
 //! 远端操作：ssh 执行、残留端口精确清理、密码哈希。
 //!
 //! 清理纪律（对齐 DESIGN.md §3.2）：
-//! - 只清理「占住了本服务注册端口的那个 sshd 会话进程」；
+//! - 只清理「占住了本服务注册端口、而且归属能核实的 sshd 会话进程」；
+//! - 归属核实 = 进程的属主 uid 就是当前登录账号；核不上只报告、绝不动手；
 //! - 绝不按用户名全杀、绝不清理端口段、绝不碰其他服务的端口；
 //! - 遇到非 sshd 的占用者，只报告不动手。
 
@@ -106,6 +107,8 @@ pub enum CleanupOutcome {
     Killed { pid: u32, comm: String },
     /// 占用者不是 sshd：只报告，不动手
     NotSshd { pid: u32, comm: String },
+    /// 是 sshd，但属主不是当前登录账号：归属核不上，只报告不动手
+    OwnerUnverified { pid: u32, comm: String, owner: String },
     /// 端口本来就是空的
     PortFree,
     /// 端口有监听但找不到持有进程
@@ -122,6 +125,9 @@ impl CleanupOutcome {
             Self::NotSshd { pid, comm } => {
                 format!("端口被非 ssh 进程占着（pid {pid} {comm}），没有动它")
             }
+            Self::OwnerUnverified { pid, comm, owner } => format!(
+                "端口被 sshd 占着（pid {pid} {comm}，账号 {owner}），但不是当前登录账号的会话，归属核不上，没有动它"
+            ),
             Self::PortFree => "远端端口本来就是空闲的".into(),
             Self::NoOwner => "远端端口有监听但找不到持有进程".into(),
             Self::Failed(e) => format!("清理失败：{e}"),
@@ -156,6 +162,14 @@ fn parse_outcome(out: &str) -> CleanupOutcome {
                     comm: parts[2..].join(" "),
                 }
             }
+            // 脚本输出：OWNER_UNVERIFIED <pid> <账号> <comm>
+            Some("OWNER_UNVERIFIED") if parts.len() >= 3 => {
+                return CleanupOutcome::OwnerUnverified {
+                    pid: parts[1].parse().unwrap_or(0),
+                    owner: parts[2].to_string(),
+                    comm: parts[3..].join(" "),
+                }
+            }
             Some("KILL_FAILED") => {
                 return CleanupOutcome::Failed(format!(
                     "kill 失败（pid {}）",
@@ -170,20 +184,28 @@ fn parse_outcome(out: &str) -> CleanupOutcome {
     CleanupOutcome::Failed("清理输出无法识别".into())
 }
 
-/// 远端清理脚本：按端口找持有者，确认是 sshd 会话才结束它。
+/// 远端清理脚本：按端口找持有者，确认是 sshd 会话、而且属主就是当前登录账号，才结束它。
+/// 核不上归属（别的账号的会话、uid 读不到）只报告，不动手。
 fn cleanup_script(port: u16) -> String {
     format!(
         r#"p={port}
 hex=$(printf '%04X' "$p")
 inode=$(awk -v h=":$hex" '$2 ~ h "$" && $4 == "0A" {{ print $10; exit }}' /proc/net/tcp /proc/net/tcp6 2>/dev/null)
 if [ -z "$inode" ]; then echo PORT_FREE; exit 0; fi
+me_uid=$(id -u 2>/dev/null || echo '')
 for d in /proc/[0-9]*; do
   if ls -l "$d/fd" 2>/dev/null | grep -q "socket:\[$inode\]"; then
     pid=${{d#/proc/}}
     comm=$(cat "$d/comm" 2>/dev/null)
     case "$comm" in
       sshd*)
-        if kill "$pid" 2>/dev/null; then echo "KILLED $pid $comm"; else echo "KILL_FAILED $pid"; fi ;;
+        owner_uid=$(stat -c %u "/proc/$pid" 2>/dev/null || echo '?')
+        owner_name=$(stat -c %U "/proc/$pid" 2>/dev/null || echo '?')
+        if [ -n "$me_uid" ] && [ "$owner_uid" = "$me_uid" ]; then
+          if kill "$pid" 2>/dev/null; then echo "KILLED $pid $comm"; else echo "KILL_FAILED $pid"; fi
+        else
+          echo "OWNER_UNVERIFIED $pid $owner_name $comm"
+        fi ;;
       *)
         echo "OWNER_NOT_SSHD $pid $comm" ;;
     esac
@@ -194,22 +216,72 @@ echo NO_OWNER"#
     )
 }
 
-/// 在服务器上生成 nginx 用的 apr1 密码哈希（密码走 stdin，不落命令行）。
-pub fn hash_password(exec: &SshExec, password: &str) -> Result<String, String> {
-    let script = format!(
-        "printf '%s' {} | openssl passwd -apr1 -stdin",
-        shell_quote(password)
-    );
-    let out = run(exec, &script, Duration::from_secs(20))?;
-    let hash = out.trim().to_string();
-    if hash.starts_with("$apr1$") {
-        Ok(hash)
-    } else {
-        Err(format!("服务器返回了意外的结果：{hash}"))
+/// 在本地生成 nginx 用的访问密码哈希（bcrypt），密码不落命令行、不上服务器。
+///
+/// `exec` 参数保留是为了兼容现有调用方（guardian / app / cli），现在不再使用。
+pub fn hash_password(_exec: &SshExec, password: &str) -> Result<String, String> {
+    if password.is_empty() {
+        return Err("访问密码不能是空的".into());
     }
+    if password.len() > 72 {
+        return Err("访问密码太长了：bcrypt 只认前 72 个字节，请换短一点的密码".into());
+    }
+    let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| format!("本地生成密码哈希失败：{e}"))?;
+    // bcrypt 库默认输出 $2b$；htpasswd / nginx 更常用 $2y$，两者算法一致，只换前缀。
+    Ok(hash.replacen("$2b$", "$2y$", 1))
 }
 
 /// 把一段文本安全地包进单引号里（给远端 shell 用；域名等外部输入必须过这一道）。
 pub(crate) fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fake_exec() -> SshExec {
+        SshExec {
+            ssh_exe: PathBuf::from("ssh"),
+            target: "u@h".into(),
+            ssh_port: 22,
+            identity_file: None,
+        }
+    }
+
+    #[test]
+    fn hash_password_makes_bcrypt_hash() {
+        let hash = hash_password(&fake_exec(), "正确的horse电池").unwrap();
+        assert!(hash.starts_with("$2y$"), "应该是 $2y$ bcrypt 哈希：{hash}");
+        assert!(bcrypt::verify("正确的horse电池", &hash).unwrap());
+        assert!(!bcrypt::verify("别的密码", &hash).unwrap());
+    }
+
+    #[test]
+    fn hash_password_rejects_empty_and_too_long() {
+        assert!(hash_password(&fake_exec(), "").is_err());
+        assert!(hash_password(&fake_exec(), &"a".repeat(73)).is_err());
+    }
+
+    #[test]
+    fn parses_owner_unverified() {
+        match parse_outcome("OWNER_UNVERIFIED 123 zhangsan sshd\n") {
+            CleanupOutcome::OwnerUnverified { pid, comm, owner } => {
+                assert_eq!(pid, 123);
+                assert_eq!(owner, "zhangsan");
+                assert_eq!(comm, "sshd");
+            }
+            other => panic!("解析错了：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn cleanup_script_checks_owner_and_is_not_mangled() {
+        let s = cleanup_script(18080);
+        assert!(s.contains("me_uid=$(id -u"), "要先拿到当前 uid：{s}");
+        assert!(s.contains("owner_uid=$(stat -c %u"), "要查进程属主：{s}");
+        assert!(s.contains("${d#/proc/}"), "花括号不能被误写：{s}");
+        assert!(s.contains("OWNER_UNVERIFIED"));
+    }
 }

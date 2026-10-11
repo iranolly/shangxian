@@ -25,6 +25,7 @@ fn start_stop_roundtrip() {
             ssh_port: 2222,
             user: "tun".into(),
             key_path: Some(key.display().to_string()),
+            vhost_dir: None,
         }],
         services: vec![LocalService {
             id: "svc-local".into(),
@@ -140,6 +141,7 @@ fn cleanup_kills_stale_holder() {
             ssh_port: 2222,
             user: "tun".into(),
             key_path: Some(key.display().to_string()),
+            vhost_dir: None,
         }],
         services: vec![LocalService {
             id: "svc-local".into(),

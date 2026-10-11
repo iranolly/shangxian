@@ -37,6 +37,13 @@ pub struct ServerConfig {
     /// 私钥文件路径；None = 用 ssh 默认密钥
     #[serde(default)]
     pub key_path: Option<String>,
+    /// 这台服务器上面板放站点的目录（可空 = 按环境变量/小皮默认找）。
+    /// 小皮面板默认 /xp/panel/vhost；宝塔等面板填 /www/server/panel/vhost。
+    /// nginx 配置在它下面的 nginx/ 里，htpasswd 密码文件直接在它下面。
+    /// 解析顺序：服务器这个字段 → 环境变量 SHANGXIAN_HTPASSWD_DIR → 小皮默认
+    /// （解析函数是 nginx 模块里的 htpasswd_dir_for）。
+    #[serde(default)]
+    pub vhost_dir: Option<String>,
 }
 
 /// 怎么启动一台本机服务（整个 launch 留空 = 只监控不启动）。
@@ -100,7 +107,7 @@ pub struct Tunnel {
     /// 访问密码的用户名（配 nginx 时用）
     #[serde(default)]
     pub access_user: Option<String>,
-    /// 访问密码的 apr1 哈希（明文密码只显示一次，不落盘）
+    /// 访问密码的 bcrypt 哈希（$2y$12$…，明文密码只显示一次，不落盘）
     #[serde(default)]
     pub access_hash: Option<String>,
     /// 访问保护细节（如 IP 白名单，逗号分隔）
@@ -317,23 +324,35 @@ impl AppConfig {
     /// - v4：结构和 v5 一样，只是访问保护还写成字符串，柔性反序列化直接兼容；
     ///   先备份成 `config.json.v4.bak`，再写回 v5；
     /// - v3 及以前：先备份成 `config.json.v3.bak`，走老结构迁移再写回 v5。
+    ///
+    /// 读坏时绝不按空配置糊弄过去：把原文件复制留底成 `config.json.bad`，再把原文件
+    /// 挪走，然后返回清楚的错误。这样调用方不会拿空配置把用户的配置冲掉。
     pub fn load(path: &Path) -> io::Result<Self> {
-        let text = fs::read_to_string(path)?;
-        let version = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("version").and_then(|x| x.as_u64()))
-            .unwrap_or(1) as u32;
+        let text = fs::read_to_string(path).map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                e
+            } else {
+                // 连读都读不出来（权限、编码坏了）：也把原文件留底，别让它被空配置盖掉
+                let _ = quarantine_bad_config(path);
+                io::Error::new(
+                    e.kind(),
+                    format!(
+                        "配置文件读不出来：{e}；原文件已经留底为 config.json.bad，修好后再打开应用"
+                    ),
+                )
+            }
+        })?;
+
+        let version = json_version(&text);
 
         if version >= CONFIG_VERSION {
-            return serde_json::from_str(&text).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("配置文件格式不对：{e}"))
-            });
+            return serde_json::from_str(&text)
+                .map_err(|e| corrupt_config_error(path, "配置文件格式不对", &e));
         }
 
         if version == 4 {
-            let mut cfg: AppConfig = serde_json::from_str(&text).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("配置文件格式不对：{e}"))
-            })?;
+            let mut cfg: AppConfig = serde_json::from_str(&text)
+                .map_err(|e| corrupt_config_error(path, "配置文件格式不对", &e))?;
             let backup = path.with_extension("json.v4.bak");
             if !backup.exists() {
                 let _ = fs::write(&backup, &text);
@@ -345,12 +364,8 @@ impl AppConfig {
             return Ok(cfg);
         }
 
-        let old: LegacyConfig = serde_json::from_str(&text).map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("老配置文件格式不对，没法迁移：{e}"),
-            )
-        })?;
+        let old: LegacyConfig = serde_json::from_str(&text)
+            .map_err(|e| corrupt_config_error(path, "老配置文件格式不对，没法迁移", &e))?;
         let migrated = old.migrate();
         let backup = path.with_extension("json.v3.bak");
         if !backup.exists() {
@@ -400,11 +415,99 @@ impl AppConfig {
     }
 }
 
-/// 数据目录：%APPDATA%\Shangxian（取不到就用当前目录 ./data）。
+/// 从配置文本里读 version（读不到就当 1，走老结构迁移）。
+fn json_version(text: &str) -> u32 {
+    serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| v.get("version").and_then(|x| x.as_u64()))
+        .unwrap_or(1) as u32
+}
+
+/// 把读坏的原文件复制留底成 `config.json.bad`，再删掉原文件（免得被空配置覆盖）。
+/// 已经有旧的 `.bad` 时直接覆盖成最新的这份。
+fn quarantine_bad_config(path: &Path) -> io::Result<PathBuf> {
+    let bad = path.with_extension("json.bad");
+    fs::copy(path, &bad)?;
+    fs::remove_file(path)?;
+    Ok(bad)
+}
+
+/// 配置读坏时的统一处理：留底 + 一句人话错误（绝不返回空配置）。
+fn corrupt_config_error(path: &Path, what: &str, err: &serde_json::Error) -> io::Error {
+    let tail = match quarantine_bad_config(path) {
+        Ok(bad) => format!("原文件已经留底为 {}", bad.display()),
+        Err(e) => format!("原文件没能留底（{e}），请先手动备份再改"),
+    };
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("{what}：{err}；{tail}；修好后再打开应用"),
+    )
+}
+
+/// 配置文件现在能不能读成一份配置（只读检查，不迁移、不写盘）。
+fn config_parses(path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(path) else {
+        return false;
+    };
+    let version = json_version(&text);
+    if version >= CONFIG_VERSION || version == 4 {
+        serde_json::from_str::<AppConfig>(&text).is_ok()
+    } else {
+        serde_json::from_str::<LegacyConfig>(&text).is_ok()
+    }
+}
+
+/// guardian 自动保存前先问这个：现在到底能不能安全地把配置写回去。
+///
+/// - 配置文件存在：必须现在就能读成配置（读坏时 save 会报错，而不是把空配置写出去）；
+/// - 配置文件不存在、也没有 `config.json.bad`：第一次用，允许建立配置；
+/// - 配置文件不存在、但有 `config.json.bad`：刚读坏留过底，禁止自动保存。
+pub fn config_save_allowed(path: &Path) -> bool {
+    if path.exists() {
+        return config_parses(path);
+    }
+    !path.with_extension("json.bad").exists()
+}
+
+/// 数据目录，按优先级：
+/// 1. 老安装已经在用的 `%APPDATA%\Shangxian`（目录存在就继续用，别丢用户的配置和密钥）；
+/// 2. 新装用 `%LOCALAPPDATA%\Shangxian`（本机专用，不跟着漫游配置跑）；
+/// 3. 实在只有 `%APPDATA%` 可用就用它——还是用户自己的目录。
+///
+/// 两个环境变量都没有时直接报错（panic），绝不回退到相对路径 `./data`：
+/// 那里可能放密钥和控制令牌，相对目录（尤其是网络盘/共享盘）容易被别人看到。
 pub fn default_data_dir() -> PathBuf {
-    match std::env::var("APPDATA") {
-        Ok(dir) if !dir.is_empty() => PathBuf::from(dir).join("Shangxian"),
-        _ => PathBuf::from("./data"),
+    try_default_data_dir()
+        .unwrap_or_else(|e| panic!("{e}；请修好系统环境变量后再打开应用"))
+}
+
+/// [`default_data_dir`] 的可失败版本：调用方想自己处理错误时用它。
+pub fn try_default_data_dir() -> io::Result<PathBuf> {
+    if let Some(legacy) = env_dir("APPDATA").map(|dir| dir.join("Shangxian")) {
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+    }
+    if let Some(local) = env_dir("LOCALAPPDATA") {
+        return Ok(local.join("Shangxian"));
+    }
+    if let Some(roaming) = env_dir("APPDATA") {
+        return Ok(roaming.join("Shangxian"));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "环境变量 LOCALAPPDATA 和 APPDATA 都没有值，找不到放配置和密钥的地方；不能退回到相对目录（可能被别人看到）",
+    ))
+}
+
+/// 读一个环境变量当目录：没设、空串、全是空白都不算。
+fn env_dir(name: &str) -> Option<PathBuf> {
+    let raw = std::env::var(name).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
     }
 }
 
@@ -431,7 +534,7 @@ mod tests {
         { "id": "srv-api", "name": "香港-1", "host": "api.example.com", "sshPort": 22, "user": "user", "keyPath": "C:/k/id_ed25519" }
       ],
       "services": [
-        { "id": "svc-a", "name": "pi-web", "enabled": true, "serverId": "srv-api", "localPort": 30141, "remotePort": 13041, "url": "piweb.example.com", "access": "password", "accessUser": "pi", "accessHash": "$apr1$x$y" },
+        { "id": "svc-a", "name": "pi-web", "enabled": true, "serverId": "srv-api", "localPort": 30141, "remotePort": 13041, "url": "piweb.example.com", "access": "password", "accessUser": "pi", "accessHash": "$2y$12$aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZ0" },
         { "id": "svc-b", "name": "viewer", "enabled": false, "serverId": "srv-api", "localPort": 8787, "remotePort": 18787 },
         { "id": "svc-c", "name": "comfyui", "enabled": false, "serverId": "srv-api", "localPort": 30141, "remotePort": 13042 }
       ],
@@ -491,7 +594,7 @@ mod tests {
         {
           "id": "tun-1", "name": "相册", "serviceId": "svc-1", "serverId": "srv-1",
           "remotePort": 18080, "url": "album.example.com",
-          "access": "password,ip", "accessUser": "u", "accessHash": "$apr1$x$y",
+          "access": "password,ip", "accessUser": "u", "accessHash": "$2y$12$aBcDeFgHiJkLmNoPqRsTuVwXyZaBcDeFgHiJkLmNoPqRsTuVwXyZ0",
           "accessDetail": "1.2.3.4", "enabled": true
         }
       ],
@@ -613,5 +716,62 @@ mod tests {
         assert_eq!(opt(r#"{"access":[]}"#), Some(vec![]));
         assert_eq!(opt(r#"{"access":"none"}"#), Some(vec![]));
         assert_eq!(opt(r#"{"access":["none"]}"#), Some(vec![]));
+    }
+
+    #[test]
+    fn bad_config_is_quarantined_and_load_fails() {
+        let dir = std::env::temp_dir().join("sx-config-bad-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, "这不是 json {{{ 读坏了").unwrap();
+
+        let err = AppConfig::load(&path).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(err.to_string().contains("config.json.bad"), "err={err}");
+        // 原文件被挪走留底，内容还在
+        assert!(!path.exists(), "读坏后原文件必须挪走，不能被空配置覆盖");
+        let bad = dir.join("config.json.bad");
+        assert_eq!(
+            std::fs::read_to_string(&bad).unwrap(),
+            "这不是 json {{{ 读坏了"
+        );
+        // 留底之后禁止自动保存（guardian 的保护）
+        assert!(!config_save_allowed(&path), "读坏留底后不能允许自动保存");
+    }
+
+    #[test]
+    fn truncated_json_is_quarantined_and_fails() {
+        // 半截 JSON（掉电写坏那种）也要留底、也要报错
+        let dir = std::env::temp_dir().join("sx-config-truncated-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"version": 5, "servers": [{"#).unwrap();
+
+        let err = AppConfig::load(&path).unwrap_err();
+        assert!(err.to_string().contains("格式不对"), "err={err}");
+        assert!(dir.join("config.json.bad").exists());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn save_is_allowed_for_fresh_and_good_configs() {
+        let dir = std::env::temp_dir().join("sx-config-save-guard-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+
+        // 第一次用：没文件也没 .bad，允许建立配置
+        assert!(config_save_allowed(&path));
+
+        // 能读的配置：允许
+        AppConfig::default().save(&path).unwrap();
+        assert!(config_save_allowed(&path));
+
+        // 有 .bad 又没配置文件：说明刚读坏留过底，禁止
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(dir.join("config.json.bad"), "坏的").unwrap();
+        assert!(!config_save_allowed(&path));
     }
 }

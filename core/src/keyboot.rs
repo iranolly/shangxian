@@ -8,7 +8,7 @@
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use russh::client::{self, Handler};
@@ -28,19 +28,69 @@ pub struct Bootstrap {
     pub verified: bool,
 }
 
-/// 接受任何主机密钥：等价于 ssh 第一次连接时的 "accept-new"
-/// （服务器指纹变了系统 ssh 后面会拦，这里只负责这一次握手）。
-struct AcceptAll;
+/// 主机密钥检查：第一次连到某台服务器就把指纹记到本地文件；以后再连指纹对不上就拒绝。
+/// 语义和 ssh 的 `StrictHostKeyChecking=accept-new` 一样：首连信任（TOFU），变更拒绝。
+struct HostKeyCheck {
+    host: String,
+    port: u16,
+    /// 指纹记录文件（放私钥旁边，不跟系统 known_hosts 混在一起）
+    store: PathBuf,
+    /// 拒绝原因（connect 失败后读出来给人话提示）
+    reject: Arc<Mutex<Option<String>>>,
+}
 
-impl Handler for AcceptAll {
+impl Handler for HostKeyCheck {
     type Error = russh::Error;
 
     fn check_server_key(
         &mut self,
-        _key: &russh::keys::ssh_key::PublicKey,
+        key: &russh::keys::ssh_key::PublicKey,
     ) -> impl std::future::Future<Output = Result<bool, Self::Error>> + Send {
-        async { Ok(true) }
+        use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
+
+        let outcome = match check_known_hosts_path(&self.host, self.port, key, &self.store) {
+            // 指纹一致：放行
+            Ok(true) => Ok(()),
+            // 第一次见这台服务器：记下指纹，放行
+            Ok(false) => learn_known_hosts_path(&self.host, self.port, key, &self.store)
+                .map_err(|e| format!("记主机指纹失败（{}）：{e}", self.store.display())),
+            // 指纹和上次记录的不一样：明确拒绝
+            Err(russh::keys::Error::KeyChanged { .. }) => Err(format!(
+                "服务器 {}:{} 的主机密钥和上次记录的不一样（记录文件：{}）。\n\
+                 这可能是服务器重装了或换了机器，也可能是有人在中间冒充。为了安全先停下。\n\
+                 确认没问题后，把那个文件里对应的一行删掉，再重新配置。",
+                self.host,
+                self.port,
+                self.store.display()
+            )),
+            Err(e) => Err(format!(
+                "读主机指纹记录失败（{}）：{e}",
+                self.store.display()
+            )),
+        };
+
+        let reject = self.reject.clone();
+        async move {
+            match outcome {
+                Ok(()) => Ok(true),
+                Err(msg) => {
+                    if let Ok(mut slot) = reject.lock() {
+                        *slot = Some(msg);
+                    }
+                    Ok(false)
+                }
+            }
+        }
     }
+}
+
+/// 主机指纹记录文件：放在私钥旁边（通常就是 ~/.ssh）。
+fn host_key_store(key_path: &Path) -> PathBuf {
+    key_path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(|dir| dir.join("shangxian_known_hosts"))
+        .unwrap_or_else(|| PathBuf::from("shangxian_known_hosts"))
 }
 
 /// 用密码登录一次，把公钥写到服务器上，并用密钥登录验证。
@@ -52,12 +102,20 @@ pub fn bootstrap_key(
     key_path: &Path,
 ) -> Result<Bootstrap, String> {
     let public_key = ensure_key(key_path)?;
+    let known_hosts = host_key_store(key_path);
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|e| format!("内部错误（起不了网络运行时）：{e}"))?;
-    runtime.block_on(write_public_key(host, port, user, password, &public_key))?;
+    runtime.block_on(write_public_key(
+        host,
+        port,
+        user,
+        password,
+        &public_key,
+        &known_hosts,
+    ))?;
 
     if !verify_with_key(host, port, user, key_path)? {
         return Err("公钥写进去了，但用密钥登录还是没成功。请检查服务器上 ~/.ssh 的权限（目录 700、authorized_keys 文件 600）".into());
@@ -103,9 +161,46 @@ fn ensure_key(key_path: &Path) -> Result<String, String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+
+    // 刚生成的私钥权限要收紧；收不了就把这对新密钥删掉，不留隐患。
+    if let Err(e) = tighten_key_permissions(key_path) {
+        let _ = std::fs::remove_file(key_path);
+        let _ = std::fs::remove_file(&pub_path);
+        return Err(e);
+    }
+
     std::fs::read_to_string(&pub_path)
         .map(|s| s.trim().to_string())
         .map_err(|e| format!("读公钥失败：{e}"))
+}
+
+/// 生成的私钥只给当前 Windows 用户读：去掉继承来的权限，只保留当前用户可读。
+fn tighten_key_permissions(key_path: &Path) -> Result<(), String> {
+    let user = std::env::var("USERNAME")
+        .map_err(|_| "读不到当前 Windows 用户名（USERNAME），没法收紧私钥权限".to_string())?;
+    // 写死系统目录里的 icacls，避免从 PATH 里碰到同名程序
+    let icacls = std::env::var_os("SystemRoot")
+        .map(|root| PathBuf::from(root).join("System32").join("icacls.exe"))
+        .unwrap_or_else(|| PathBuf::from("icacls.exe"));
+
+    let out = Command::new(&icacls)
+        .arg(key_path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(format!("{user}:R"))
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("调用 icacls 失败：{e}"))?;
+
+    if !out.status.success() {
+        return Err(format!(
+            "新私钥的权限没收紧（icacls 退出码 {:?}）：{}。请手动执行：icacls \"{}\" /inheritance:r /grant:r {user}:R 然后重试",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim(),
+            key_path.display()
+        ));
+    }
+    Ok(())
 }
 
 async fn write_public_key(
@@ -114,14 +209,27 @@ async fn write_public_key(
     user: &str,
     password: &str,
     pubkey: &str,
+    known_hosts: &Path,
 ) -> Result<(), String> {
     let config = Arc::new(client::Config {
         inactivity_timeout: Some(Duration::from_secs(30)),
         ..Default::default()
     });
-    let mut session = client::connect(config, (host, port), AcceptAll)
-        .await
-        .map_err(|e| format!("连不上服务器 {host}:{port}（{e}）"))?;
+    let reject: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let handler = HostKeyCheck {
+        host: host.to_string(),
+        port,
+        store: known_hosts.to_path_buf(),
+        reject: reject.clone(),
+    };
+    let mut session = match client::connect(config, (host, port), handler).await {
+        Ok(session) => session,
+        Err(e) => {
+            // 主机指纹不对时，把 check_server_key 里写好的原因原样给用户。
+            let reason = reject.lock().ok().and_then(|slot| slot.clone());
+            return Err(reason.unwrap_or_else(|| format!("连不上服务器 {host}:{port}（{e}）")));
+        }
+    };
 
     let auth = session
         .authenticate_password(user, password)
@@ -242,5 +350,57 @@ mod tests {
 
         // 认不出来的格式不要炸
         assert_eq!(allowed_methods("Success"), "");
+    }
+
+    #[test]
+    fn host_key_store_sits_next_to_key() {
+        let p = Path::new("C:/Users/x/.ssh/shangxian_id_ed25519");
+        assert_eq!(
+            host_key_store(p),
+            PathBuf::from("C:/Users/x/.ssh/shangxian_known_hosts")
+        );
+    }
+
+    #[test]
+    fn learns_host_key_then_detects_change() {
+        use russh::keys::known_hosts::{check_known_hosts_path, learn_known_hosts_path};
+        use russh::keys::ssh_key::PublicKey;
+
+        let dir = std::env::temp_dir().join(format!("sx-known-hosts-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let store = dir.join("shangxian_known_hosts");
+        let _ = std::fs::remove_file(&store);
+
+        // 两把公开的测试 ed25519 公钥（russh 自带测试里就用它们；不带注释，指纹比对才不受注释影响）
+        let key1 = PublicKey::from_openssh(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJdD7y3aLq454yWBdwLWbieU1ebz9/cu7/QEXn9OIeZJ",
+        )
+        .unwrap();
+        let key2 = PublicKey::from_openssh(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA6rWI3G2sz07DnfFlrouTcysQlj2P+jpNSOEWD9OJ3X",
+        )
+        .unwrap();
+
+        // 第一次见：不认识 → 记下来
+        assert!(!check_known_hosts_path("example.com", 22, &key1, &store).unwrap());
+        learn_known_hosts_path("example.com", 22, &key1, &store).unwrap();
+        // 再连：指纹一致 → 放行
+        assert!(check_known_hosts_path("example.com", 22, &key1, &store).unwrap());
+        // 指纹变了 → 明确报错
+        let err = check_known_hosts_path("example.com", 22, &key2, &store).unwrap_err();
+        assert!(
+            matches!(err, russh::keys::Error::KeyChanged { .. }),
+            "应该报 KeyChanged：{err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tightens_key_permissions() {
+        let path = std::env::temp_dir().join(format!("sx-key-acl-test-{}.key", std::process::id()));
+        std::fs::write(&path, b"dummy").unwrap();
+        tighten_key_permissions(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
     }
 }

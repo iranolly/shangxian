@@ -22,6 +22,8 @@ interface Props {
   onStart: (id: string) => void;
   onStop: (id: string) => void;
   onRestart: (id: string) => void;
+  /** 切换页面：卡片上"本机服务没在跑"能直接跳去本机服务页 */
+  onNavigate: (page: "services") => void;
   onRefresh: () => void;
 }
 
@@ -32,6 +34,7 @@ export function TunnelsPage({
   onStart,
   onStop,
   onRestart,
+  onNavigate,
   onRefresh,
 }: Props) {
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -109,6 +112,7 @@ export function TunnelsPage({
               onRemove={() => remove(t)}
               onLogs={() => setLogsFor(t)}
               onNginx={() => setNginxFor(t)}
+              onGoToServices={() => onNavigate("services")}
               notice={notices[t.id]}
               onDismissNotice={() =>
                 setNotices((n) => {
@@ -148,6 +152,7 @@ export function TunnelsPage({
         <NginxModal
           id={nginxFor.id}
           name={nginxFor.name}
+          tunnel={nginxFor}
           onClose={() => setNginxFor(null)}
         />
       )}

@@ -24,12 +24,14 @@
 |---|---|---|
 | 1 | **绝不暂停 / 重启 / 删除 pi-web 本机服务和它的隧道**（以及任何标注为「用户正在用」的东西） | 那是用户当前会话正在走的通道，动它 = 立刻断掉用户会话 |
 | 2 | 删除本机服务 / 服务器前，先看有没有隧道引用 | 应用会拒绝并列出是哪几条。**不要绕过**（不要手改 config.json 硬删） |
-| 3 | 访问密码只在「设置时」出现一次，只存 apr1 哈希；配免密的登录密码只在内存里用一次 | 密码不落盘、不进日志。不要把密码写进 config.json、日志、`cli call` 的参数里 |
+| 3 | 访问密码只在「设置时」出现一次，只存加密结果（bcrypt `$2y$…`）；加密在**本机**算好，服务器不用装任何东西；配免密的登录密码只在内存里用一次 | 密码不落盘、不进日志。不要把明文密码写进 config.json、日志、`cli call` 的参数里；传给命令行时优先走标准输入（`echo 密码 \| cli server hash-password ...`） |
 | 4 | 云端只做「普通 sshd + nginx」 | 不替用户装常驻程序、不改服务器 sshd 配置 |
 | 5 | 应用退出 = 所有隧道停止；本机服务保活（继续跑） | 隧道跟应用走，别人立刻访问不了。但应用启动的本地服务不会跟着退，下次打开应用会按端口认领。不要用「杀掉应用」当重启手段 |
 | 6 | 隧道 `paused` = 别人访问不了 | 不确定要不要停，先问 |
 | 7 | 端口写死、冲突报错，不自动漂移 | 改了云端端口必须重新贴 nginx 配置，否则 nginx 还指向老端口 |
 | 8 | 只读命令可以随时跑；写命令（add/edit/start/stop/remove/setup-key）先想清楚再跑 | 写命令会立刻改用户的真实配置并落盘 |
+| 9 | 删除 / 暂停类命令要确认：`tunnel stop` / `tunnel remove` / `service remove` / `server remove` | 交互终端会问 y/N；非交互（管道 / 脚本 / agent）**必须加 `--yes`**，不加直接拒绝、什么都不改（退出码 1） |
+| 10 | 输出和退出码要按约定判读 | 成功（含只读命令、`--json`）是 `{"ok":true,"result":...}`；失败是 `{"ok":false,"error":"..."}`。退出码：0 成功、1 出错、2 命令写法错、3 应用没在跑（只有 `app status`） |
 
 ---
 
@@ -40,7 +42,7 @@
 ./target/debug/cli.exe app status --json     # 应用在不在
 ./target/debug/cli.exe status --json         # 一次看全：应用+服务+隧道+服务器
 ./target/debug/cli.exe guide                 # 内置速查（人话）
-./target/debug/cli.exe methods --json        # 全部底层方法（35 个）
+./target/debug/cli.exe methods --json        # 全部底层方法（36 个）
 ```
 
 拿到一个陌生环境，先跑 `status --json`，再决定下一步。
@@ -52,12 +54,13 @@
 | 项目 | 约定 |
 |---|---|
 | cli 位置 | 开发版：`target\debug\cli.exe`（或 release）；分发给用户时，`cli.exe` 要和 `app.exe` 放同一个文件夹（`cli app start` 靠这个找人） |
-| 名字 / 版本 | 程序名 `cli`，版本 `0.1.0`（`cli --version` 输出 `cli 0.1.0`） |
-| 写操作前提 | 应用必须在跑（`cli app status --json` 看到 `"running": true`） |
+| 名字 / 版本 | 程序名 `cli`，版本 `0.5.0`（`cli --version` 输出 `cli 0.5.0`） |
+| 写操作前提 | 应用必须在跑（`cli app status --json` 看到 `result.running: true`） |
 | 只读四个命令 | `status` / `services` / `tunnels` / `servers` 离线也能读配置文件，状态字段为 `"unknown"` |
 | 默认输出 | 中文人话，成功以 `✓` 开头，失败以 `✗` 开头（写到 stderr） |
-| `--json` | 全局参数，位置随意。agent 一律加。失败输出 `{"ok": false, "error": "人话原因"}`，退出码 1 |
-| 用法错误 | 命令拼错、缺必填参数由 clap 处理，退出码 **2** |
+| `--json` | 全局参数，位置随意。agent 一律加。成功 `{"ok": true, "result": ...}`，失败 `{"ok": false, "error": "人话原因"}`，失败退出码 1 |
+| 危险操作 | `tunnel stop/remove`、`service remove`、`server remove`：交互终端打印要动谁再问 y/N（回车 = 什么都不做，退出码 0、`result.cancelled = true`）；非交互**必须加 `--yes`**，不加就拒绝执行（退出码 1） |
+| 退出码 | `0` 成功（确认里选「不」也是 0）；`1` 出错（包括非交互下拒绝执行）；`2` 命令写法不对（拼错参数、少值）；`3` `cli app status` 发现应用没在跑 |
 | 编码 | UTF-8；中文表格按显示宽度对齐 |
 | 通信 | 只在本机回环（127.0.0.1）上说话，端口随机，写进 `ctl.json`，带 token |
 
@@ -121,12 +124,12 @@ guide     给 AI agent 的速查说明
 ...
 ```
 
-`--json`（应用在跑）：
+`--json`（应用在跑；最外层是 `{"ok":true,"result":...}` 信封，下面只展开 `result` 里的内容）：
 
 ```json
 {
   "app": {
-    "appVersion": "0.1.0",
+    "appVersion": "0.5.0",
     "autostart": false,
     "dataDir": "C:\\Users\\你\\AppData\\Roaming\\Shangxian",
     "notifyEnabled": true,
@@ -141,7 +144,7 @@ guide     给 AI agent 的速查说明
       "autostart": true, "id": "svc-abc123",
       "launchArgs": "main.py", "launchExe": "C:\\Python311\\python.exe",
       "launchWorkdir": "D:\\web", "localPort": 8188,
-      "logPath": "C:\\Users\\你\\AppData\\Roaming\\Shangxian\\logs\\service-comfyui.log",
+      "logPath": "C:\\Users\\你\\AppData\\Roaming\\Shangxian\\logs\\service-svc-abc123.log",
       "name": "comfyui", "note": null, "reason": null, "status": "running",
       "tunnelCount": 1, "tunnelNames": ["comfyui 发布"], "watch": true
     }
@@ -172,7 +175,7 @@ guide     给 AI agent 的速查说明
 | `cli tunnels` | 发布隧道列表 | `发布隧道 3 条：` + 每条一行（名字 → 服务 → 服务器 · 云端端口 · 访问方式；有网址/原因会各占一行） |
 | `cli servers` | 云端服务器列表 | `云端服务器 2 台：` + `名字（id） user@host:port · 密钥 xxx / 默认密钥` |
 
-`--json` 是 `status` 里对应数组的内容（服务数组 / 隧道数组 / 服务器数组），字段一致。
+`--json` 的 `result` 是 `status` 里对应数组的内容（服务数组 / 隧道数组 / 服务器数组），字段一致；外层同样是 `{"ok":true,"result":[...]}` 信封。
 
 #### `cli ports`
 
@@ -191,7 +194,7 @@ guide     给 AI agent 的速查说明
   8188   python.exe                   D:\AI\ComfyUI-aki-v1.7\python\python.exe
 ```
 
-`--json`：
+`--json`（外层信封 `{"ok":true,"result":[...]}`，下面只列 `result`）：
 
 ```json
 [
@@ -208,7 +211,8 @@ guide     给 AI agent 的速查说明
 |---|---|
 | 作用 | 读日志尾部 |
 | 参数 | `<id>`：隧道 id（默认）或本机服务 id；`--kind tunnel`（默认）/ `--kind service`；`--lines N`（默认 60） |
-| 注意 | `kind` 只认字符串 `"service"`；传别的值都按隧道日志处理 |
+| 注意 | `--kind` 只认 `tunnel`（默认，隧道日志）或 `service`（本机服务日志）；写别的值**直接报错**（退出码 1），不会悄悄当隧道日志处理 |
+| 日志文件 | 隧道日志 `logs\<隧道id>-<8位代码>.ssh.log`（改名不换文件；超 5MB 轮转，留 `.1`/`.2` 两份备份）；服务日志 `logs\service-<服务id>.log`。按名字命名的旧日志不再被读取 |
 | 边界 | id 不存在时直接报错退出（退出码 1），不会输出空内容 |
 
 人话输出：直接打印日志原文。
@@ -218,7 +222,7 @@ debug1: remote forward success for: listen 127.0.0.1:19103, connect 127.0.0.1:18
 debug1: forwarding_success: all expected forwarding replies received
 ```
 
-`--json`：
+`--json`（外层信封 `{"ok":true,"result":...}`）：
 
 ```json
 { "text": "debug1: remote forward success for: ...\n..." }
@@ -270,7 +274,8 @@ server {
 
 · 站点和证书先在面板建好；「反向代理」目标填 http://127.0.0.1:19103。（配过就跳过）
 · 把下面高亮的行加进「站点 → 配置修改」：只加这几行，不替换整段；保存后重载 nginx，再从外网打开确认。
-· 密码文件内容存到服务器上的 /xp/panel/vhost/demo.example.com.htpasswd（没有就新建）。
+· 密码文件内容存到服务器上的 <站点目录>/demo.example.com.htpasswd（没有就新建）。
+· 密码文件要存到 <站点目录>/ 下面；面板不是小皮的话，回应用里把服务器的「站点目录」改成你面板的目录（比如宝塔填 /www/server/panel/vhost），再重新生成；临时也可以先设环境变量 SHANGXIAN_HTPASSWD_DIR 再重新生成。
 · 证书续期那两行（auth_basic off;）别漏——漏了证书到期不能自动续。
 ```
 
@@ -285,12 +290,14 @@ server {
     { "text": "    ...", "isNew": false },
     { "text": "    auth_basic \"需要密码\";", "isNew": true }
   ],
-  "htpasswd": "shangxian:$apr1$...",
+  "htpasswd": "shangxian:$2y$12$...",
   "steps": ["站点和证书先在面板建好；「反向代理」目标填 http://127.0.0.1:19103...", "..."]
 }
 ```
 
 > `snippet` 是「要新增的几行」（复制按钮复制的就是它）；`preview` 是简短示意（`isNew = false` 灰显＝原配置的样子，`true` 高亮＝新增内容的位置，`...` 是占位）；`acmeExempt` 在密码模式出现，是放进 `/.well-known/` 里豁免密码的一行（证书自动续期要用）。访问保护不同时：密码 = `auth_basic` 两行 + 豁免一行 + `htpasswd`（`用户名:哈希`）；IP 白名单 = `allow <ip>;` × N + `deny all;`；**两个同时开** = 密码块和 allow/deny 块一起生成，两个条件都要满足；没保护 = `snippet` 为 null，示意里给一行提醒注释。密码开着时（哪怕白名单也开着），`location /.well-known/` 里要放 `auth_basic off;`，证书续期才不会被密码拦住；只开白名单时没有这行（那里本来就没有密码）。
+>
+> 密码文件目录按服务器的「站点目录」解析：**服务器字段 `vhostDir` → 环境变量 `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`**；站点配置找 `<目录>/nginx/<域名>.conf`，密码文件放 `<目录>/<域名>.htpasswd`。服务器不是小皮面板时，在应用里把「站点目录」改对，或者用 `cli server add/edit --vhost-dir <目录>` 指定（edit 不写 = 保留原来的站点目录，写 `--vhost-dir ""` = 清空），再重新生成。
 
 ### 4.2 本机服务：`cli service ...`
 
@@ -334,7 +341,7 @@ cli service edit <服务id> [--name X] [--port N] [--exe X] [--args X] [--workdi
 ```
 
 - 只写要改的字段，其余保持不变（参数有 `--id`，当编辑处理）。
-- 注意：add 的 `--watch` 是开关；edit 的 `--watch` **要写 true/false**。
+- `--watch` / `--autostart` 两种写法都行：不带值 = 开（`--watch`）、`--watch false` = 关、不传 = 不动。
 
 人话输出：`✓ 已改好本机服务「svc-1a2b3c」`
 `--json`：`{ "ok": true, "result": { "id": "svc-1a2b3c" } }`
@@ -346,12 +353,13 @@ cli service edit <服务id> [--name X] [--port N] [--exe X] [--args X] [--workdi
 | `service start <id>` | 用登记的启动方式拉起服务 | `✓ 已让「svc-1a2b3c」启动（几秒后 cli services 看结果）` | 没配启动方式会报 `✗ 这台服务没有配置启动方式（只能看状态，不能帮你启动）` |
 | `service stop <id>` | 停止。**默认只停应用自己启动的进程**；端口上不是你启动的进程时，先返回 `needsConfirm`，不动手 | `✓ 已停止「svc-1a2b3c」`；加 `--force` 真的停掉外部进程后是 `✓ 已停止「svc-1a2b3c」（外部启动的进程）` | 需要确认时会报错（退出码 1）：`✗ 这台服务不是你启动的，正在监听的是 C:\Python311\python.exe（PID 4108）。停止会真的把它关掉。确认要停就加 --force：cli service stop svc-1a2b3c --force`。**只监控（没配启动方式）的服务绝不接管外部进程**：不管加不加 `--force` 都直接人话报错（不会先给 `needsConfirm`，CLI 也不会提示 `--force`）：`✗ 这台服务没配启动方式，是你自己开的程序，我不会去动它（端口上现在是 PID 4108「…」）；想接管它，先在编辑界面点端口把启动方式补全，再来停止`；端口上本来没进程时直接返回 `stopped`。应用重启后上次留下、这次被按端口认领的进程也算「不是这次启动的」，同样先返回 `needsConfirm`，要用户点头 |
 | `service restart <id>` | 先停再启 | `✓ 已重启「svc-1a2b3c」` | 端口上不是应用启动的进程时会报错，提示先 `service stop <id> --force` 再 `service start <id>`；只监控的服务直接报错（先补启动方式）。底层 ctl 方法 `service_restart` 这时返回的是 `{"kind":"needsConfirm",...}`（不是错误），CLI 包装成报错退出 |
-| `service remove <id>` | 删除 | `✓ 已删除本机服务「svc-1a2b3c」` | 有隧道引用会拒绝：`✗ 还有 1 条隧道在用它（「靶机演示」），先把这些隧道删掉` |
+| `service remove <id>` | 删除（要确认） | `✓ 已删除本机服务「名字」（svc-1a2b3c）` | 有隧道引用会拒绝：`✗ 还有 1 条隧道在用它（「靶机演示」），先把这些隧道删掉`。交互终端会先问 y/N（回车 = 什么都不做，退出码 0、`result.cancelled = true`）；非交互必须 `service remove <id> --yes`，不加就拒绝执行（退出码 1） |
 
 `--json`：
 
 - `service start / restart / remove`：`{ "ok": true, "result": { "ok": true } }`
 - `service stop`：`{ "ok": true, "result": { "kind": "stopped" } }`（停外部进程成功时 `kind` = `"foreignStopped"`；要确认时命令按失败处理，输出 `{ "ok": false, "error": "..." }`、退出码 1）
+- 交互确认里选「不」：`{ "ok": true, "result": { "cancelled": true } }`，退出码 0
 
 **停止的校验规则**（`service stop --force` 真的结束外部进程前，core 会再核对一遍）：
 
@@ -377,9 +385,9 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 | `--remote-port` | 是 | 云端端口（写死，不自动漂） |
 | `--name` | 否 | 不填 = `<服务名> 发布` |
 | `--url` | 否 | 公网网址，可空 |
-| `--access` | 否 | `none`（默认）/ `password` / `ip`。**可重复，也支持逗号分隔**：`--access password --access ip` 或 `--access password,ip` = 两个条件都要满足（nginx 默认 satisfy all）。**默认不传 = none = 谁都能进，建隧道时务必显式传值** |
+| `--access` | 否 | `none`（默认）/ `password` / `ip`。**可重复，也支持逗号分隔**：`--access password --access ip` 或 `--access password,ip` = 两个条件都要满足（nginx 默认 satisfy all）。**默认不传 = none = 谁都能进，建隧道时务必显式传值**。写别的值（比如 `passwrod`）会**直接报错**，不会静默变成无保护 |
 | `--access-user` | 否 | 访问用户名（选了 `password` 用） |
-| `--access-password` | 否 | 访问密码。会先 ssh 到服务器算 apr1 哈希再存，**密码本身不落盘**；服务器连不上/没 openssl 会**整条命令失败** |
+| `--access-password` | 否 | 访问密码。加密（bcrypt `$2y$…`）在**本机**算好再写进配置，密码本身不落盘、不碰到服务器（不要服务器装任何东西）。但会短暂出现在本机命令行；介意就用 `hash-password` 拿哈希再 `cli call add_tunnel` |
 | `--access-ips` | 否 | IP 白名单，逗号分隔（选了 `ip` 用） |
 
 行为：新增后 `enabled: true`，应用立刻开始发布。
@@ -388,7 +396,9 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 
 ```
 ✓ 已建好隧道「comfyui 发布」并开始发布（id=tun-4d5e6f）
+  访问保护：密码，已生效
 ```
+（没保护时这句是「访问保护：无（谁都能进）。想加门：--access password --access-password <密码> 或 --access ip --access-ips "1.2.3.4"」）
 
 `--json`：
 
@@ -413,9 +423,11 @@ cli tunnel edit <隧道id> [--name X] [--remote-port N] [--url X]
 - 只写要改的字段。**不能换本机服务、不能换服务器**（参数里没有 service/server）。
 - `--access` 同样可重复/逗号分隔，写什么就是什么（整体替换）：不传 `--access` = 保持原来的保护不变；`--access none` = 改成无保护。
 - `--access-password` 不填 = 密码保持不变。选了 `password` 但从来没有密码哈希，会报：`✗ 这条隧道选了「要密码才能进」，请先设置访问密码`。
+- `--access-password` 的加密也是本机算（bcrypt），服务器不用装东西；`--access-ips` 必须配 `--access ip`、`--access-password` 必须配 `--access password`，配不上会直接报错（不会静默丢掉）。
 - 改了云端端口：应用会停掉旧隧道，按新端口重连。**记得重新贴 nginx 配置。**
+- 改了服务器地址 / SSH 端口 / 账号 / 密钥，或改了本机服务的端口：应用会自动停掉旧隧道、按新参数重建（不用手删重建）。
 
-人话输出：`✓ 已改好隧道「tun-4d5e6f」（会断一下再自动连上）`
+人话输出：`✓ 已改好隧道「comfyui 发布」（tun-4d5e6f）`，下一行还会回显最终保护状态（会断一下再自动连上）
 `--json`：`{ "ok": true, "result": { "ok": true } }`
 
 #### `cli tunnel check <隧道id>`
@@ -442,11 +454,11 @@ cli tunnel edit <隧道id> [--name X] [--remote-port N] [--url X]
 | 命令 | 作用 | 人话输出 |
 |---|---|---|
 | `tunnel start <id>` | 开始发布 | `✓ 已开始发布「tun-4d5e6f」` |
-| `tunnel stop <id>` | 暂停发布（别人立刻访问不了） | `✓ 已暂停「tun-4d5e6f」` |
+| `tunnel stop <id>` | 暂停发布（别人立刻访问不了；**要确认**） | `✓ 已暂停「comfyui 发布」（tun-4d5e6f）`；非交互必须加 `--yes`，否则拒绝（退出码 1） |
 | `tunnel restart <id>` | 立刻重连（顺带恢复发布） | `✓ 已让「tun-4d5e6f」重连` |
-| `tunnel remove <id>` | 删除隧道（配置一起删） | `✓ 已删除隧道「tun-4d5e6f」` |
+| `tunnel remove <id>` | 删除隧道（配置一起删；**要确认**） | `✓ 已删除隧道「comfyui 发布」（tun-4d5e6f）`；非交互必须加 `--yes` |
 
-四个命令的 `--json` 都是：`{ "ok": true, "result": { "ok": true } }`
+四个命令的 `--json` 都是：`{ "ok": true, "result": { "ok": true } }`（暂停/删除在交互终端里选「不」时是 `{ "ok": true, "result": { "cancelled": true } }`、退出码 0）。
 
 ### 4.4 云端服务器：`cli server ...`
 
@@ -485,8 +497,8 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 
 #### `cli server remove`
 
-人话输出：`✓ 已删除服务器「srv-7a8b9c」`
-有隧道引用会拒绝：`✗ 还有隧道挂在这台服务器上，先处理它们`
+人话输出：`✓ 已删除服务器「名字」（srv-7a8b9c）`
+有隧道引用会拒绝：`✗ 还有隧道挂在这台服务器上，先处理它们`。**要确认**：交互终端问 y/N，非交互必须 `server remove <id> --yes`。
 `--json`：`{ "ok": true, "result": { "ok": true } }`
 
 #### `cli server setup-key <服务器id>`
@@ -496,13 +508,15 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 | 作用 | 用密码登录一次，自动配好免密（生成密钥 → 写公钥 → 用密钥验证） |
 | 密码输入 | **从标准输入读一行**（不进命令行、不进历史）。例：`echo 密码 \| cli server setup-key srv-7a8b9c` |
 | 前提 | 应用在跑；服务器允许密码登录；服务器上 `~/.ssh` 权限正常 |
-| 副作用 | 生成 `%APPDATA%\Shangxian\keys\<服务器id>_ed25519`（+ `.pub`），并把服务器的 `keyPath` 指向它 |
+| 副作用 | 生成 `<配置文件夹>\keys\<服务器id>_ed25519`（+ `.pub`），并把服务器的 `keyPath` 指向它 |
 
 人话输出（`message` 原文）：
 
 ```
 配好了！以后连这台服务器都走密钥，不用再输密码。密钥放在：C:\Users\你\AppData\Roaming\Shangxian\keys\srv-7a8b9c_ed25519
 ```
+
+（实际目录看配置文件夹；老安装 `%APPDATA%`、新安装 `%LOCALAPPDATA%`）
 
 `--json`：
 
@@ -522,24 +536,21 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 
 | 项 | 说明 |
 |---|---|
-| 作用 | 在服务器上生成 nginx 用的 apr1 密码哈希 |
-| 密码输入 | **从标准输入读一行**（`echo 密码 \| cli server hash-password <id>`） |
-| 实现 | ssh 到服务器执行 `openssl passwd -apr1 -stdin` |
-| 副作用 | 无（只是算一个哈希并打印） |
+| 作用 | 生成 nginx 用的访问密码哈希（bcrypt，`$2y$12$…`） |
+| 密码输入 | **从标准输入读一行**（`echo 密码 \| cli server hash-password <id>`）；交互终端也不回显 |
+| 实现 | **在本机算**（Rust bcrypt 库），不连服务器、不需要服务器装任何东西 |
+| 限制 | 密码超过 72 字节会被拒绝（bcrypt 的上限） |
+| 副作用 | 无（只是算一个哈希并打印）；服务器 id 必须存在（用它只是定位，不会去连） |
 
 人话输出（真实形状）：
 
 ```
-$apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy
+$2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 ```
 
-`--json`（注意：**没有 `{ok,result}` 包装**，直接是结果）：
+`--json`：`{ "ok": true, "result": { "hash": "$2y$12$..." } }`
 
-```json
-{ "hash": "$apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy" }
-```
-
-失败例子（靶机容器里没有 openssl，实测）：`✗ ssh 退出码 Some(127)：bash: line 1: openssl: command not found`
+失败例子：`✗ 访问密码太长了：bcrypt 只认前 72 个字节，请换短一点的密码`。
 
 ### 4.5 应用与元命令
 
@@ -549,27 +560,29 @@ $apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy
 
 ```
 ✓ 应用在跑（进程号 12345，控制端口 58601）
-✗ 应用没在跑。要叫起来：cli app start
+✗ 应用没在跑（offline）。要叫起来：cli app start
 ```
 
 `--json`：
 
 ```json
-{ "appVersion": "0.1.0", "pid": 12345, "port": 58601, "running": true }
-{ "running": false }
+{ "ok": true, "result": { "running": true, "offline": false, "port": 58601, "pid": 12345, "appVersion": "0.5.0" } }
+{ "ok": true, "result": { "running": false, "offline": true, "hint": "要叫起来：cli app start" } }
 ```
+
+**退出码**：应用在跑 = 0；没在跑 = **3**（脚本可以直接 `cli app status || cli app start`）。
 
 #### `cli app start`
 
 | 项 | 说明 |
 |---|---|
 | 作用 | 把应用叫起来（静默进托盘） |
-| 找程序 | 在 `cli.exe` **同一个文件夹**里找 `app.exe`、`Shangxian.exe` 或 `上线助手.exe`（按这个顺序） |
+| 找程序 | 依次找：`cli.exe` **同一个文件夹**里的 `app.exe` / `Shangxian.exe` / `上线助手.exe` → 注册表 HKCU Run 项 `Shangxian` 里记的路径 → `LOCALAPPDATA\Programs\Shangxian`、`PROGRAMFILES\Shangxian` 等常见安装位置 |
 | 等待 | 最多 30 秒等控制通道就绪；已在跑则直接返回 |
-| 失败 | 找不到程序：`✗ 没找到 app.exe（应该在 <目录> 里；开发时用 target\debug\cli.exe 跑就行）`；起来了但通道没通：`✗ 应用起来了但控制通道没通（看托盘图标，或手动打开应用）` |
+| 失败 | 找不到程序：`✗ 没找到『上线助手』主程序。\n  办法：手动点图标把应用打开，命令行照样能连上（cli app status 确认）。`；起来了但通道没通：`✗ 应用起来了但控制通道没通（看托盘图标，或手动打开应用）` |
 
 人话输出：`✓ 应用已启动（在托盘里，进程号 12345）` 或 `✓ 应用本来就在跑（进程号 12345）`
-`--json`：`{ "running": true, "pid": 12345 }`
+`--json`：`{ "ok": true, "result": { "running": true, "offline": false, "pid": 12345 } }`
 
 #### `cli methods`
 
@@ -586,7 +599,7 @@ $apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy
   ...
 ```
 
-`--json`：数组，元素为 `{ "method": ..., "desc": ..., "params": ... }`（内容见第 5 节）。
+`--json`：数组，元素为 `{ "method": ..., "desc": ..., "params": ... }`（内容见第 5 节），外层包 `{ "ok": true, "result": [...] }`。
 **注意**：`methods` 本身也要经过应用（是底层方法），应用没跑时会失败。
 
 #### `cli call <方法> ['<参数JSON>']`
@@ -595,20 +608,20 @@ $apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy
 |---|---|
 | 作用 | 万能口：直接调底层方法 |
 | 参数 | `<方法>` 必填；`<参数JSON>` 可省略，默认 `{}` |
-| 输出 | **永远输出漂亮的 JSON 结果本身**（不套 `{ok,result}`），`--json` 加不加都一样 |
+| 输出 | 加 `--json`：`{"ok": true, "result": <结果>}`；不加：把结果按人话打印（字符串直接打，对象一行一个字段） |
 | 失败 | 无 `--json`：`✗ 参数不是合法 JSON：...`（退出码 1）；有 `--json`：`{"ok": false, "error": "..."}` |
 
-示例：
+示例（都加 `--json`，看到的就是信封后的 `result`）：
 
 ```bash
-cli call ping '{}'                # → { "pong": true }
-cli call get_data_dir '{}'        # → { "path": "C:\\Users\\你\\AppData\\Roaming\\Shangxian" }
-cli call get_notify_enabled '{}'  # → { "enabled": true }
-cli call get_autostart '{}'       # → { "enabled": false }
-cli call get_logs '{"id":"tun-4d5e6f","lines":100}'   # → { "text": "..." }
-cli call save_service '{"name":"x","localPort":9000,"watch":false,"autostart":false}'
-                                  # → { "id": "svc-..." }
-cli call set_notify_enabled '{"enabled":false}'       # → { "ok": true }
+cli call ping '{}' --json                # → {"ok":true,"result":{"pong":true}}
+cli call get_data_dir '{}' --json        # → {"ok":true,"result":{"path":"C:\\Users\\你\\AppData\\Roaming\\Shangxian"}}
+cli call get_notify_enabled '{}' --json  # → {"ok":true,"result":{"enabled":true}}
+cli call get_autostart '{}' --json       # → {"ok":true,"result":{"enabled":false}}
+cli call get_logs '{"id":"tun-4d5e6f","lines":100}' --json   # → {"ok":true,"result":{"text":"..."}}
+cli call save_service '{"name":"x","localPort":9000,"watch":false,"autostart":false}' --json
+                                  # → {"ok":true,"result":{"id":"svc-..."}}
+cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"result":{"ok":true}}
 ```
 
 #### `cli guide`
@@ -619,7 +632,7 @@ cli call set_notify_enabled '{"enabled":false}'       # → { "ok": true }
 
 ## 5. 底层方法表（`cli methods` 的真实内容）
 
-`cli call <方法> '<参数JSON>'` 能调的全部方法，共 35 个（`app/src-tauri/src/ctl.rs` 的 `METHODS`）：
+`cli call <方法> '<参数JSON>'` 能调的全部方法，共 36 个（`app/src-tauri/src/ctl.rs` 的 `METHODS`）：
 
 | 方法 | 说明 | 参数格式 |
 |---|---|---|
@@ -647,10 +660,11 @@ cli call set_notify_enabled '{"enabled":false}'       # → { "ok": true }
 | `tunnel_stop` | 暂停发布 | `{id}` |
 | `tunnel_restart` | 立刻重连 | `{id}` |
 | `get_logs` | 读隧道的日志尾部 | `{id, lines?}` |
-| `save_server` | 新增/编辑云端服务器（不填 id 就是新增） | `{id?, name, host, sshPort, user, keyPath?}` |
+| `save_server` | 新增/编辑云端服务器（不填 id 就是新增） | `{id?, name, host, sshPort, user, keyPath?, vhostDir?}` |
 | `delete_server` | 删除云端服务器（有隧道在用会拒绝） | `{id}` |
 | `setup_passwordless` | 用密码登录一次，自动配好免密（密码不落盘） | `{serverId, password}` |
-| `hash_password` | 在服务器上生成访问密码的哈希（apr1，给 nginx 用） | `{serverId, password}` |
+| `test_server` | 测试连接：真连一次这台服务器的 SSH（界面服务器页「测试连接」、agent 都能用；最长 15 秒） | `{serverId}`（也认 `id`） |
+| `hash_password` | 生成访问密码的哈希（bcrypt，**本机算**，给 nginx 用） | `{serverId, password}` |
 | `get_nginx_snippet` | 生成某条隧道的 nginx 配置片段 | `{id}` |
 | `check_tunnel_access` | SSH 到云端读配置，核对实际生效的访问保护 | `{id}` |
 | `get_notify_enabled` | 掉线通知开着吗 | `{}` |
@@ -666,7 +680,8 @@ cli call set_notify_enabled '{"enabled":false}'       # → { "ok": true }
 | `ping` | `{"pong": true}` |
 | `save_service` / `add_tunnel` / `save_server` | `{"id": "..."}` |
 | `setup_passwordless` | `{"keyPath": "...", "message": "..."}` |
-| `hash_password` | `{"hash": "$apr1$..."}` |
+| `test_server` | `{"message": "连接成功，用时 0.4 秒"}`；失败是人话错误（超时 / 登录被拒 / 地址解析不了 / 密钥文件用不了等） |
+| `hash_password` | `{"hash": "$2y$12$..."}` |
 | `get_nginx_snippet` | `{"snippet": "...", "acmeExempt": "..."/null, "preview": [...], "htpasswd": .../"...", "steps": [...]}` |
 | `check_tunnel_access` | `{"confFound": true, "passwordOn": true, "ipOn": false, "allowIps": [], "htpasswdExists": true}` |
 | `get_service_logs` / `get_logs` | `{"text": "..."}` |
@@ -679,6 +694,7 @@ cli call set_notify_enabled '{"enabled":false}'       # → { "ok": true }
 | `get_data_dir` | `{"path": "..."}` |
 
 > 这两个只是界面用的 Tauri 命令，**不在方法表里**：`open_data_dir`（打开配置文件夹）、`test_notification`（试弹通知）。
+> 上面这些返回值是 ctl 层原始结果；`cli call --json` 会在外面套一层 `{"ok": true, "result": ...}`（失败前者是 `{"ok": false, "error": "..."}`）。
 > `get_service_logs` / `get_logs` 的 `lines` 不传时默认 200。
 > `add_tunnel` / `update_tunnel` 的 `access` 是**数组**：可同时放 `"password"` 和 `"ip"`（两个都放 = 两个条件都要满足），空数组 `[]` = 无保护。
 
@@ -720,12 +736,12 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 
 ## 6. 离线行为（应用没在跑时）
 
-判断方法：`cli app status --json` → `{"running": false}`。
+判断方法：`cli app status --json` → `{"ok":true,"result":{"running":false,"offline":true,...}}`，退出码 3。
 
 | 命令 | 能用吗 | 结果 |
 |---|---|---|
-| `status` / `services` / `tunnels` / `servers` | ✅ | 直接读 `%APPDATA%\Shangxian\config.json`；所有状态字段 = `"unknown"`；`app.running = false`、`pid = null`；退出码 0 |
-| `app status` | ✅ | 读 `ctl.json` 并试连一次，输出 `{"running": false}`；退出码 0 |
+| `status` / `services` / `tunnels` / `servers` | ✅ | 直接读配置文件夹里的 `config.json`；所有状态字段 = `"unknown"`；`result.app.running = false`、`pid = null`；退出码 0 |
+| `app status` | ✅ | 读 `ctl.json` 并试连一次，输出 `{"ok":true,"result":{"running":false,"offline":true,...}}`；**退出码 3** |
 | `guide` / `--help` / `--version` | ✅ | 纯本地文本 |
 | `ports` / `logs` / `nginx` / `methods` / `call` | ❌ | 报错退出码 1 |
 | `service *` / `tunnel *` / `server *` | ❌ | 报错退出码 1 |
@@ -768,7 +784,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
   "port": 58601,
   "token": "8222253e...b180",
   "pid": 1283452,
-  "appVersion": "0.1.0"
+  "appVersion": "0.5.0"
 }
 ```
 
@@ -817,11 +833,12 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 
 | 内容 | 路径 |
 |---|---|
-| 数据目录 | `%APPDATA%\Shangxian`（`APPDATA` 取不到时是 `./data`） |
+| 数据目录 | 老安装 `%APPDATA%\Shangxian`（存在就继续用）；新安装 `%LOCALAPPDATA%\Shangxian`；两个环境变量都没有时直接报错（不会回退到相对目录）。实际路径以 `cli call get_data_dir` / 设置页「打开」为准 |
 | 配置 | `<数据目录>\config.json`（原子写入：临时文件 + 改名） |
-| 老版本备份 | `<数据目录>\config.json.v3.bak`（v3→v4 迁移时自动生成，只生成一次） |
+| 读坏留底 | `<数据目录>\config.json.bad`；读坏期间应用不自动保存（防拿空配置覆盖）；原文件会从 `config.json` 移走 |
+| 老版本备份 | `<数据目录>\config.json.v3.bak`、`config.json.v4.bak`（迁移时自动生成，只生成一次） |
 | 密钥 | `<数据目录>\keys\<服务器id>_ed25519`（+ `.pub`） |
-| 日志 | `<数据目录>\logs\`：隧道 `<隧道名>.ssh.log`，本机服务 `service-<服务名>.log` |
+| 日志 | `<数据目录>\logs\`：隧道 `<隧道id>-<8位代码>.ssh.log`（超 5MB 轮转，留 `.1`/`.2`），本机服务 `service-<服务id>.log`，降级用的 `app.log`；按名字命名的旧日志不再被读取 |
 | 通行证 | `<数据目录>\ctl.json`（应用运行时才有） |
 
 ### config.json（`core/src/config.rs`，JSON 用 camelCase）
@@ -846,6 +863,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 | `sshPort` | number | SSH 端口，缺省 22 |
 | `user` | string | 登录用户名 |
 | `keyPath` | string / null | 私钥路径；`null` = 用系统默认密钥 |
+| `vhostDir` | string / null | 面板放站点的目录；`null`/空 = 按环境变量 `SHANGXIAN_HTPASSWD_DIR`、再默认 `/xp/panel/vhost` 找。站点配置在 `<目录>/nginx/<域名>.conf`，密码文件在 `<目录>/<域名>.htpasswd` |
 
 `services[]`（LocalService）：
 
@@ -875,7 +893,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 | `keyPath` | string / null | 覆盖服务器的密钥；`null` = 继承服务器 |
 | `access` | array | 可同时含 `"password"` 和 `"ip"`（两个都含 = 两个条件都要满足）；`[]` = 无保护 |
 | `accessUser` | string / null | 访问用户名 |
-| `accessHash` | string / null | apr1 哈希；明文密码只显示一次，不落盘 |
+| `accessHash` | string / null | 访问密码的 bcrypt 哈希（`$2y$12$…`，本机算）；明文密码只显示一次，不落盘 |
 | `accessDetail` | string / null | 访问保护细节（IP 白名单，逗号分隔） |
 | `enabled` | bool | 是否正在发布；`false` = 已暂停 |
 
@@ -988,14 +1006,14 @@ cli tunnel check <隧道id> --json   # 核对云端实际生效的保护
 方式 B（推荐给 agent / 不想让密码进命令行）：
 
 ```bash
-# 1. 在服务器上算哈希（密码走 stdin，不进命令行）
+# 1. 在本机算哈希（密码走 stdin，不进命令行；不碰服务器）
 echo '新密码' | cli server hash-password <服务器id>
-# → $apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy
+# → $2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 
 # 2. 用 cli call 直接把哈希写进隧道（先取当前 name/remotePort）
 cli tunnels --json
-cli call update_tunnel '{"id":"<隧道id>","name":"comfyui 发布","remotePort":13000,"access":["password"],"accessUser":"me","accessHash":"$apr1$xxxxxxxx$yyyyyyyyyyyyyyyyyyyyyy"}'
-# → {"ok": true}
+cli call update_tunnel '{"id":"<隧道id>","name":"comfyui 发布","remotePort":13000,"access":["password"],"accessUser":"me","accessHash":"$2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"}' --json
+# → {"ok": true, "result": {"ok": true}}
 # 密码 + 白名单一起要："access":["password","ip"]，再带 "accessDetail":"1.2.3.4,5.6.7.8"
 
 # 3. 云端配置重新贴一遍（关键：不重贴，旧密码还有效）
@@ -1037,8 +1055,8 @@ cli tunnel add --service <服务id> --server <新服务器id> --remote-port 1300
 cli tunnels --json
 cli nginx <新隧道id>      # 新服务器上的 nginx 也要贴
 
-# 4. 确认没问题后，删掉老隧道（老服务器上占的端口随连接断开释放）
-cli tunnel remove <老隧道id>
+# 4. 确认没问题后，删掉老隧道（老服务器上占的端口随连接断开释放；删除要确认）
+cli tunnel remove <老隧道id> --yes
 ```
 
 ⚠️ 涉及 pi-web 的隧道**任何情况下都不要动**。
@@ -1046,7 +1064,7 @@ cli tunnel remove <老隧道id>
 ### 配方 6：应用没在跑
 
 ```bash
-cli app status --json          # {"running": false}
+cli app status --json          # → {"ok":true,"result":{"running":false,"offline":true,...}}，退出码 3
 cli app start                  # 在 cli.exe 同目录找 app.exe / 上线助手.exe 拉起来
 cli app status --json          # 等它 ready（app start 内部最多等 30 秒）
 cli status --json              # 现在能拿到实时状态了
@@ -1060,16 +1078,24 @@ cli status --json              # 现在能拿到实时状态了
 
 | 情况 | 人类输出 | `--json` 输出 | 退出码 |
 |---|---|---|---|
-| 成功（只读） | 中文表格 / 原文 | 结果本身 | 0 |
+| 成功（只读：status/services/tunnels/servers/ports/logs/nginx/methods/guide） | 中文表格 / 原文 | `{"ok": true, "result": <结果>}` | 0 |
 | 成功（写操作） | `✓ ...` | `{"ok": true, "result": <结果>}` | 0 |
-| 成功（`cli call`） | — | 结果本身（`--json` 无效） | 0 |
-| 成功（`server hash-password`） | 哈希 | `{"hash": "..."}`（无 ok 包装） | 0 |
-| 业务失败（方法不存在、拒绝删除、端口冲突…） | `✗ 人话`（stderr） | `{"ok": false, "error": "人话"}` | 1 |
+| 成功（`cli call`） | 结果按人话打印 | `{"ok": true, "result": <结果>}` | 0 |
+| 成功（`server hash-password`） | 哈希 | `{"ok": true, "result": {"hash": "..."}}` | 0 |
+| 交互确认里选「不」 | `已取消，什么都没做。` | `{"ok": true, "result": {"cancelled": true}}` | 0 |
+| `app status` 发现应用没在跑 | `✗ 应用没在跑（offline）...` | `{"ok": true, "result": {"running": false, "offline": true}}` | **3** |
+| 业务失败（方法不存在、拒绝删除、端口冲突、需要确认但非交互…） | `✗ 人话`（stderr） | `{"ok": false, "error": "人话"}` | 1 |
 | 参数 JSON 不是合法 JSON | `✗ 参数不是合法 JSON：...` | `{"ok": false, "error": "..."}` | 1 |
-| 命令拼错 / 缺必填参数 | clap 的英文错误 | — | 2 |
+| 命令拼错 / 缺必填参数 | clap 错误 + 一句中文下一步提示 | — | 2 |
 | `--help` / `--version` | 帮助 / 版本 | — | 0 |
 
 失败时 JSON 的键顺序是字母序：`error` 在前、`ok` 在后（`serde_json` 默认行为）。
+
+危险操作的确认策略（`tunnel stop` / `tunnel remove` / `service remove` / `server remove`）：
+
+- 有 `--yes`：直接做；
+- 交互终端（能敲键盘）：先把要动哪个对象写清楚，再问 `y/N`（回车 = 什么都不做）；
+- 非交互（管道 / 脚本 / agent）：直接拒绝、报错退出码 1，并提示加 `--yes`。
 
 ---
 
@@ -1079,22 +1105,28 @@ cli status --json              # 现在能拿到实时状态了
 |---|---|---|
 | 1 | **pi-web 红线** | 本机 pi-web 服务 + 它的隧道是用户正在用的通道。任何时候不暂停、不重启、不删除 |
 | 2 | `tunnel add --access` 默认 `none` | 界面向导默认 `password`，命令行默认**无保护**。agent 建隧道必须显式传 `--access password` 或 `--access ip`（可重复/逗号分隔，两个都传 = 两个条件都要满足） |
-| 3 | `hash-password` 依赖服务器有 `openssl` | 实测本地靶机（最小化 sshd 容器）没有，报 `openssl: command not found`。需要哈希的操作会跟着失败 |
-| 4 | `tunnel add --access-password` 是「先算哈希再建隧道」 | 服务器连不上或没 openssl → **整条命令失败**；界面向导允许先建隧道后补密码，两者行为不同 |
+| 3 | `hash-password` 在本机算 | 用 bcrypt（`$2y$12$…`），**不连服务器、不需要服务器装任何东西**；只要服务器 id 存在于配置里就能算。密码超过 72 字节会被拒绝 |
+| 4 | `tunnel add/edit --access-password` 也是本机算哈希 | 不依赖服务器；但密码会短暂出现在本机命令行，介意就用配方 3 的方式 B。`--access` 写错、`--access-password` 配不上 `--access password` 都会直接报错（不会静默丢掉保护） |
 | 5 | `tunnel edit` 不能换服务/服务器 | 想换服务器用配方 5：先 add 新、验证、再 remove 旧 |
 | 6 | `logs <不存在的id>` | 会直接报错「没找到隧道/本机服务「xxx」」并退出码 1（2026-10-11 已修） |
-| 7 | `--kind` 只认 `service` | 其他任何值都按隧道日志处理 |
-| 8 | `watch`/`autostart` 参数形态不一致 | `service add` 是开关（不带值）；`service edit` 要写 `true`/`false` |
-| 9 | 密码不要进命令行 | `server setup-key`、`server hash-password` 走 stdin；`tunnel edit --access-password` 会短暂出现在本机进程命令行，agent 优先用配方 3 的方式 B |
+| 7 | `logs --kind` 只认 `tunnel` / `service` | 写别的值直接报错（退出码 1），不会当隧道日志处理 |
+| 8 | `watch`/`autostart` 两种写法都行 | `service add` 是开关（不带值）；`service edit` 不带值 = 开、`--watch false` = 关、不传 = 不动 |
+| 9 | 密码不要进命令行 | `server setup-key`、`server hash-password` 走 stdin（交互输也不回显）；`tunnel add/edit --access-password` 会短暂出现在本机命令行，agent 优先用配方 3 的方式 B |
 | 10 | 写命令立刻落盘 | 应用会把 config.json 原子替换；界面和 CLI 看到的是同一份状态（同一个 Guardian） |
 | 11 | 应用退出 = 隧道全停；本机服务保活 | 不要把「应用不在跑」当成「隧道照跑」。离线时状态是 `unknown`，不是 `running`。本机服务相反：应用退出/崩溃/强杀后它们继续跑，下次打开应用按端口认领（只按端口探测，不做归属核对）；想一并停掉用托盘「退出并停止全部本地服务」（停应用自己这次启动的整棵进程树 + 能按程序路径核对出归属的认领进程；核对不过的，如启动程序填成包装脚本、实际监听者是子进程，会保留并弹通知告知几个没停） |
 | 12 | 单实例 | 再开一个 app 实例只会把已有窗口显示出来，不会起第二份看护；`cli app start` 已运行时会立刻返回 |
-| 13 | debug 版 app.exe 不能单独分发 | 现在 `target/debug/app.exe` 是 dev 构建，会去连 `http://localhost:1420`。给别人装要 `npm run tauri build` 打安装包 |
+| 13 | debug 版 app.exe 不能单独分发 | 现在 `target/debug/app.exe` 是 dev 构建，会去连 `http://localhost:1420`。给别人装要在项目根目录跑 `bash build-release.sh`（先编 cli 再打包，只出 NSIS `.exe`，不出 `.msi`）；不要在 `app` 目录单独 `npm run tauri build`（缺 sidecar 会失败） |
 | 14 | 安装版主程序名 | `tauri.conf.json` 的 `productName` 是 `Shangxian`，安装后 exe 可能叫 `Shangxian.exe`；`cli app start` 已同时找 `app.exe` / `Shangxian.exe` / `上线助手.exe`（2026-10-11 已加），三个都不在就请用户手动打开 |
 | 15 | 云端端口两台电脑共享 | 应用只能发现本配置内的端口冲突；另一台电脑占用的云端端口会以 `remote port forwarding failed` 形式出现，不会提前拦。跨电脑别用同一端口 |
 | 16 | nginx 是人工步骤 | 应用只生成片段，不自动下发、不自动 reload。改端口/改访问保护后必须提醒用户重新贴 |
 | 17 | 掉线通知 | 隧道持续异常超过 3 分钟才弹一次，恢复再弹一次；用户暂停的不报。可在设置页关（`set_notify_enabled`） |
 | 18 | `tunnel check` 读的是云端实际状态 | 应用里的设置不代表云端已生效。改完保护/贴完云端配置后用 `cli tunnel check <隧道id> --json` 核对（`confFound` / `passwordOn` / `ipOn` / `allowIps` / `htpasswdExists`），对不上就重新贴配置 |
+| 19 | 站点目录 `vhostDir` | 密码文件/站点配置目录的解析顺序：服务器 `vhostDir` → 环境变量 `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`。站点配置在 `<目录>/nginx/<域名>.conf`，密码文件在 `<目录>/<域名>.htpasswd`；「检查云端」也按这个目录找 |
+| 20 | CLI 改站点目录（原坑已修复） | 直接用 `cli server add/edit --vhost-dir <目录>`：edit 不写 = 保留原来的站点目录，写 `--vhost-dir ""` = 清空；不用再 `cli call save_server` 带全字段 |
+| 21 | 配置读坏不留空转 | 应用读坏时把原文件留底成 `config.json.bad`、弹红条，并**禁止自动保存**（防空配置覆盖）；恢复好再重开应用 |
+| 22 | 隧道参数变会自动重建 | 改服务器地址/SSH 端口/账号/密钥、改本机端口、改云端端口，应用都会停掉旧连接按新参数重建；连接失败的人话原因会写进 `reason` 并显示在卡片上 |
+| 23 | 看护/开机自启必须先填启动程序 | 只监控的服务（`launchExe` 为空）开不了看护/自启，应用会拒绝。开机自启先认领已在跑的端口（约 13 秒宽限），不重复启动 |
+| 24 | 日志与旧文件 | 隧道日志按 id 命名且 5MB 轮转保留 2 份；服务日志按 id 命名。按名字命名的旧日志、旧轮转文件不再被界面/`cli logs` 读取 |
 
 ---
 
@@ -1111,6 +1143,14 @@ cli status --json              # 现在能拿到实时状态了
 2. 隧道暂停后别人就访问不了了；不确定要不要停就先问。
 3. 删除本机服务/服务器前，先看它有没有被隧道引用（有引用时应用会拒绝并告诉你）。
 
+## 危险操作（删除 / 暂停）要确认
+- 交互终端（人敲命令）：先打印要动哪个对象，再问你 y/N；回车 = 什么都不做。
+- 非交互（管道 / 脚本 / AI agent）：必须显式加 --yes，否则拒绝执行并报错。
+      cli tunnel stop <隧道id> --yes
+      cli tunnel remove <隧道id> --yes
+      cli service remove <服务id> --yes
+      cli server remove <服务器id> --yes
+
 ## 最常用的命令
     cli status --json                       # 一次看全：应用 + 服务 + 隧道 + 服务器
     cli services --json                     # 本机服务清单（id、端口、状态、启动方式）
@@ -1118,25 +1158,32 @@ cli status --json              # 现在能拿到实时状态了
     cli servers --json                      # 云端服务器清单
     cli ports --json                        # 本机正在监听的端口（带进程名和程序路径）
     cli tunnel start <隧道id>               # 开始发布
-    cli tunnel stop <隧道id>                # 暂停发布
+    cli tunnel stop <隧道id>                # 暂停发布（要确认；非交互加 --yes）
     cli service start <服务id>              # 拉起本机服务（用它登记的启动方式）
     cli service stop <服务id>               # 停止（不是应用启动的进程会先拦一下；配了启动方式才加 --force 真停，只监控的服务会被拒绝）
-    cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志）
+    cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志，别的值报错）
     cli nginx <隧道id>                      # 生成要贴到云端面板的 nginx 配置片段
     cli tunnel check <隧道id>               # 去云端看实际开着的访问保护（只读，不改服务器）
 
 ## 配置类
     cli service add --name 我的网站 --port 8188 --exe C:\path\python.exe --args "main.py" --watch
     cli service edit <服务id> --port 8189 --watch true
+    cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开）
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
     cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两道门同时开
+    cli tunnel edit <隧道id> --access password --access-password 新密码   # 换密码
     cli tunnel edit <隧道id> --access none   # 取消访问保护（不传 --access = 保持原样）
     cli server add --name 香港-1 --host api.example.com --user user
+    cli server add --name 宝塔机 --host api.example.com --user root --vhost-dir /www/server/panel/vhost   # 站点目录：密码文件/站点配置放哪
+    cli server edit <服务器id> --vhost-dir /www/server/panel/vhost   # 不写 = 保留原来的站点目录，不会被清掉
     echo 服务器密码 | cli server setup-key <服务器id>     # 用密码登录一次，自动配好免密
+- --access 只认 password / ip / none，拼错直接报错（不会悄悄变成「无保护」）；--access= 这种空值也直接报错，要取消保护写 --access none。
+- --access-password 必须配 --access password，--access-ips 必须配 --access ip，配不上会报错。
+- 每次改完都会回显最终保护状态，比如「访问保护：密码 + 白名单（只允许指定 IP），已生效」。
 
 ## 应用没在跑怎么办
-    cli app status        # 看它在不在
+    cli app status        # 看它在不在；没在跑时退出码 3，JSON 里 offline: true
     cli app start         # 叫起来（静默进托盘）
 只读命令（status/services/tunnels/servers）在没有应用时也能用——直接读配置文件，
 但状态字段会是 unknown；要改东西必须先有应用在跑。
@@ -1146,7 +1193,12 @@ cli status --json              # 现在能拿到实时状态了
     cli call <方法> '{"参数":...}'    # 直接调（万能口）
 
 ## 输出约定
-- 默认中文人话；加 `--json` 输出机器格式（agent 一律加）。
-- 失败时 `--json` 会输出 {"ok": false, "error": "人话原因"}，退出码 1。
-- 成功时 `--json` 输出 {"ok": true, "result": ...}。
+- 默认中文人话；加 `--json` 输出机器格式（agent 一律加）。读命令、写命令都是同一个信封。
+- 成功（status / services / tunnels / servers / ports / logs / nginx / methods / call / guide / 各种改配置）：
+  {"ok": true, "result": ...}
+- 失败：{"ok": false, "error": "人话原因"}
+- 退出码：0 = 成功（确认里选「不」也是 0）；1 = 出错（包括非交互下拒绝执行）；
+  2 = 命令写法不对（参数名拼错、少值）；3 = `cli app status` 发现应用没在跑（JSON 里 offline: true）。
+- `cli call` 不带 --json 时按人话打印返回值，加了才给上面的 JSON 信封。
+- 输密码（cli server setup-key）时屏幕上不回显，管道传也一样安全。
 ```

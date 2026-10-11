@@ -11,7 +11,15 @@ export type PageKey =
 interface Props {
   current: PageKey;
   onNavigate: (page: PageKey) => void;
-  counts?: { services: number; tunnels: number; servers: number };
+  counts?: {
+    services: number;
+    tunnels: number;
+    servers: number;
+    /** 正在发布的隧道数（页面传了才显示「X 条发布中」） */
+    tunnelsRunning?: number;
+    /** 掉线/出错的隧道数 */
+    tunnelsDown?: number;
+  };
 }
 
 const stroke = {
@@ -97,8 +105,15 @@ export function Sidebar({ current, onNavigate, counts }: Props) {
           onClick={() => onNavigate("tunnels")}
         >
           <IconTunnels />
-          发布隧道
-          {counts && counts.tunnels > 0 ? (
+          <span className="nav-text">
+            <span>发布隧道</span>
+            {counts && counts.tunnels > 0 && counts.tunnelsRunning != null ? (
+              <span className="nav-sub">
+                {counts.tunnelsRunning} 条发布中 · {counts.tunnelsDown ?? 0} 条掉线
+              </span>
+            ) : null}
+          </span>
+          {counts && counts.tunnels > 0 && counts.tunnelsRunning == null ? (
             <span className="nav-count">{counts.tunnels}</span>
           ) : null}
         </button>

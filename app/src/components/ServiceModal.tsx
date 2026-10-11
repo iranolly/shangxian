@@ -22,6 +22,7 @@ import {
   type LocalPort,
   type ServiceView,
 } from "../api";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   /** 传进来 = 编辑这一台；不传 = 新建 */
@@ -72,6 +73,8 @@ export function ServiceModal({
   onSaved,
   onSwitchToEdit,
 }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const [name, setName] = useState(service?.name ?? "");
   const [nameEdited, setNameEdited] = useState(Boolean(service));
   const [localPort, setLocalPort] = useState(
@@ -82,8 +85,13 @@ export function ServiceModal({
   const [launchWorkdir, setLaunchWorkdir] = useState(
     service?.launchWorkdir ?? "",
   );
-  const [watch, setWatch] = useState(service?.watch ?? false);
-  const [autostart, setAutostart] = useState(service?.autostart ?? false);
+  // 没填启动程序的只监控服务：看护 / 自启用不上，打开时就把开关归零
+  const [watch, setWatch] = useState(
+    service?.launchExe ? (service?.watch ?? false) : false,
+  );
+  const [autostart, setAutostart] = useState(
+    service?.launchExe ? (service?.autostart ?? false) : false,
+  );
   const [note, setNote] = useState(service?.note ?? "");
   const [ports, setPorts] = useState<LocalPort[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -281,6 +289,7 @@ export function ServiceModal({
   }, [launchExe, launchArgs]);
 
   const sensitive = warnings.some((w) => w.code === "sensitiveArgs");
+  const noLaunch = !launchExe.trim();
 
   const save = async () => {
     setError("");
@@ -323,7 +332,7 @@ export function ServiceModal({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" style={{ width: 620 }}>
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 620 }}>
         <div className="modal-head">
           <h2 className="modal-title">
             {service ? `编辑本机服务 · ${service.name}` : "添加本机服务"}
@@ -480,6 +489,11 @@ export function ServiceModal({
                 launchExeRef.current = e.target.value;
                 setLaunchExe(e.target.value);
                 unmark("launchExe");
+                // 启动程序被清空：看护 / 自启跟着关掉，别存出一个用不上的组合
+                if (!e.target.value.trim()) {
+                  setWatch(false);
+                  setAutostart(false);
+                }
               }}
             />
             {!launchExe.trim() && (
@@ -540,10 +554,14 @@ export function ServiceModal({
           <div className="field-row">
             <div className="field">
               <label className="field-label">看护</label>
-              <label className="switch">
+              <label
+                className="switch"
+                title={noLaunch ? "没填启动程序，用不了" : undefined}
+              >
                 <input
                   type="checkbox"
                   checked={watch}
+                  disabled={noLaunch}
                   onChange={(e) => setWatch(e.target.checked)}
                 />
                 程序掉了自动拉起来
@@ -551,16 +569,28 @@ export function ServiceModal({
             </div>
             <div className="field">
               <label className="field-label">开机自启</label>
-              <label className="switch">
+              <label
+                className="switch"
+                title={noLaunch ? "没填启动程序，用不了" : undefined}
+              >
                 <input
                   type="checkbox"
                   checked={autostart}
+                  disabled={noLaunch}
                   onChange={(e) => setAutostart(e.target.checked)}
                 />
-                开机后自动帮我跑起来
+                应用启动后帮我跑起来
               </label>
+              <p className="field-hint">
+                还要去「设置」页打开「开机自动启动」；两个都开，开机后才会自动把这条服务跑起来。
+              </p>
             </div>
           </div>
+          {noLaunch && (
+            <p className="hint-danger">
+              没填启动程序，只能看状态：「看护」和「开机自启」现在用不上；填上上面的启动程序就能开。
+            </p>
+          )}
 
           <div className="field">
             <label className="field-label">备注（可留空）</label>

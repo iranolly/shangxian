@@ -57,7 +57,7 @@ export function protectionSummary(t: TunnelView): {
 }
 
 /** 云端实际保护的说法（云端检查结果里用）。 */
-function cloudLabel(c: AccessCheck): string {
+export function cloudLabel(c: AccessCheck): string {
   if (c.passwordOn && c.ipOn) return "密码 + IP 白名单";
   if (c.passwordOn) return "要密码";
   if (c.ipOn) return `仅白名单 IP（${c.allowIps.length} 个）`;
@@ -126,10 +126,14 @@ export function ProtectionStatus({ tunnel }: { tunnel: TunnelView }) {
   };
 
   const result = state?.phase === "done" ? cloudCheck(tunnel, state.check) : null;
+  // 绿色只在「检查云端」确认对得上之后；之前一律黄色「待核对」
+  const verified = Boolean(result && result.tone === "ok");
+  const chipTone = verified && summary.tone === "ok" ? "ok" : "warn";
+  const chipLabel = verified ? summary.label : `${summary.label} · 待核对`;
 
   return (
     <div className="protect-row">
-      <span className={`chip ${summary.tone}`}>{summary.label}</span>
+      <span className={`chip ${chipTone}`}>{chipLabel}</span>
       <button
         className="link-btn"
         disabled={state?.phase === "loading"}

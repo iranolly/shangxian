@@ -27,6 +27,9 @@ const PROBE_EVERY: Duration = Duration::from_secs(2);
 const STARTUP_GRACE: Duration = Duration::from_secs(15);
 /// 连续失败这么多次就停下（不再自动重试）
 const MAX_FAILS: u32 = 5;
+/// 认领窗口：应用刚启动时端口还没在听，可能是服务正在启动。
+/// 这段时间里先等着、接着探，探到就认领，别让 autostart 再拉一个。
+const CLAIM_RETRY_WINDOW: Duration = Duration::from_secs(8);
 /// 重试退避：2 秒 → 30 秒
 const BACKOFF_BASE: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
@@ -73,12 +76,23 @@ pub struct LocalRunner {
     retry_at: Option<Instant>,
     reason: Option<String>,
     log_path: PathBuf,
+    log_dir: PathBuf,
+    /// 日志文件名用的稳定标识（服务 id）；空 = 没传，用本机端口兜底。
+    /// 两种都跟服务名无关，改名不换日志文件。
+    log_key: String,
+    /// 认领窗口截止时间（见 CLAIM_RETRY_WINDOW）。
+    claim_deadline: Option<Instant>,
+    /// 本次启动的「假死」是否已经处理过，避免每轮 poll 重复报警/连环重启。
+    hang_handled: bool,
 }
 
 impl LocalRunner {
     pub fn new(spec: LocalSpec, log_dir: &Path) -> Self {
         let _ = std::fs::create_dir_all(log_dir);
-        let log_path = log_dir.join(format!("service-{}.log", safe_name(&spec.name)));
+        // 默认用本机端口当稳定标识（guardian 里端口本来就唯一）；
+        // guardian 拿到服务 id 后可以再 set_id 换成 id。
+        let log_key = format!("port-{}", spec.local_port);
+        let log_path = log_path_for(log_dir, &log_key);
         Self {
             spec,
             child: None,
@@ -93,6 +107,10 @@ impl LocalRunner {
             retry_at: None,
             reason: None,
             log_path,
+            log_dir: log_dir.to_path_buf(),
+            log_key,
+            claim_deadline: None,
+            hang_handled: false,
         }
     }
 
@@ -102,6 +120,17 @@ impl LocalRunner {
 
     pub fn set_spec(&mut self, spec: LocalSpec) {
         self.spec = spec;
+    }
+
+    /// 指定服务 id：日志文件按 id 命名。创建后立刻调用；
+    /// 之后改名、换端口都不换日志文件。
+    pub fn set_id(&mut self, id: impl Into<String>) {
+        let id = id.into();
+        if id.is_empty() {
+            return;
+        }
+        self.log_key = id;
+        self.log_path = log_path_for(&self.log_dir, &self.log_key);
     }
 
     pub fn phase(&self) -> &Phase {
@@ -155,6 +184,8 @@ impl LocalRunner {
         self.retry_at = None;
         self.reason = None;
         self.phase = Phase::Starting;
+        self.claim_deadline = None; // 用户明确要启动，不再等认领
+        self.hang_handled = false;
         if self.child.is_none() {
             self.retry_at = Some(Instant::now()); // 下一轮 poll 立刻拉起
         }
@@ -168,12 +199,17 @@ impl LocalRunner {
         self.phase = Phase::Stopped;
         self.retry_at = None;
         self.reason = None;
+        self.claim_deadline = None; // 用户停了就别再认领
+        self.hang_handled = false;
         self.log_line("[服务] 已按你的要求停止");
     }
 
     /// 开机自启：由应用启动时统一触发。
+    /// 认领窗口还开着的话要留着——先等它启动完，别抢着再拉一个。
     pub fn start_for_autostart(&mut self) {
+        let claim_deadline = self.claim_deadline;
         self.start_now();
+        self.claim_deadline = claim_deadline;
     }
 
     /// 应用启动后的认领：端口已经在监听、本会话又没有自己的子进程时，把它认成
@@ -185,9 +221,22 @@ impl LocalRunner {
         if self.child.is_some() {
             return false; // 本会话自己起的，不需要认领
         }
+        self.last_probe = Some(Instant::now());
         if !probe(self.spec.local_port) {
+            // 端口还没在听：可能服务正在启动。开一个认领窗口，
+            // 窗口里由 poll() 接着探；探到就认领，避免 autostart 再拉一个。
+            if self.claim_deadline.is_none() {
+                self.claim_deadline = Some(Instant::now() + CLAIM_RETRY_WINDOW);
+                self.log_line("[服务] 端口还没在听，等它几秒再认领");
+            }
             return false;
         }
+        self.claim_ok();
+        true
+    }
+
+    /// 认领成功：把它当成「在跑」，看护继续生效。
+    fn claim_ok(&mut self) {
         self.listening = true;
         self.phase = Phase::Running;
         self.user_stopped = false;
@@ -195,8 +244,8 @@ impl LocalRunner {
         self.reason = None;
         self.retry_at = None;
         self.last_probe = Some(Instant::now());
+        self.claim_deadline = None;
         self.log_line("[服务] 端口已经在监听，已认领（不会重复启动）");
-        true
     }
 
     /// 周期调用：推进状态机。
@@ -220,7 +269,34 @@ impl LocalRunner {
             return;
         }
 
+        // 0.5) 认领窗口：应用刚启动时端口还没在听，可能是服务正在启动。
+        // 窗口里只探测、不抢跑；探到就认领，窗口过了才走正常启动。
+        if self.child.is_none() {
+            if let Some(deadline) = self.claim_deadline {
+                let due = self
+                    .last_probe
+                    .map(|t| t.elapsed() >= PROBE_EVERY)
+                    .unwrap_or(true);
+                if due {
+                    self.last_probe = Some(Instant::now());
+                    if probe(self.spec.local_port) {
+                        self.claim_ok();
+                        return;
+                    }
+                }
+                if Instant::now() < deadline {
+                    if !self.user_stopped || matches!(self.phase, Phase::Starting) {
+                        self.phase = Phase::Starting;
+                    }
+                    return; // 还在窗口里：先不启动
+                }
+                self.claim_deadline = None;
+                self.log_line("[服务] 认领等待结束，端口一直没在听");
+            }
+        }
+
         // 1) 有子进程：看它还在不在，顺手探测端口
+        let mut hang_now = false;
         if let Some(child) = self.child.as_mut() {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -280,11 +356,25 @@ impl LocalRunner {
                     if self.listening {
                         self.fail_streak = 0;
                         self.reason = None;
+                        self.hang_handled = false;
+                    } else {
+                        // 端口不通，而且过了启动宽限期：进程活着却不干活（假死）。
+                        let hung = self
+                            .started_at
+                            .map(|t| t.elapsed() >= STARTUP_GRACE)
+                            .unwrap_or(false);
+                        if hung && !self.hang_handled {
+                            hang_now = true;
+                        }
                     }
                 }
                 Err(err) => {
                     self.reason = Some(format!("查看进程状态失败：{err}"));
                 }
+            }
+            if hang_now {
+                self.hang_handled = true;
+                self.handle_hang();
             }
             return;
         }
@@ -414,9 +504,44 @@ impl LocalRunner {
         self.last_probe = None;
         self.listening = false;
         self.phase = Phase::Starting;
+        self.claim_deadline = None;
+        self.hang_handled = false;
+        self.reason = None;
         self.child = Some(child);
         self.job = Some(job);
         Ok(pid)
+    }
+
+    /// 假死处理：进程活着但端口一直不通。
+    /// - 勾了看护：算一次失败，先停掉它再按退避重启；失败到上限就停下报信。
+    /// - 没勾看护：只报警（写 reason + 日志），不自动动它。
+    fn handle_hang(&mut self) {
+        self.fail_streak += 1;
+        let secs = self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+        self.log_line(&format!(
+            "[看护] 进程活着但端口一直不通（假死，已 {} 秒），连续第 {} 次",
+            secs, self.fail_streak
+        ));
+
+        if self.spec.watch && !self.user_stopped {
+            self.kill_child();
+            self.listening = false;
+            if self.fail_streak >= MAX_FAILS {
+                self.phase = Phase::Failed;
+                self.reason = Some("连续假死，已经停止自动重试（你可以点启动再试一次）".into());
+                self.log_line("[看护] 连续假死到上限，停止自动重试");
+            } else {
+                let wait = self.backoff;
+                self.retry_at = Some(Instant::now() + wait);
+                self.phase = Phase::Starting;
+                self.log_line(&format!("[看护] 假死，先停掉它，{} 秒后重启", wait.as_secs()));
+                self.backoff = std::cmp::min(self.backoff * 2, BACKOFF_MAX);
+            }
+        } else {
+            // 看护没开：报警，但不自动动用户/我们起的进程
+            self.phase = Phase::NotListening;
+            self.reason = Some("进程活着但端口不通（假死）；看护没开，可以点启动重试".into());
+        }
     }
 
     /// 只结束我们自己启动的那个进程树。
@@ -630,6 +755,12 @@ fn quote_arg(arg: &str) -> String {
     out
 }
 
+/// runner 日志文件路径：key 用服务 id（没传就用本机端口兜底）。
+/// 跟服务名无关，所以改名不换日志文件。
+fn log_path_for(log_dir: &Path, key: &str) -> PathBuf {
+    log_dir.join(format!("service-{}.log", safe_name(key)))
+}
+
 fn safe_name(name: &str) -> String {
     name.chars()
         .map(|c| {
@@ -825,5 +956,130 @@ mod tests {
         assert!(!r.claim_if_listening());
         assert_eq!(r.status_word(), "stopped");
         assert!(r.user_stopped, "没认领时保持“用户没启动过”的状态");
+    }
+
+    /// 测试用的“长时间不退出”的假进程。
+    fn dummy_child() -> Child {
+        Command::new("cmd.exe")
+            .args(["/C", "ping", "-n", "20", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .expect("起测试进程")
+    }
+
+    fn free_port() -> u16 {
+        let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        port
+    }
+
+    fn launchable(port: u16, watch: bool) -> LocalSpec {
+        LocalSpec {
+            name: "t".into(),
+            local_port: port,
+            launch: Some(LaunchSpec {
+                exe: "x.exe".into(),
+                args: String::new(),
+                workdir: None,
+            }),
+            watch,
+        }
+    }
+
+    #[test]
+    fn claim_window_waits_for_starting_service() {
+        let port = free_port();
+        let mut r = LocalRunner::new(launchable(port, true), &std::env::temp_dir());
+        assert!(!r.claim_if_listening(), "端口没在听，第一次认不到");
+        assert!(r.claim_deadline.is_some(), "要开认领窗口接着等");
+
+        // 服务启动完了，端口通了：窗口内下一次 poll 应该认领，而不是再拉一个
+        let listener = std::net::TcpListener::bind(("127.0.0.1", port)).unwrap();
+        r.last_probe = Some(Instant::now() - PROBE_EVERY - Duration::from_millis(1));
+        r.poll();
+        assert!(r.pid().is_none(), "认领后不能重复启动");
+        assert!(r.listening());
+        assert_eq!(r.status_word(), "running");
+        drop(listener);
+    }
+
+    #[test]
+    fn autostart_waits_out_claim_window() {
+        let port = free_port();
+        let mut r = LocalRunner::new(launchable(port, true), &std::env::temp_dir());
+        assert!(!r.claim_if_listening());
+        r.start_for_autostart();
+        assert!(r.claim_deadline.is_some(), "autostart 不能把认领窗口清掉");
+        r.last_probe = Some(Instant::now());
+        r.poll();
+        assert_eq!(r.fail_streak, 0, "认领窗口里不能抢跑启动（假 exe 也不许被执行）");
+        assert!(r.pid().is_none());
+
+        // 窗口过了才走正常启动逻辑（假 exe 会启动失败，算一次失败）
+        r.claim_deadline = Some(Instant::now() - Duration::from_millis(1));
+        r.poll();
+        assert_eq!(r.fail_streak, 1, "窗口结束后要正常尝试启动");
+    }
+
+    #[test]
+    fn hang_with_watch_restarts() {
+        let port = free_port();
+        let mut r = LocalRunner::new(launchable(port, true), &std::env::temp_dir());
+        r.user_stopped = false;
+        r.phase = Phase::Starting;
+        r.child = Some(dummy_child());
+        r.started_at = Some(Instant::now() - STARTUP_GRACE - Duration::from_secs(1));
+        r.last_probe = Some(Instant::now()); // 这一轮不探测，直接走假死判断
+        r.poll();
+        assert_eq!(r.fail_streak, 1, "假死要算一次失败");
+        assert!(r.pid().is_none(), "看护应该先停掉假死的进程");
+        assert!(r.retry_at.is_some(), "看护应该安排重启");
+        assert!(matches!(r.phase, Phase::Starting));
+    }
+
+    #[test]
+    fn hang_without_watch_only_alarms() {
+        let port = free_port();
+        let mut r = LocalRunner::new(launchable(port, false), &std::env::temp_dir());
+        r.user_stopped = false;
+        r.phase = Phase::Starting;
+        r.child = Some(dummy_child());
+        r.started_at = Some(Instant::now() - STARTUP_GRACE - Duration::from_secs(1));
+        r.last_probe = Some(Instant::now());
+        r.poll();
+        assert_eq!(r.fail_streak, 1, "假死要算一次失败");
+        assert!(r.pid().is_some(), "没勾看护不能自动杀它");
+        assert_eq!(r.status_word(), "not_listening");
+        assert!(r.reason().unwrap().contains("假死"), "至少要有报警");
+        r.kill_child(); // 清理测试进程
+    }
+
+    #[test]
+    fn log_path_does_not_follow_rename() {
+        let mut spec = launchable(65531, false);
+        spec.launch = None;
+        spec.name = "旧名字".into();
+        let mut r = LocalRunner::new(spec, &std::env::temp_dir());
+        let before = r.log_path().to_path_buf();
+
+        let mut renamed = r.spec().clone();
+        renamed.name = "新名字".into();
+        r.set_spec(renamed);
+        assert_eq!(r.log_path(), before, "改名不能换日志文件");
+
+        r.set_id("svc-abc123");
+        let id_path = r.log_path().to_path_buf();
+        assert!(
+            id_path.ends_with("service-svc-abc123.log"),
+            "有服务 id 时日志名用 id：{id_path:?}"
+        );
+        let mut renamed2 = r.spec().clone();
+        renamed2.name = "又改名".into();
+        r.set_spec(renamed2);
+        assert_eq!(r.log_path(), id_path, "按 id 命名后改名同样不换文件");
     }
 }

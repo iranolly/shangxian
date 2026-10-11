@@ -2,7 +2,7 @@
 // 规则：密码留空 = 保留原来的密码；保存成功后由页面接着打开「云端配置」作为下一步。
 // 注意：「密码是否开启」看 tunnel.access 里有没有 "password"，不用 hasPassword。
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import {
   hashPassword,
@@ -11,6 +11,7 @@ import {
   type UpdateTunnelInput,
 } from "../api";
 import { accessFlags } from "./ProtectionStatus";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   tunnel: TunnelView;
@@ -20,6 +21,8 @@ interface Props {
 }
 
 export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const flags = accessFlags(tunnel.access);
   const [wantPassword, setWantPassword] = useState(flags.password);
   const [wantIp, setWantIp] = useState(flags.ip);
@@ -33,9 +36,9 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
 
   const save = async () => {
     setError("");
-    // 只有在「服务器上还没有密码」时才必须要新密码；已设过的留空就沿用。
+    // 只有这条隧道还没设过密码时才必须要新密码；已设过的留空就沿用。
     if (wantPassword && !password.trim() && !tunnel.hasPassword) {
-      setError("这条隧道要密码才能进，但服务器上还没有密码：请填一条新密码");
+      setError("这条隧道要密码才能进，但还没设过密码：请填一条新密码");
       return;
     }
     if (wantIp && !ips.trim()) {
@@ -76,7 +79,7 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true" style={{ width: 560 }}>
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 560 }}>
         <div className="modal-head">
           <h2 className="modal-title">访问保护 · {tunnel.name}</h2>
           <p className="modal-sub">
@@ -90,11 +93,14 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
           <div className="field">
             <label className="field-label">访问保护</label>
             <div className="option-list">
-              <div
+              <label
                 className={`option ${wantPassword ? "selected" : ""}`}
-                onClick={() => setWantPassword(!wantPassword)}
               >
-                <input type="checkbox" checked={wantPassword} readOnly />
+                <input
+                  type="checkbox"
+                  checked={wantPassword}
+                  onChange={(e) => setWantPassword(e.target.checked)}
+                />
                 <div className="option-text">
                   要密码才能进（推荐）
                   <span className="option-hint">
@@ -103,19 +109,20 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
                       : "还没设密码，需要填一条新的"}
                   </span>
                 </div>
-              </div>
-              <div
-                className={`option ${wantIp ? "selected" : ""}`}
-                onClick={() => setWantIp(!wantIp)}
-              >
-                <input type="checkbox" checked={wantIp} readOnly />
+              </label>
+              <label className={`option ${wantIp ? "selected" : ""}`}>
+                <input
+                  type="checkbox"
+                  checked={wantIp}
+                  onChange={(e) => setWantIp(e.target.checked)}
+                />
                 <div className="option-text">
                   只允许指定 IP 访问
                   <span className="option-hint">
                     适合固定上网地点的场景
                   </span>
                 </div>
-              </div>
+              </label>
             </div>
             <p className="field-hint">
               两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
@@ -150,7 +157,7 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
                   placeholder={tunnel.hasPassword ? "留空就不换密码" : "必须填"}
                 />
                 <p className="field-hint">
-                  密码不会存在这台电脑上：保存时立刻在服务器上算好，只存加密结果。
+                  密码不会存在这台电脑上：保存时立刻在这台电脑上算好，只把加密结果写进服务器上的密码文件。
                   连服务器用的登录密码在「云端服务器」页，不要混用。
                 </p>
               </div>

@@ -1,8 +1,9 @@
 // 导入现有脚本：扫描旧脚本 → 预览 → 确认导入（登记的隧道先保持「已暂停」）。
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { importServices, scanImports, type ImportSuggestion } from "../api";
+import { useModalA11y } from "./useModalA11y";
 
 interface Props {
   onClose: () => void;
@@ -10,6 +11,8 @@ interface Props {
 }
 
 export function ImportModal({ onClose, onDone }: Props) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
   const [items, setItems] = useState<ImportSuggestion[] | null>(null);
   const [checked, setChecked] = useState<boolean[]>([]);
   const [busy, setBusy] = useState(false);
@@ -45,7 +48,7 @@ export function ImportModal({ onClose, onDone }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">导入现有脚本</h2>
           <p className="modal-sub">
@@ -64,14 +67,17 @@ export function ImportModal({ onClose, onDone }: Props) {
             <>
               <div className="option-list">
                 {items.map((it, i) => (
-                  <div
+                  <label
                     key={i}
                     className={`option ${checked[i] ? "selected" : ""}`}
-                    onClick={() =>
-                      setChecked((c) => c.map((v, j) => (j === i ? !v : v)))
-                    }
                   >
-                    <input type="checkbox" checked={checked[i]} readOnly />
+                    <input
+                      type="checkbox"
+                      checked={checked[i]}
+                      onChange={() =>
+                        setChecked((c) => c.map((v, j) => (j === i ? !v : v)))
+                      }
+                    />
                     <div className="option-text">
                       <div>{it.name}</div>
                       <div className="option-hint">
@@ -80,7 +86,7 @@ export function ImportModal({ onClose, onDone }: Props) {
                       </div>
                       <div className="option-hint">来源：{it.source}</div>
                     </div>
-                  </div>
+                  </label>
                 ))}
               </div>
               <p className="field-hint">
