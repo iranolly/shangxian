@@ -6,6 +6,7 @@
 - **下载安装包**：[Releases](https://github.com/iranolly/shangxian/releases)（安装版；不想装就用便携包）
 - 给人看的使用说明：[docs/使用手册.md](docs/使用手册.md)
 - 给 AI agent 看的：[docs/AI-AGENT.md](docs/AI-AGENT.md)（配 `cli.exe` 用）
+- 给 AI agent 用的 skill：[skills/shangxian/SKILL.md](skills/shangxian/SKILL.md)（Pi 用户一条命令装：`pi install git:github.com/iranolly/shangxian`；其他工具把文件夹拷进 skills 目录）
 
 ## 两个概念
 
