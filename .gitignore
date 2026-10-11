@@ -1,0 +1,23 @@
+# 构建产物（编译出来的东西都能重建，不进仓库）
+/target
+/app/node_modules
+/app/dist
+/app/src-tauri/gen
+# sidecar：构建发布包时由 build-release.sh 自动生成
+/app/src-tauri/binaries
+
+# 本地测试环境：靶机、密钥、截图、日志——个人隐私全在这里，绝不提交
+.setup/
+*.bmp
+*.log
+
+# 配置文件与密钥（真实配置在 %APPDATA%\Shangxian，不进仓库）
+config.json*
+ctl.json
+*.env
+*.pem
+*.key
+!*.pub
+
+# 助手工具的临时记录（不是项目内容）
+.pi/

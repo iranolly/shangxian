@@ -1,0 +1,321 @@
+// 与 Rust 后端的接口层。
+// 在 Tauri 窗口里走真实命令；在普通浏览器里（纯前端预览）退回演示数据。
+
+import { invoke } from "@tauri-apps/api/core";
+
+import { MOCK_SERVERS, MOCK_SERVICES, MOCK_TUNNELS } from "./mock/services";
+import type { ServiceStatus, TunnelStatus } from "./copy/status";
+
+/** 一台本机服务：这台电脑上的东西（端口 + 启动方式 + 看护开关） */
+export interface ServiceView {
+  id: string;
+  name: string;
+  localPort: number;
+  status: ServiceStatus;
+  watch: boolean;
+  autostart: boolean;
+  launchExe?: string | null;
+  launchArgs?: string | null;
+  launchWorkdir?: string | null;
+  note?: string | null;
+  /** 已经发布到几条隧道 */
+  tunnelCount: number;
+  /** 这些隧道的名字 */
+  tunnelNames: string[];
+  /** 出问题的原因（人话） */
+  reason?: string | null;
+  logPath: string;
+}
+
+/** 一条发布隧道：把某台本机服务接到某台云端服务器上 */
+export interface TunnelView {
+  id: string;
+  name: string;
+  serviceId: string;
+  serviceName: string;
+  localPort: number;
+  serverId: string;
+  remotePort: number;
+  url?: string | null;
+  status: TunnelStatus;
+  enabled: boolean;
+  reason?: string | null;
+  access?: string | null;
+  accessUser?: string | null;
+  hasPassword: boolean;
+  accessDetail?: string | null;
+  /** 本机服务在不在跑（界面要标出来） */
+  serviceOk: boolean;
+  serviceStatus: string;
+  keyPath?: string | null;
+}
+
+export interface ServerView {
+  id: string;
+  name: string;
+  host: string;
+  user: string;
+  sshPort: number;
+  keyPath?: string | null;
+}
+
+export interface Snapshot {
+  services: ServiceView[];
+  tunnels: TunnelView[];
+  servers: ServerView[];
+}
+
+export interface LocalPort {
+  port: number;
+  pid?: number | null;
+  /** 进程名（例：python.exe） */
+  process?: string | null;
+  /** 程序完整路径（添服务时自动填启动程序用） */
+  exe?: string | null;
+}
+
+export interface ImportSuggestion {
+  name: string;
+  source: string;
+  serverHost: string;
+  serverUser: string;
+  sshPort: number;
+  localPort: number;
+  remotePort: number;
+  url?: string | null;
+}
+
+export interface ServerInput {
+  id?: string | null;
+  name: string;
+  host: string;
+  sshPort: number;
+  user: string;
+  keyPath?: string | null;
+}
+
+/** 新增/编辑一台本机服务（id 为空 = 新建） */
+export interface ServiceInput {
+  id?: string | null;
+  name: string;
+  localPort: number;
+  launchExe?: string | null;
+  launchArgs?: string | null;
+  launchWorkdir?: string | null;
+  watch: boolean;
+  autostart: boolean;
+  note?: string | null;
+}
+
+/** 新建一条隧道 */
+export interface NewTunnelInput {
+  name: string;
+  serviceId: string;
+  serverId: string;
+  remotePort: number;
+  url?: string | null;
+  access: string;
+  accessUser?: string | null;
+  accessHash?: string | null;
+  accessDetail?: string | null;
+}
+
+/** 编辑一条隧道（accessHash 不填 = 不换密码） */
+export interface UpdateTunnelInput {
+  id: string;
+  name: string;
+  remotePort: number;
+  url?: string | null;
+  access: string;
+  accessUser?: string | null;
+  accessHash?: string | null;
+  accessDetail?: string | null;
+}
+
+const inTauri =
+  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+export async function getSnapshot(): Promise<Snapshot> {
+  if (!inTauri) {
+    return { services: MOCK_SERVICES, tunnels: MOCK_TUNNELS, servers: MOCK_SERVERS };
+  }
+  return await invoke<Snapshot>("get_snapshot");
+}
+
+// ---------- 本机服务 ----------
+
+/** 新增/编辑一台本机服务；返回服务 id。 */
+export async function saveService(input: ServiceInput): Promise<string> {
+  if (!inTauri) return input.id ?? "preview-service";
+  return await invoke<string>("save_service", { input });
+}
+
+export async function removeService(id: string): Promise<void> {
+  if (inTauri) await invoke("remove_service", { id });
+}
+
+export async function serviceStart(id: string): Promise<void> {
+  if (inTauri) await invoke("service_start", { id });
+}
+
+export async function serviceStop(id: string): Promise<void> {
+  if (inTauri) await invoke("service_stop", { id });
+}
+
+export async function setServiceWatch(
+  id: string,
+  watch: boolean,
+): Promise<void> {
+  if (inTauri) await invoke("set_service_watch", { id, watch });
+}
+
+export async function setServiceAutostart(
+  id: string,
+  autostart: boolean,
+): Promise<void> {
+  if (inTauri) await invoke("set_service_autostart", { id, autostart });
+}
+
+/** 本机服务自己的输出（程序日志 + 看护记录）。 */
+export async function getServiceLogs(id: string, lines = 200): Promise<string> {
+  if (!inTauri) return "（浏览器预览没有日志）";
+  return await invoke<string>("get_service_logs", { id, lines });
+}
+
+// ---------- 发布隧道 ----------
+
+/** 新建一条隧道；返回隧道 id。 */
+export async function addTunnel(input: NewTunnelInput): Promise<string> {
+  if (!inTauri) return "preview-tunnel";
+  return await invoke<string>("add_tunnel", { input });
+}
+
+export async function updateTunnel(input: UpdateTunnelInput): Promise<void> {
+  if (inTauri) await invoke("update_tunnel", { input });
+}
+
+export async function removeTunnel(id: string): Promise<void> {
+  if (inTauri) await invoke("remove_tunnel", { id });
+}
+
+/** 开始发布。 */
+export async function tunnelStart(id: string): Promise<void> {
+  if (inTauri) await invoke("tunnel_start", { id });
+}
+
+/** 暂停发布。 */
+export async function tunnelStop(id: string): Promise<void> {
+  if (inTauri) await invoke("tunnel_stop", { id });
+}
+
+/** 立刻重连。 */
+export async function tunnelRestart(id: string): Promise<void> {
+  if (inTauri) await invoke("tunnel_restart", { id });
+}
+
+/** 隧道日志（id 是隧道 id）。 */
+export async function getLogs(id: string, lines = 200): Promise<string> {
+  if (!inTauri) return "（浏览器预览没有日志）";
+  return await invoke<string>("get_logs", { id, lines });
+}
+
+// ---------- 其它 ----------
+
+export async function listLocalPorts(): Promise<LocalPort[]> {
+  if (!inTauri) {
+    return [
+      { port: 30141, pid: 4108, process: "python.exe", exe: "C:\\Python311\\python.exe" },
+      { port: 8787, pid: 8123, process: "python.exe", exe: "C:\\Python311\\python.exe" },
+      { port: 3000, pid: 9911, process: "node.exe", exe: "C:\\Program Files\\nodejs\\node.exe" },
+      { port: 8080, pid: 7520, process: "cloudflared.exe", exe: "C:\\tools\\cloudflared.exe" },
+    ];
+  }
+  return await invoke<LocalPort[]>("list_local_ports");
+}
+
+export async function scanImports(): Promise<ImportSuggestion[]> {
+  if (!inTauri) return [];
+  return await invoke<ImportSuggestion[]>("scan_imports");
+}
+
+export async function importServices(
+  items: ImportSuggestion[],
+): Promise<number> {
+  if (!inTauri) return items.length;
+  return await invoke<number>("import_services", { items });
+}
+
+export async function saveServer(input: ServerInput): Promise<string> {
+  if (!inTauri) return input.id ?? "preview-server";
+  return await invoke<string>("save_server", { input });
+}
+
+/// 用密码登录一次，让助手自动配好免密登录（密码只在内存里用一次）。
+export async function setupPasswordless(
+  serverId: string,
+  password: string,
+): Promise<string> {
+  if (!inTauri) return "（浏览器预览不会真的连服务器）";
+  return await invoke<string>("setup_passwordless", { serverId, password });
+}
+
+export async function deleteServer(id: string): Promise<void> {
+  if (inTauri) await invoke("delete_server", { id });
+}
+
+export async function hashPassword(
+  serverId: string,
+  password: string,
+): Promise<string> {
+  if (!inTauri) return `preview-hash-${serverId}-${password.length}`;
+  return await invoke<string>("hash_password", { serverId, password });
+}
+
+export interface NginxSnippet {
+  snippet: string;
+  htpasswd?: string | null;
+  steps: string[];
+}
+
+/** id 是隧道 id。 */
+export async function getNginxSnippet(id: string): Promise<NginxSnippet> {
+  if (!inTauri) {
+    return {
+      snippet: `server {\n  listen 80;\n  server_name 演示.example.com;\n  location / {\n    proxy_pass http://127.0.0.1:13041;\n  }\n}\n# 浏览器预览：这是演示用的片段（${id}）`,
+      htpasswd: null,
+      steps: ["浏览器预览模式：这里是演示内容，真实运行时会给这条隧道生成配置。"],
+    };
+  }
+  return await invoke<NginxSnippet>("get_nginx_snippet", { id });
+}
+
+export async function getAutostart(): Promise<boolean> {
+  if (!inTauri) return false;
+  return await invoke<boolean>("get_autostart");
+}
+
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (inTauri) await invoke("set_autostart", { enabled });
+}
+
+export async function getDataDir(): Promise<string> {
+  if (!inTauri) return "%APPDATA%\\Shangxian";
+  return await invoke<string>("get_data_dir");
+}
+
+export async function openDataDir(): Promise<void> {
+  if (inTauri) await invoke("open_data_dir");
+}
+
+export async function getNotifyEnabled(): Promise<boolean> {
+  if (!inTauri) return true;
+  return await invoke<boolean>("get_notify_enabled");
+}
+
+export async function setNotifyEnabled(enabled: boolean): Promise<void> {
+  if (inTauri) await invoke("set_notify_enabled", { enabled });
+}
+
+export async function testNotification(): Promise<void> {
+  if (inTauri) await invoke("test_notification");
+}

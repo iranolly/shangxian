@@ -1,0 +1,119 @@
+/* 设计令牌（对齐 DESIGN.md §4.7）
+   浅色为默认；深色跟随系统，也可用 <html data-theme="dark|light"> 手动覆盖。 */
+
+:root {
+  color-scheme: light dark;
+
+  /* 基础面 */
+  --bg: #fafafb;
+  --bg-sidebar: #f4f5f7;
+  --bg-card: #ffffff;
+  --bg-overlay: #ffffff;
+  --border: #e9eaee;
+  --border-strong: #dddfe5;
+
+  /* 文字 */
+  --text: #17181c;
+  --text-2: #62666f; /* 对比度 5.75:1 */
+  --text-3: #8b909a; /* 仅禁用/装饰，不用于要读的字 */
+
+  /* 品牌色 */
+  --accent: #4f5be8;
+  --accent-hover: #4450d8;
+  --accent-active: #3a45c4;
+  --accent-fg: #ffffff;
+  --accent-soft: #eef0fe;
+  --focus-ring: rgba(79, 91, 232, 0.4);
+
+  --row-hover: #f7f8fa;
+
+  /* 五个状态：圆点色 / 浅底 / 深字 */
+  --st-running: #22c55e;
+  --st-running-bg: #e8f8ee;
+  --st-running-fg: #166534;
+  --st-connecting: #f59e0b;
+  --st-connecting-bg: #fef6e3;
+  --st-connecting-fg: #8a5300;
+  --st-disconnected: #f97316;
+  --st-disconnected-bg: #fff0e5;
+  --st-disconnected-fg: #9a3412;
+  --st-error: #ef4444;
+  --st-error-bg: #fdecec;
+  --st-error-fg: #991b1b;
+  --st-paused: #9ca3af;
+  --st-paused-bg: #f1f2f4;
+  --st-paused-fg: #4b5563;
+
+  /* 形状与字体 */
+  --r-chip: 6px;
+  --r-control: 8px;
+  --r-card: 12px;
+  --r-modal: 16px;
+  --shadow-modal: 0 12px 32px rgba(15, 16, 18, 0.18);
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
+    "PingFang SC", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, "Sarasa Mono SC", ui-monospace,
+    monospace;
+}
+
+/* 深色：跟随系统（除非手动指定浅色） */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1012;
+    --bg-sidebar: #131417;
+    --bg-card: #18191d;
+    --bg-overlay: #202126;
+    --border: #26282e;
+    --border-strong: #33363d;
+    --text: #e8e9ec;
+    --text-2: #9ca1ab; /* 对比度 7.03:1 */
+    --text-3: #6e7480;
+    --accent: #6b78ff;
+    --accent-hover: #7d89ff;
+    --accent-active: #5a67f0;
+    --accent-fg: #0f1012;
+    --accent-soft: rgba(107, 120, 255, 0.14);
+    --focus-ring: rgba(107, 120, 255, 0.55);
+    --row-hover: #1c1d22;
+    --st-running-bg: rgba(34, 197, 94, 0.15);
+    --st-running-fg: #5ee49a;
+    --st-connecting-bg: rgba(245, 158, 11, 0.15);
+    --st-connecting-fg: #fbbf24;
+    --st-disconnected-bg: rgba(249, 115, 22, 0.15);
+    --st-disconnected-fg: #fd9a5c;
+    --st-error-bg: rgba(239, 68, 68, 0.15);
+    --st-error-fg: #fb7c7c;
+    --st-paused-bg: rgba(255, 255, 255, 0.08);
+    --st-paused-fg: #a5aab4;
+  }
+}
+
+/* 手动深色 */
+:root[data-theme="dark"] {
+  --bg: #0f1012;
+  --bg-sidebar: #131417;
+  --bg-card: #18191d;
+  --bg-overlay: #202126;
+  --border: #26282e;
+  --border-strong: #33363d;
+  --text: #e8e9ec;
+  --text-2: #9ca1ab;
+  --text-3: #6e7480;
+  --accent: #6b78ff;
+  --accent-hover: #7d89ff;
+  --accent-active: #5a67f0;
+  --accent-fg: #0f1012;
+  --accent-soft: rgba(107, 120, 255, 0.14);
+  --focus-ring: rgba(107, 120, 255, 0.55);
+  --row-hover: #1c1d22;
+  --st-running-bg: rgba(34, 197, 94, 0.15);
+  --st-running-fg: #5ee49a;
+  --st-connecting-bg: rgba(245, 158, 11, 0.15);
+  --st-connecting-fg: #fbbf24;
+  --st-disconnected-bg: rgba(249, 115, 22, 0.15);
+  --st-disconnected-fg: #fd9a5c;
+  --st-error-bg: rgba(239, 68, 68, 0.15);
+  --st-error-fg: #fb7c7c;
+  --st-paused-bg: rgba(255, 255, 255, 0.08);
+  --st-paused-fg: #a5aab4;
+}

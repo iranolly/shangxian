@@ -1,0 +1,12 @@
+[workspace]
+members = ["core", "app/src-tauri", "cli", "tools/capture"]
+resolver = "2"
+
+# 发布配置统一放在工作区根：单文件、体积优先。
+# 注意：panic=abort 与 Tauri 的 mobile profile 无关，这里只影响 release 构建。
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

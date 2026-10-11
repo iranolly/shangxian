@@ -1,0 +1,994 @@
+/* 应用外壳与组件样式（对齐 DESIGN.md §4） */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.55;
+  letter-spacing: 0;
+  overflow: hidden;
+}
+
+/* ---------- 外壳 ---------- */
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---------- 自绘标题栏 ---------- */
+
+.titlebar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  height: 36px;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.titlebar-spacer {
+  flex: 1;
+}
+
+.titlebar-btns {
+  display: flex;
+  height: 100%;
+}
+
+.tb-btn {
+  width: 46px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+
+.tb-btn svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+
+.tb-btn:hover,
+.tb-btn.hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+.tb-btn.tb-close:hover {
+  background: #e81123;
+  color: #ffffff;
+}
+
+.sidebar {
+  flex: 0 0 220px;
+  width: 220px;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  padding: 14px 10px 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 12px 18px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--r-control);
+  background: transparent;
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: default;
+  transition: background-color 120ms ease-out, color 120ms ease-out;
+}
+
+.nav-item svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.nav-item:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.nav-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.nav-item.active .nav-count {
+  color: var(--accent);
+}
+
+.sidebar-bottom {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- 主区 ---------- */
+
+.main {
+  flex: 1;
+  overflow-y: auto;
+}
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 32px 32px 48px;
+}
+
+.page-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.page-sub {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---------- 按钮 ---------- */
+
+.btn {
+  border: 1px solid transparent;
+  border-radius: var(--r-control);
+  padding: 7px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: default;
+  white-space: nowrap;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-primary:active {
+  background: var(--accent-active);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.btn-ghost:hover {
+  background: var(--row-hover);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  color: var(--text-3);
+  border-color: var(--border);
+  background: transparent;
+}
+
+.link-btn {
+  border: none;
+  background: none;
+  padding: 5px 6px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--accent);
+  cursor: default;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.icon-btn {
+  border: none;
+  background: none;
+  color: var(--text-2);
+  border-radius: var(--r-control);
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  line-height: 1;
+  cursor: default;
+}
+
+.icon-btn:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+/* ---------- 服务卡片 ---------- */
+
+.service-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 14px 20px 16px;
+}
+
+.card-row1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.service-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 8px;
+}
+
+.dot.running {
+  background: var(--st-running);
+}
+
+.dot.connecting {
+  background: var(--st-connecting);
+  animation: breathe 1600ms ease-in-out infinite;
+}
+
+.dot.disconnected {
+  background: var(--st-disconnected);
+}
+
+.dot.error {
+  background: var(--st-error);
+}
+
+.dot.paused {
+  background: transparent;
+  border: 1.5px solid var(--st-paused);
+}
+
+/* 本机服务的状态色（沿用五个状态色） */
+.dot.stopped {
+  background: transparent;
+  border: 1.5px solid var(--st-paused);
+}
+
+.dot.starting {
+  background: var(--st-connecting);
+  animation: breathe 1600ms ease-in-out infinite;
+}
+
+.dot.not_listening {
+  background: var(--st-disconnected);
+}
+
+.dot.failed {
+  background: var(--st-error);
+}
+
+.status-word {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.status-word.running {
+  color: var(--st-running-fg);
+}
+
+.status-word.connecting {
+  color: var(--st-connecting-fg);
+}
+
+.status-word.disconnected {
+  color: var(--st-disconnected-fg);
+}
+
+.status-word.error {
+  color: var(--st-error-fg);
+}
+
+.status-word.paused {
+  color: var(--st-paused-fg);
+}
+
+.status-word.stopped {
+  color: var(--st-paused-fg);
+}
+
+.status-word.starting {
+  color: var(--st-connecting-fg);
+}
+
+.status-word.not_listening {
+  color: var(--st-disconnected-fg);
+}
+
+.status-word.failed {
+  color: var(--st-error-fg);
+}
+
+.card-row2 {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.card-row2 .url {
+  color: var(--text-2);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* 修复带：坏状态卡片内、1px 分隔线下的浅色带 */
+.fix-ribbon {
+  margin: 12px -20px -16px;
+  padding: 10px 20px 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 0 0 var(--r-card) var(--r-card);
+}
+
+.fix-ribbon.disconnected {
+  background: var(--st-disconnected-bg);
+}
+
+.fix-ribbon.error {
+  background: var(--st-error-bg);
+}
+
+.fix-ribbon.not_listening {
+  background: var(--st-disconnected-bg);
+}
+
+.fix-ribbon.failed {
+  background: var(--st-error-bg);
+}
+
+.fix-ribbon.starting {
+  background: var(--st-connecting-bg);
+}
+
+.fix-text {
+  flex: 1;
+  font-size: 13px;
+}
+
+.fix-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---------- 空状态 ---------- */
+
+.empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-card);
+  padding: 64px 24px;
+  text-align: center;
+}
+
+.empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.empty-text {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+/* ---------- 占位页 ---------- */
+
+.placeholder-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* ---------- 焦点与动效 ---------- */
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot.connecting,
+  .dot.starting {
+    animation: none;
+  }
+  * {
+    transition: none !important;
+  }
+}
+
+/* ---------- 弹层 ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 50;
+}
+
+.modal {
+  width: 640px;
+  max-width: calc(100vw - 48px);
+  max-height: calc(100vh - 64px);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-modal);
+  box-shadow: var(--shadow-modal);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal-head {
+  padding: 18px 24px 0;
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.modal-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  margin: 5px 0 0;
+}
+
+.modal-body {
+  padding: 16px 24px;
+  overflow-y: auto;
+}
+
+.modal-foot {
+  padding: 14px 24px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-foot .grow {
+  flex: 1;
+}
+
+.steps {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.step-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.step-dot.active {
+  background: var(--accent);
+}
+
+.step-dot.done {
+  background: var(--accent);
+  opacity: 0.45;
+}
+
+/* ---------- 表单 ---------- */
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+}
+
+.field-hint {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 6px;
+}
+
+.input,
+.select {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  background: var(--bg-card);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.input.mono {
+  font-family: var(--font-mono);
+}
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  padding: 10px 12px;
+  background: var(--bg-card);
+  cursor: default;
+}
+
+.option:hover {
+  background: var(--row-hover);
+}
+
+.option.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.option .mono {
+  min-width: 56px;
+}
+
+.option-text {
+  flex: 1;
+  font-size: 13px;
+}
+
+.option-hint {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* ---------- 成功屏 ---------- */
+
+.success {
+  text-align: center;
+  padding: 8px 0 4px;
+}
+
+.success-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--st-running-bg);
+  color: var(--st-running-fg);
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  margin: 0 auto 12px;
+}
+
+.success-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.success-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  margin: 10px 0;
+  flex-wrap: wrap;
+}
+
+.success-url {
+  font-family: var(--font-mono);
+  font-size: 14px;
+}
+
+.secret {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  padding: 6px 10px;
+}
+
+/* ---------- 日志 ---------- */
+
+.log-view {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 420px;
+  overflow: auto;
+  color: var(--text-2);
+  margin: 0;
+}
+
+/* ---------- 服务器卡片 ---------- */
+
+.server-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.server-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.server-name {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.server-meta {
+  font-size: 12px;
+  color: var(--text-2);
+  margin-top: 3px;
+}
+
+.error-line {
+  color: var(--st-error-fg);
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+/* ---------- 卡片操作菜单 ---------- */
+
+.menu-anchor {
+  position: relative;
+  display: inline-flex;
+}
+
+.menu {
+  position: absolute;
+  right: 0;
+  top: 32px;
+  min-width: 120px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  box-shadow: var(--shadow-modal);
+  padding: 4px;
+  z-index: 20;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.menu-item:hover {
+  background: var(--row-hover);
+}
+
+.menu-item.danger {
+  color: var(--st-error-fg);
+}
+
+/* ---------- 步骤说明列表 ---------- */
+
+.steps-list {
+  margin: 0 0 12px;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.steps-list li {
+  margin: 4px 0;
+}
+
+/* ---------- 编辑弹层 / 设置页小补充 ---------- */
+
+.field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.field-row .field {
+  flex: 1;
+}
+
+.warn-line {
+  margin: -4px 0 16px;
+  padding: 8px 12px;
+  border-radius: var(--r-control);
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+  font-size: 13px;
+}
+
+.row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 访问密码页 ---------- */
+
+.chip {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.chip.ok {
+  background: var(--st-running-bg);
+  color: var(--st-running-fg);
+}
+
+.chip.warn {
+  background: var(--st-disconnected-bg);
+  color: var(--st-disconnected-fg);
+}
+
+.page-hint {
+  margin: 4px 2px 0;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ---------- 本机服务 / 发布隧道 卡片补充 ---------- */
+
+.card-row3 {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.card-foot {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.card-note {
+  margin-top: 8px;
+  display: flex;
+}
+
+/* 开关：沿用系统控件，只统一配色，不另做视觉 */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  cursor: default;
+  user-select: none;
+}
+
+.switch input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: default;
+}
+
+/* 添加本机服务：本机正在监听的端口列表 */
+.port-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  max-height: 168px;
+  overflow: auto;
+}
+
+.port-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  font-size: 13px;
+  cursor: default;
+}
+
+.port-row + .port-row {
+  border-top: 1px solid var(--border);
+}
+
+.port-row:hover {
+  background: var(--row-hover);
+}
+
+.port-proc {
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.port-exe {
+  margin-left: auto;
+  color: var(--text-3);
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 命令失败：页面顶部的提醒条 */
+.banner-page {
+  padding-top: 20px;
+  padding-bottom: 0;
+}
+
+.banner-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-card);
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+  font-size: 13px;
+}
+
+.banner-error .link-btn {
+  margin-left: auto;
+  color: inherit;
+}
