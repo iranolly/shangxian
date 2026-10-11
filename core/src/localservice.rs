@@ -1,6 +1,8 @@
 //! 本机服务：启动、停止、看护、端口探测。
 //!
 //! 纪律（对齐 DESIGN.md §9.4）：
+//! - 应用退出/重启/崩溃不结束本机服务（保活）：启动进保活作业，下次启动按端口认领；
+//!   只有显式停止/删除（看护以外的路径）才结束整棵树。
 //! - 只停「我们自己启动的」进程：握着子进程句柄去结束，不存在 pid 复用误杀；
 //!   用户自己手动开的进程绝不碰。
 //! - 用户手动点了停止，看护不再拉起（除非用户再点启动）。
@@ -172,6 +174,29 @@ impl LocalRunner {
     /// 开机自启：由应用启动时统一触发。
     pub fn start_for_autostart(&mut self) {
         self.start_now();
+    }
+
+    /// 应用启动后的认领：端口已经在监听、本会话又没有自己的子进程时，把它认成
+    /// 「在跑」（可能是上个会话留下的，也可能是用户自己开的），绝不重复启动。
+    ///
+    /// 认领后 `user_stopped = false`：勾了看护的服务以后掉了，watch 会照常拉起。
+    /// 返回是否认领成功。
+    pub fn claim_if_listening(&mut self) -> bool {
+        if self.child.is_some() {
+            return false; // 本会话自己起的，不需要认领
+        }
+        if !probe(self.spec.local_port) {
+            return false;
+        }
+        self.listening = true;
+        self.phase = Phase::Running;
+        self.user_stopped = false;
+        self.fail_streak = 0;
+        self.reason = None;
+        self.retry_at = None;
+        self.last_probe = Some(Instant::now());
+        self.log_line("[服务] 端口已经在监听，已认领（不会重复启动）");
+        true
     }
 
     /// 周期调用：推进状态机。
@@ -367,15 +392,18 @@ impl LocalRunner {
             cmd.current_dir(dir);
         }
 
+        // 先建好保活作业对象再启动进程：作业创建失败就直接返回，不启动、不泄漏子进程。
+        // （放进保活作业后，应用退出/崩溃不会连带结束本机服务；显式停止时靠
+        //   job.terminate() 结束整棵树，含 .bat/.ps1 的子孙进程。）
+        let job = Job::new_keep_alive()?;
+
         let child = cmd
             .spawn()
             .map_err(|e| io::Error::new(e.kind(), format!("启动 {program} 失败：{e}")))?;
 
-        // 放进作业对象：应用没了，它也会被系统一起结束
-        let job = Job::new()?;
         if let Err(e) = job.assign_process(child.as_raw_handle()) {
             eprintln!(
-                "[warn] 作业对象分配失败（本机服务孤儿保底清理失效）：{} pid={} err={e}",
+                "[warn] 作业对象分配失败（显式停止时整棵树可能清不干净）：{} pid={} err={e}",
                 self.spec.name,
                 child.id()
             );
@@ -391,13 +419,18 @@ impl LocalRunner {
         Ok(pid)
     }
 
-    /// 只结束我们自己启动的那个进程。
+    /// 只结束我们自己启动的那个进程树。
+    ///
+    /// 先 `job.terminate()` 把作业内整棵树（包装脚本的子孙进程也在内）结束，
+    /// 再 `child.kill + wait` 兜底（作业分配失败或刚退出的情况）。
     fn kill_child(&mut self) {
+        if let Some(job) = self.job.take() {
+            job.terminate();
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
         }
-        self.job = None;
     }
 
     fn log_line(&self, text: &str) {
@@ -414,7 +447,8 @@ impl LocalRunner {
 
 impl Drop for LocalRunner {
     fn drop(&mut self) {
-        self.kill_child();
+        // 应用退出/重启不杀本机服务（保活）：只释放句柄，进程继续跑。
+        // 显式停止（stop_now）/删除服务（guardian 先 stop）走 kill_child()。
     }
 }
 
@@ -743,5 +777,53 @@ mod tests {
         assert_eq!(r.status_word(), "not_listening");
         r.phase = Phase::Failed;
         assert_eq!(r.status_word(), "failed");
+    }
+
+    #[test]
+    fn claim_recognizes_existing_listener() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let spec = LocalSpec {
+            name: "claim".into(),
+            local_port: port,
+            launch: Some(LaunchSpec {
+                exe: r"D:\x\start.bat".into(),
+                args: String::new(),
+                workdir: None,
+            }),
+            watch: true,
+        };
+        let mut r = LocalRunner::new(spec, &std::env::temp_dir());
+
+        assert!(r.claim_if_listening(), "端口在监听时应该认领");
+        assert_eq!(r.status_word(), "running");
+        assert!(r.pid().is_none(), "认领的进程不是本会话自己起的");
+        assert!(!r.user_stopped, "认领后看护必须继续生效");
+
+        // 认领后 poll 不能再拉一个进程（launch 是假路径，真拉会起进程/失败）
+        r.poll();
+        assert!(r.pid().is_none(), "认领后绝不能重复启动");
+    }
+
+    #[test]
+    fn claim_reports_false_when_port_free() {
+        let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let spec = LocalSpec {
+            name: "claim-none".into(),
+            local_port: port,
+            launch: Some(LaunchSpec {
+                exe: "x.exe".into(),
+                args: String::new(),
+                workdir: None,
+            }),
+            watch: true,
+        };
+        let mut r = LocalRunner::new(spec, &std::env::temp_dir());
+
+        assert!(!r.claim_if_listening());
+        assert_eq!(r.status_word(), "stopped");
+        assert!(r.user_stopped, "没认领时保持“用户没启动过”的状态");
     }
 }

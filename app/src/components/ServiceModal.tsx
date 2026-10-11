@@ -31,7 +31,10 @@ interface Props {
   /** Services 页「跳到已登记服务的编辑」时置 true：打开后自动读取补全一次 */
   autoRead?: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  /** 保存成功后回调；launchChanged = 编辑时改动了启动程序/参数/工作目录 */
+  onSaved: (launchChanged: boolean) => void;
+  /** 点已登记端口行：切到那台服务的编辑界面（由 Services 页管状态） */
+  onSwitchToEdit?: (serviceId: string) => void;
 }
 
 /** 这些警告说明「读到的信息不可靠」，不能拿它覆盖用户填的东西 */
@@ -290,6 +293,12 @@ export function ServiceModal({
       setError("本机端口要填 1~65535 的数字");
       return;
     }
+    // 编辑时改动启动方式：保存后旧进程照旧跑，界面提示「下次重启才生效」
+    const launchChanged =
+      !!service &&
+      (normLaunch(launchExe) !== normLaunch(service.launchExe) ||
+        normLaunch(launchArgs) !== normLaunch(service.launchArgs) ||
+        normLaunch(launchWorkdir) !== normLaunch(service.launchWorkdir));
     setBusy(true);
     try {
       await saveService({
@@ -303,7 +312,7 @@ export function ServiceModal({
         autostart,
         note: note.trim() || null,
       });
-      onSaved();
+      onSaved(launchChanged);
       onClose();
     } catch (e) {
       setError(String(e));

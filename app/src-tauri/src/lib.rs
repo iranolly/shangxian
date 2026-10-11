@@ -244,6 +244,59 @@ fn send_test_notification(app: &tauri::AppHandle) -> Result<(), String> {
     result
 }
 
+/// 托盘「退出并停止全部本地服务」的结果提示。
+///
+/// release 版没有控制台，`eprintln` 用户看不到；有系统通知就发一条，通知发不出去
+/// （系统不支持/权限被关）时退化为写应用日志（数据目录 `logs/app.log`）。
+fn notify_exit_stop_result(app: &tauri::AppHandle, stopped: usize, remaining: usize) {
+    let body = if remaining == 0 {
+        if stopped == 0 {
+            "没有正在跑的本地服务需要停止。".to_string()
+        } else {
+            format!("已停止 {stopped} 个本地服务。")
+        }
+    } else if stopped == 0 {
+        format!("{remaining} 个本地服务没能停（可能是脚本启动的服务，需要手动处理）。")
+    } else {
+        format!(
+            "已停止 {stopped} 个本地服务；{remaining} 个没能停（可能是脚本启动的服务，需要手动处理）。"
+        )
+    };
+
+    use tauri_plugin_notification::NotificationExt;
+    match app
+        .notification()
+        .builder()
+        .title("上线助手")
+        .body(&body)
+        .show()
+    {
+        Ok(()) => eprintln!("[通知] 已发送：{body}"),
+        Err(e) => {
+            eprintln!("[通知] 发送失败：{e}");
+            append_app_log(&format!("[退出] {body}"));
+        }
+    }
+}
+
+/// 通知发不出去时的兜底：把一行结果追加进应用日志（release 版没有控制台）。
+fn append_app_log(line: &str) {
+    use std::io::Write;
+    let dir = default_data_dir().join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("app.log"))
+    {
+        let millis = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let _ = writeln!(f, "[{millis}] {line}");
+    }
+}
+
 /// 扫描现有启动脚本，返回导入建议。
 #[tauri::command]
 fn scan_imports() -> Vec<ImportSuggestion> {
@@ -501,10 +554,17 @@ pub fn run() {
             }
 
             // ---------- 托盘：图标 + 右键菜单 ----------
+            // 「退出」只退应用，本地服务照旧跑（保活）；
+            // 「退出并停止全部本地服务」先停掉应用自己启的本地服务（整棵进程树），再停
+            // 能按程序路径核对出归属的认领进程；核对不过的（比如配置是 .bat/.cmd 包装脚本、
+            // 实际监听者是子进程）不硬杀，计入「没能停」并把结果提示给用户，然后退出。
             let show_item = MenuItemBuilder::with_id("show", "打开主界面").build(app)?;
+            let quit_stop_item =
+                MenuItemBuilder::with_id("quit_stop_services", "退出并停止全部本地服务")
+                    .build(app)?;
             let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
             let menu = MenuBuilder::new(app)
-                .items(&[&show_item, &quit_item])
+                .items(&[&show_item, &quit_stop_item, &quit_item])
                 .build()?;
 
             let mut tray = TrayIconBuilder::with_id("main")
@@ -514,6 +574,14 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show" => show_main(app),
                     "quit" => app.exit(0),
+                    // 先把应用启动/认领的本地服务停掉，再退出
+                    "quit_stop_services" => {
+                        let state = app.state::<AppState>();
+                        let (stopped, remaining) =
+                            state.guardian.lock().unwrap().stop_all_for_exit();
+                        notify_exit_stop_result(app, stopped, remaining);
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {

@@ -185,8 +185,26 @@ export function ServicesPage({
           onClose={() => {
             setModalOpen(false);
             setEditFor(null);
+            setAutoReadFor(null);
           }}
-          onSaved={onRefresh}
+          onSaved={(launchChanged) => {
+            // 编辑了正在跑的服务、又动了启动方式：旧进程不动，提示下次重启才生效
+            if (editFor && launchChanged) {
+              const current = services.find((s) => s.id === editFor.id);
+              const isUp =
+                current?.status === "starting" ||
+                current?.status === "running" ||
+                current?.status === "not_listening";
+              if (isUp) {
+                setNotices((n) => ({
+                  ...n,
+                  [editFor.id]:
+                    "启动方式已改；正在跑的程序没有动，改动会在下次重启服务时生效。",
+                }));
+              }
+            }
+            onRefresh();
+          }}
         />
       )}
 

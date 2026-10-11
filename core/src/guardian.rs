@@ -208,7 +208,10 @@ impl Guardian {
     pub fn poll(&mut self) -> Vec<(String, Event)> {
         if !self.autostart_done {
             self.autostart_done = true;
-            self.start_autostart_services();
+            // 应用启动后的第一轮：先认领「端口已经在监听」的服务，再拉开机自启，
+            // 已经认领的绝不重复启动。
+            let claimed = self.claim_running_services();
+            self.start_autostart_services(&claimed);
         }
         self.sync_tunnels();
         self.sync_local();
@@ -232,12 +235,14 @@ impl Guardian {
     }
 
     /// 开机自启：把勾了自启的服务拉起来（应用启动时做一次）。
-    fn start_autostart_services(&mut self) {
+    ///
+    /// `claimed` 是本轮已经认领（端口在监听）的服务，跳过不重复启动。
+    fn start_autostart_services(&mut self, claimed: &HashSet<String>) {
         let ids: Vec<String> = self
             .config
             .services
             .iter()
-            .filter(|s| s.autostart && s.launch.is_some())
+            .filter(|s| s.autostart && s.launch.is_some() && !claimed.contains(&s.id))
             .map(|s| s.id.clone())
             .collect();
         for id in ids {
@@ -247,6 +252,27 @@ impl Guardian {
                 runner.poll();
             }
         }
+    }
+
+    /// 应用每次启动后的「认领」：已配启动方式的服务，如果端口已经在监听、本会话又没
+    /// 有自己的子进程，就认成「在跑」（phase=Running、user_stopped=false）——这样勾了
+    /// 看护的服务以后掉了会被 watch 拉起，且绝不重复启动。
+    ///
+    /// 返回本轮认领的服务 id。
+    fn claim_running_services(&mut self) -> HashSet<String> {
+        self.sync_local();
+        let mut claimed = HashSet::new();
+        for svc in &self.config.services {
+            if svc.launch.is_none() {
+                continue; // 只监控的服务平时 poll 自己会探测端口
+            }
+            if let Some(runner) = self.local.get_mut(&svc.id) {
+                if runner.claim_if_listening() {
+                    claimed.insert(svc.id.clone());
+                }
+            }
+        }
+        claimed
     }
 
     /// 让运行中的隧道与配置保持一致：停掉被暂停/删除的，补上新增的。
@@ -299,11 +325,21 @@ impl Guardian {
 
     /// 让本机服务的运行时表和配置保持一致。
     fn sync_local(&mut self) {
-        // 删掉的
+        // 删掉的：必须先显式停（保活作业下，Drop 不再杀进程）
         let ids: HashSet<String> = self.config.services.iter().map(|s| s.id.clone()).collect();
-        self.local.retain(|id, _| ids.contains(id));
+        let removed: Vec<String> = self
+            .local
+            .keys()
+            .filter(|id| !ids.contains(*id))
+            .cloned()
+            .collect();
+        for id in removed {
+            if let Some(mut runner) = self.local.remove(&id) {
+                runner.stop_now();
+            }
+        }
 
-        // 新增 / 改配置的
+        // 新增 / 改配置的（改 launch 只换 spec，不杀正在跑的旧进程、不重置看护状态）
         for svc in &self.config.services {
             let spec = LocalSpec {
                 name: svc.name.clone(),
@@ -768,6 +804,94 @@ impl Guardian {
             return String::new();
         };
         read_tail(runner.log_path(), lines)
+    }
+
+    /// 退出应用前（托盘菜单「退出并停止全部本地服务」）把应用自己拉起来的本地服务
+    /// 全停掉。
+    ///
+    /// 1. 自家子进程：借保活作业的 `terminate()` 结束整棵树；
+    /// 2. 仍在监听的外部/认领进程：按 [`Self::stop_service`] 相同的安全规则核对——
+    ///    fresh exe 与配置 launchExe 规范化后（忽略大小写、配置只写程序名时比文件名）
+    ///    相等才 `TerminateProcess`；核对不过的绝不硬杀，计入「没能停」。
+    ///
+    /// 自家进程树没能退干净（作业失败 / 子孙抢跑，仍有自家 PID 占着端口）的，
+    /// 也计入「没能停」，绝不静默当成功。
+    ///
+    /// 返回（已停止, 没能停）。
+    pub fn stop_all_for_exit(&mut self) -> (usize, usize) {
+        self.sync_local();
+        let ids: Vec<String> = self.local.keys().cloned().collect();
+        let mut stopped = 0usize;
+        let mut failed = 0usize;
+
+        for id in ids {
+            let Some(svc) = self.config.service(&id) else {
+                continue;
+            };
+            let port = svc.local_port;
+            let configured = svc.launch.as_ref().map(|l| l.exe.clone());
+
+            // 先记自家子进程整棵树（必须在 stop_now 清 child 之前记）
+            let own_pid = self.local.get(&id).and_then(|r| r.pid());
+            let own_tree = own_pid.map(process_tree).unwrap_or_default();
+            if let Some(runner) = self.local.get_mut(&id) {
+                runner.stop_now();
+            }
+
+            // 等自家进程树退干净；还在监听、又不在自家树里的 = 外部/认领进程
+            let raw_owners = poll_port_owners(port);
+
+            // 自家树里还有 PID 占着端口 = 没停干净（作业失败 / 子孙抢跑），计入「没能停」
+            if raw_owners.iter().any(|pid| own_tree.contains(pid)) {
+                failed += 1;
+                continue;
+            }
+
+            let owners: Vec<u32> = raw_owners
+                .into_iter()
+                .filter(|pid| !own_tree.contains(pid))
+                .collect();
+
+            if owners.is_empty() {
+                if own_pid.is_some() {
+                    stopped += 1;
+                }
+                continue;
+            }
+
+            // 只监控的服务：没有 launch 可核对归属，绝不硬杀
+            let Some(configured) = configured.as_deref() else {
+                failed += 1;
+                continue;
+            };
+
+            // 和 stop_service 一样：多个监听者里只能挑唯一能确认是配置程序的那个
+            let target = match pick_unique_owner(&owners, Some(configured)) {
+                Ok(pid) => pid,
+                Err(_) => {
+                    failed += 1;
+                    continue;
+                }
+            };
+
+            // fresh 复核：路径必须仍是配置的程序，才允许结束
+            let Some(fresh) = crate::local_ports::process_path(target) else {
+                failed += 1;
+                continue;
+            };
+            if !same_exe(configured, &fresh) || kill_process(target).is_err() {
+                failed += 1;
+                continue;
+            }
+
+            if wait_port_clear(port) {
+                stopped += 1;
+            } else {
+                failed += 1;
+            }
+        }
+
+        (stopped, failed)
     }
 
     // ---------- 隧道：增删改 + 启停 ----------
@@ -1308,6 +1432,17 @@ fn poll_port_owners(port: u16) -> Vec<u32> {
         owners = crate::local_ports::listening_pids(port);
     }
     owners
+}
+
+/// 等端口彻底没人监听（最多约 600ms）。用于退出前确认核对过的认领进程真的停了。
+fn wait_port_clear(port: u16) -> bool {
+    for _ in 0..STOP_PORT_POLLS {
+        if crate::local_ports::listening_pids(port).is_empty() {
+            return true;
+        }
+        std::thread::sleep(STOP_PORT_POLL_INTERVAL);
+    }
+    crate::local_ports::listening_pids(port).is_empty()
 }
 
 /// 进程 `root` 及其全部后代（ToolHelp 快照，只读）。
