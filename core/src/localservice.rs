@@ -264,13 +264,57 @@ impl LocalRunner {
             return;
         }
 
-        // 2) 没子进程：到点就拉起（看护 或 用户刚点了启动）
+        // 2) 没子进程：先看端口（可能是用户自己开的，也可能我们起的进程已经退出了）
+        if self.child.is_none() {
+            let due_probe = self
+                .last_probe
+                .map(|t| t.elapsed() >= PROBE_EVERY)
+                .unwrap_or(true);
+            if due_probe {
+                self.last_probe = Some(Instant::now());
+                let was_listening = self.listening;
+                self.listening = probe(self.spec.local_port);
+                if self.listening {
+                    // 它在跑（不管是用户自己开的还是我们起的）：状态对齐，清掉重试计划
+                    self.phase = Phase::Running;
+                    self.reason = None;
+                    self.fail_streak = 0;
+                    self.retry_at = None;
+                } else {
+                    if matches!(self.phase, Phase::Running | Phase::NotListening) {
+                        self.phase = Phase::Stopped;
+                    }
+                    // 刚刚从“在听”变成“没在听”：它掉了 → 看护负责拉起来
+                    if was_listening
+                        && self.spec.watch
+                        && !self.user_stopped
+                        && !matches!(self.phase, Phase::Failed)
+                    {
+                        self.log_line("[看护] 端口不通了（服务掉了），马上拉起来");
+                        self.retry_at = Some(Instant::now());
+                        self.phase = Phase::Starting;
+                    }
+                }
+            }
+        }
+
+        // 3) 到点就拉起（看护 或 用户刚点了启动）
         let due = match self.retry_at {
             Some(at) => Instant::now() >= at,
             None => false,
         };
         let should_run = !self.user_stopped && (self.spec.watch || matches!(self.phase, Phase::Starting));
         if due && should_run && self.spec.launch.is_some() {
+            // 先看端口：已经在听说明它早就在跑了（比如用户自己开的，或者上次留下的），
+            // 这时千万别再起一个（两个进程抢同一个端口）。
+            if probe(self.spec.local_port) {
+                self.retry_at = None;
+                self.listening = true;
+                self.phase = Phase::Running;
+                self.reason = None;
+                self.log_line("[看护] 端口已经在监听，说明它已经在跑，不重复启动");
+                return;
+            }
             self.retry_at = None;
             match self.spawn() {
                 Ok(pid) => {
