@@ -78,6 +78,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **Tauri 命令层**：`get_snapshot`（含 services/tunnels/servers）、`save_service`/`remove_service`/`service_start`/`service_stop`/`set_service_watch`/`set_service_autostart`/`get_service_logs`、`add_tunnel`/`update_tunnel`/`remove_tunnel`/`tunnel_start`/`tunnel_stop`/`tunnel_restart`、`list_local_ports`（现在带进程名和程序路径）、`setup_passwordless`。
 - **密码配免密**（core/src/keyboot.rs，新）：russh（ring 加密后端，默认的 aws-lc 在 Windows 要 NASM 不能用）+ 系统 ssh-keygen/ssh；流程=生成密钥 → 密码登录 → 幂等写 authorized_keys → 密钥登录验证；错误分类（密码错 vs 服务器不允许密码登录）。靶机实测通过（`keyboot_passwordless_flow`）。
 - **测试**：env_checks 6 项全过（含新的 `local_service_start_stop_and_watch`：启动→端口通→外部杀进程→看护拉起→用户停止不再拉起）；guardian_docker 3 项（含 keyboot）。
+- **访问保护可叠加 + 检查云端**（2026-10-11）：隧道的保护从「三选一」改成「要密码」和「只允许指定 IP」可同时开（同时开 = 两个条件都要满足；都不开 = 界面标红）；发布隧道页显示当前设置的保护，新增「检查云端」按钮（SSH 读云端站点配置和密码文件，列出实际生效状态，不一致提示重新贴配置）；配置 `access` 改数组、版本 4→5 自动迁移（备份 `config.json.v4.bak`）；CLI `--access` 可重复并新增 `tunnel check`，方法表 35 条。
 
 ### 进行中 / 待办
 
@@ -142,3 +143,23 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 4. 验证：公网不带密码 401 + `WWW-Authenticate`（浏览器弹框）；密码错仍 401；`/.well-known/` 不弹（豁免生效）；其他站点配置零改动。
 
 另外：应用自己不会自动改服务器 nginx（设计如此），这一步始终是「生成片段 + 人工应用」。
+
+## 自动读取启动方式 + 敏感拦截 + 停止确认（2026-10-11）
+
+- **冻结接口落地**：Tauri `inspect_process_launch_info(port, expectedPid?)`（`core::proc_detail::LaunchInfo`）、`preview_launch_command(exe, args)`；`service_stop(id, killForeign?, expectedPid?)` 返回 `{kind: stopped|needsConfirm|foreignStopped, pid?, exe?}`。接口名/字段名未改。
+- **前端（app/）**：点监听端口行先照旧填端口/程序/名字，再自动读取启动方式；读不可靠（`pidMatched=false` 或 `multipleOwners`/`processGone`/`portOwnerChanged`）就不覆盖任何字段，只在警告区说明；`sensitiveArgs` 红字 + 勾选框，不勾不能保存；自动填的字段带「自动读取 · 未验证」，一编辑就消失；工作目录 hint 改成「读到的是现在的工作目录」；启动参数改两行 textarea；参数下方显示只读的「实际会执行的命令行」预览；已登记端口标「已登记：名字」，点击跳到那台服务编辑并自动补全；停止外部进程前弹人话确认框（程序名 + PID），确认后才 `killForeign=true`。
+- **CLI**：`service stop` 默认只停应用自己启动的；`needsConfirm` 时退出码 1 并提示 `--force`（`--force` 传 `killForeign=true`、省略 `expectedPid`）；`service restart` 遇 `needsConfirm` 提示先手动停。
+- **ctl.rs**：方法表更新 `service_stop` 参数/返回，新增 `inspect_process_launch_info`、`preview_launch_command`（共 34 条）；`lib.rs` 注册新命令（inspect 走 async + spawn_blocking）。
+- **文档**：AI-AGENT.md（方法表 + 输出样例 + 自动读取纪律）、使用手册.md（字段文案与交互说明）、DESIGN.md §11（实现记录与已知边界：环境变量不捕获、workdir=当前目录、参数近似还原、32/64 位与权限边界）、skills/shangxian/SKILL.md（停止语义）。
+- **验证（含审查修复后复验）**：`cd app && npm run build` 通过；`cargo check --workspace --all-targets` 通过；core 单测 25 项 + `env_checks` 7 项 + 真机集成 `proc_features` 7 项 + `stop_foreign` 10 项全过（49 passed / 0 failed / 6 ignored），测试后无孤儿进程。
+- **独立审查修复**：审查提出 1 P1 + 4 P2 已修复并复验 PASS ——（1）停止时先停自家进程整棵树再轮询端口，包装脚本（.bat/.ps1）起的孙进程监听不再被误判成外部、不再弹假确认框；（2）只监控服务一律拒绝停止（无论 --force 与否），CLI 不再提示必然失败的 --force；（3）编辑模式点端口取消后启动程序/参数/工作目录三个字段原样保留；（4）参数因换行/超长被丢弃时在界面上展示只读的原始命令行；另有告警条件与文案对齐、service_stop 改异步等小修。
+
+## 本地服务保活 + 退出停全部（2026-10-11，已完成）
+
+应用退出/重启/崩溃不再带走本地服务，下次启动按端口认领；SSH 隧道行为不变（跟应用走，应用一退即断）。
+
+- **core（已落地）**：`Guardian::stop_all_for_exit() -> (usize, usize)`（已停止 / 没能停）：先停应用自己本次启动的进程整棵树，再对仍在监听的认领进程按程序路径核对归属，核对通过才结束；核对不过的（如配置是包装脚本、实际监听者是子进程）不硬杀、计入没能停。本地服务改用保活作业对象（不设 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）；首次 `poll` 按端口探测认领（**不做归属核对**），认领后 `user_stopped=false`，看护（watch）对认领进程照常拉起。`ssh.exe` 仍是 kill-on-close 作业。
+- **app**：托盘新增「退出并停止全部本地服务」（id `quit_stop_services`）：`guardian.lock().stop_all_for_exit()` 后先弹结果通知（如「已停止 N 个本地服务；M 个没能停（可能是脚本启动的服务，需要手动处理）」；通知发不出去则写应用日志 `logs/app.log`），再 `app.exit(0)`；普通「退出」保持只退应用、不杀服务。编辑运行中的服务、且启动方式（launchExe/launchArgs/launchWorkdir）有变化时，卡片提示「启动方式已改；正在跑的程序没有动，改动会在下次重启服务时生效」（点「启动」后清除）；认领来的进程停止时先弹确认（复用 `needsConfirm` 流程）。
+- **CLI**：检查无退出应用命令（只有 `app start` / `app status`），无需改语义；停止认领进程与外部进程同路径（`needsConfirm` → `--force`）。
+- **文档**：使用手册新增「退出和重启应用时，本地服务会继续跑」+ 托盘菜单三行；DESIGN.md §11.4（认领不做归属核对、退出停全部语义、包装脚本/首轮认领/只停监听者三条边界）；AI-AGENT.md 铁律 5 / service stop / 离线行为 / 已知坑 11；SKILL.md 铁律 5、8。
+- **验证**：`cd app && npm run build` 通过；`cargo check -p app -p shangxian-cli` 通过，`cargo check --workspace --all-targets` 通过。core 测试 81 passed / 0 failed / 8 ignored（lib 49、env_checks 9、keep_alive 6、proc_features 7、stop_foreign 10；8 项 ignored 均按设计跳过：Docker 靶机 3、真机探针 1、真机对照 1、辅助进程在各测试二进制中共 3），测试后无孤儿进程。
