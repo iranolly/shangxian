@@ -187,7 +187,7 @@ fn nginx_snippet_password_and_ip_together() {
     );
     // 人话说明里要讲清「两道门都要过」
     assert!(
-        snip.steps.iter().any(|s| s.contains("两道门都开着")),
+        snip.steps.iter().any(|s| s.contains("白名单和密码两道门都要过")),
         "steps={:?}",
         snip.steps
     );

@@ -12,7 +12,7 @@ interface Props {
 }
 
 /** 弹层里能复制的内容 */
-type CopyTarget = "snippet" | "exempt" | "htpasswd";
+type CopyTarget = "htpasswd" | `block-${number}`;
 
 export function NginxModal({ id, name, onClose }: Props) {
   const [data, setData] = useState<NginxSnippet | null>(null);
@@ -48,14 +48,42 @@ export function NginxModal({ id, name, onClose }: Props) {
   const label = (target: CopyTarget, idle: string) =>
     copied === target ? "已复制 ✓" : idle;
 
+  // 把连续的高亮行合成一段：段里至少有一行真正的配置（不是 # 注释）才配小复制按钮；
+  // 按钮放在该段首行行尾，复制的是整段原文（含 # 注释行）。
+  const blockCopies = new Map<number, { target: CopyTarget; text: string }>();
+  {
+    const lines = data?.preview ?? [];
+    let i = 0;
+    let n = 0;
+    while (i < lines.length) {
+      if (!lines[i].isNew) {
+        i += 1;
+        continue;
+      }
+      let j = i;
+      while (j < lines.length && lines[j].isNew) j += 1;
+      const seg = lines.slice(i, j);
+      const hasConfig = seg.some(
+        (l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#"),
+      );
+      if (hasConfig) {
+        blockCopies.set(i, {
+          target: `block-${n}`,
+          text: seg.map((l) => l.text).join("\n"),
+        });
+        n += 1;
+      }
+      i = j;
+    }
+  }
+
   return (
     <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" style={{ width: 720 }}>
         <div className="modal-head">
           <h2 className="modal-title">云端配置 · {name}</h2>
           <p className="modal-sub">
-            把新增的几行加进你现有的站点配置里（不是替换整段）：灰色是原配置的样子，
-            高亮是新增内容该放的位置。
+            灰色是原配置的样子，高亮是要加的行：只加高亮的这几行，不要替换整段。
           </p>
         </div>
         <div className="modal-body">
@@ -68,70 +96,56 @@ export function NginxModal({ id, name, onClose }: Props) {
                 ))}
               </ol>
               {data.snippet && (
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    margin: "0 0 6px",
-                  }}
+                <span
+                  className="field-label"
+                  style={{ display: "inline-block", marginBottom: 6 }}
                 >
-                  <span className="field-label" style={{ marginBottom: 0 }}>
-                    要新增的几行
-                  </span>
-                  <button
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => copy("snippet", data.snippet!)}
-                  >
-                    {label("snippet", "复制这段")}
-                  </button>
-                </div>
+                  要新增的几行
+                </span>
               )}
               <pre className="log-view" style={{ maxHeight: 340, padding: "8px 10px" }}>
                 {data.preview?.length
-                  ? data.preview.map((l, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          padding: "0 6px",
-                          margin: "0 -6px",
-                          borderRadius: 4,
-                          color: l.isNew ? "var(--text)" : "var(--text-2)",
-                          background: l.isNew
-                            ? "var(--accent-soft)"
-                            : "transparent",
-                          boxShadow: l.isNew
-                            ? "inset 2px 0 0 var(--accent)"
-                            : undefined,
-                        }}
-                      >
-                        {l.text === "" ? "\u00a0" : l.text}
-                      </div>
-                    ))
+                  ? data.preview.map((l, i) => {
+                      const entry = blockCopies.get(i);
+                      return (
+                        <div
+                          key={i}
+                          style={{
+                            display: "flex",
+                            alignItems: "baseline",
+                            gap: 8,
+                            padding: "0 6px",
+                            margin: "0 -6px",
+                            borderRadius: 4,
+                            color: l.isNew ? "var(--text)" : "var(--text-2)",
+                            background: l.isNew
+                              ? "var(--accent-soft)"
+                              : "transparent",
+                            boxShadow: l.isNew
+                              ? "inset 2px 0 0 var(--accent)"
+                              : undefined,
+                          }}
+                        >
+                          <span style={{ flex: 1, minWidth: 0 }}>
+                            {l.text === "" ? "\u00a0" : l.text}
+                          </span>
+                          {entry && (
+                            <button
+                              className="link-btn"
+                              style={{ flexShrink: 0, padding: "0 4px" }}
+                              onClick={() => copy(entry.target, entry.text)}
+                            >
+                              {label(entry.target, "复制")}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
                   : data.snippet}
               </pre>
               {copyFailed && (
                 <div className="error-line" style={{ marginTop: 8 }}>
                   没复制成功：请用鼠标选中上面的内容，按 Ctrl+C 复制。
-                </div>
-              )}
-              {data.acmeExempt && (
-                <div className="field" style={{ marginTop: 12 }}>
-                  <label className="field-label">
-                    证书自动续期用的一行（放进 location /.well-known/ 里）
-                  </label>
-                  <div
-                    className="success-line"
-                    style={{ justifyContent: "flex-start" }}
-                  >
-                    <span className="secret">{data.acmeExempt}</span>
-                    <button
-                      className="link-btn"
-                      onClick={() => copy("exempt", data.acmeExempt!)}
-                    >
-                      {label("exempt", "复制")}
-                    </button>
-                  </div>
                 </div>
               )}
               {data.htpasswd && (
@@ -140,7 +154,7 @@ export function NginxModal({ id, name, onClose }: Props) {
                     密码文件内容（htpasswd）
                   </label>
                   <p className="field-hint">
-                    这是别人打开网页时用的密码文件，不是「云端服务器」页里连服务器的登录密码。
+                    别人打开网页时用的密码文件，不是连服务器的登录密码。
                   </p>
                   <div
                     className="success-line"

@@ -131,53 +131,39 @@ pub fn generate(svc: &Tunnel, _local_port: u16, _server: &ServerConfig) -> Nginx
     preview.push(gray("    ..."));
     preview.push(gray("}"));
 
-    // ---------- 使用说明（人话） ----------
+    // ---------- 使用说明（人话，只留 4 条短句 + 按需追加） ----------
     let mut steps: Vec<String> = vec![
-        "先在面板里把这个域名的站点建好、证书开好（面板里已经能打开就跳过）。".into(),
         format!(
-            "转发在面板的「反向代理」里配：目标填 http://127.0.0.1:{}（配过就跳过）。",
+            "站点和证书先在面板建好；「反向代理」目标填 http://127.0.0.1:{}。（配过就跳过）",
             svc.remote_port
         ),
-        "把新增的几行加进面板的「站点 → 配置修改」里，位置照上面的示意图（不要整段替换）。".into(),
-        "保存后重载 nginx，然后从外网打开一次网址确认。".into(),
+        "把下面高亮的行加进「站点 → 配置修改」：只加这几行，不替换整段；保存后重载 nginx，再从外网打开确认。".into(),
     ];
-    if !has_url {
-        steps.insert(
-            0,
-            "⚠ 这条隧道还没填公网网址：先回应用里把网址填上，再回来重新生成（现在示意里的域名是占位符）。".into(),
-        );
-    }
-
-    match (want_password, want_ip) {
-        (true, true) => {
-            steps.push(
-                "示意图里最后那处高亮（auth_basic off;）别漏：放进证书验证目录，不然证书到期自动续不了。"
-                    .into(),
-            );
-        }
-        (true, false) => {
-            steps.push("示意图里第二处高亮（auth_basic off;）别漏：放进证书验证目录，不然证书到期自动续不了。".into());
-        }
-        _ => {}
-    }
     if want_password {
         if htpasswd.is_some() {
-            steps.push(format!(
-                "把下面这行密码保存到服务器上的 {file}（一行就够；没有这个文件就新建一个）。"
-            ));
+            steps.push(format!("密码文件内容存到服务器上的 {file}（没有就新建）。"));
         } else {
             steps.push("这个服务还没有密码哈希：回应用里重新设置一次访问密码，再回来生成。".into());
         }
+        steps.push("证书续期那两行（auth_basic off;）别漏——漏了证书到期不能自动续。".into());
     }
-    if want_password && want_ip {
-        steps.push(
-            "两道门都开着：只有白名单里的 IP 能打开，打开后还要输密码。换网络或换手机时记得回应用里加 IP。"
-                .into(),
+    match (want_password, want_ip) {
+        (true, true) => steps.push(
+            "白名单和密码两道门都要过；换网络或换手机时记得回应用里加 IP。".into(),
+        ),
+        (false, true) => {
+            steps.push("只有白名单里的 IP 能访问；换网络或换手机时记得回应用里加 IP。".into())
+        }
+        (false, false) => {
+            steps.push("⚠ 这个服务目前没有访问保护，建议在应用里给它设一个访问密码。".into())
+        }
+        (true, false) => {}
+    }
+    if !has_url {
+        steps.insert(
+            0,
+            "⚠ 这条隧道还没填公网网址：先回应用里把网址填上再回来重新生成（现在示意里的域名是占位符）。".into(),
         );
-    } else if want_ip {
-        steps.push("只有白名单里的 IP 能访问；换网络或换手机时记得回应用里加 IP。".into());
-    } else if !want_password {
-        steps.push("⚠ 这个服务目前没有访问保护，建议在应用里给它设一个访问密码。".into());
     }
 
     NginxSnippet {
