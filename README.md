@@ -3,6 +3,7 @@
 把你电脑上的服务发布到公网：自动管好 SSH 隧道、云端 nginx、域名和访问保护。
 完整设计见 [DESIGN.md](DESIGN.md)。
 
+- **下载安装包**：[Releases](https://github.com/iranolly/shangxian/releases)（安装版；不想装就用便携包）
 - 给人看的使用说明：[docs/使用手册.md](docs/使用手册.md)
 - 给 AI agent 看的：[docs/AI-AGENT.md](docs/AI-AGENT.md)（配 `cli.exe` 用）
 
@@ -57,6 +58,12 @@ cli guide                  # 给 AI agent 的速查说明
 ```
 
 ## 构建与运行
+
+发布（一键出安装包 + 把 cli.exe 一起打进去）：
+
+```bash
+bash build-release.sh          # Windows 上也可以双击 build-release.bat
+```
 
 前置：Rust（`~/.cargo/bin`）、Node.js、系统自带 OpenSSH。
 
