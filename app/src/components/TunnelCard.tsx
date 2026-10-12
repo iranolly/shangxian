@@ -1,127 +1,109 @@
-// 一张发布隧道卡片：服务名 → 服务器名 → 云端端口 → 网址 + 状态词。
-// 本机服务没在跑时明确标出来，出错时带原因 + 重连。
-// 访问保护状态与「检查云端」不在这里，统一在「访问保护」页看和改。
+// 一张发布隧道卡片（D4 §3.3 TunnelCard）：
+// 状态三件套 + 保护/预设徽标 + 运行时长/重试倒计时 + 网格信息 + 修复带 + 批量勾选。
+// 纪律：卡片只收稳定 props（id / 回调），实体字段自己从 store 订阅（React.memo 才有效）。
 
-import { useRef, useState } from "react";
+import { memo } from "react";
 
 import { TUNNEL_STATUS_META } from "../copy/status";
-import type { TunnelView } from "../api";
-import { useDismissOnOutside } from "./useModalA11y";
+import { actions } from "../store/actions";
+import { usePending } from "../store/pendingStore";
+import { useServer, useTunnel } from "../store/useStore";
+import { CardMenu } from "./card/CardMenu";
+import { CloudDriftBar } from "./card/CloudDriftBar";
+import { FixRibbon } from "./card/FixRibbon";
+import { PresetBadge } from "./card/PresetBadge";
+import { ProtectionBadge } from "./card/ProtectionBadge";
+import { RetryLine } from "./card/RetryLine";
+import { UptimeLine } from "./card/UptimeLine";
+import { toggleSelect, useIsSelected } from "./list/listPrefs";
 
 interface Props {
-  tunnel: TunnelView;
-  serverName: string;
-  onStart: () => void;
-  onStop: () => void;
-  onRestart: () => void;
-  onEdit: () => void;
-  onRemove: () => void;
-  onLogs: () => void;
-  onNginx: () => void;
-  /** 跳到「本机服务」页（由页面传入） */
-  onGoToServices?: () => void;
-  /** 删除失败时后端返回的原文（原样展示） */
-  notice?: string;
-  onDismissNotice?: () => void;
+  tunnelId: string;
+  /** 批量模式：显示勾选框 */
+  selectable: boolean;
+  onEdit(id: string): void;
+  onLogs(id: string): void;
+  onNginx(id: string): void;
+  onClone(id: string): void;
+  onRemove(id: string): void;
+  onOpenProtection?(id: string): void;
+  onGoToServices?(): void;
 }
 
-export function TunnelCard({
-  tunnel,
-  serverName,
-  onStart,
-  onStop,
-  onRestart,
+function TunnelCardInner({
+  tunnelId,
+  selectable,
   onEdit,
-  onRemove,
   onLogs,
   onNginx,
+  onClone,
+  onRemove,
+  onOpenProtection,
   onGoToServices,
-  notice,
-  onDismissNotice,
 }: Props) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLSpanElement | null>(null);
-  useDismissOnOutside(menuRef, menuOpen, () => setMenuOpen(false));
+  const tunnel = useTunnel(tunnelId);
+  const server = useServer(tunnel?.serverId ?? "");
+  const pending = usePending(`tunnel:${tunnelId}`);
+  const selected = useIsSelected("tunnels", tunnelId);
+
+  if (!tunnel) return null;
   const meta = TUNNEL_STATUS_META[tunnel.status];
-  const isBad = tunnel.status === "disconnected" || tunnel.status === "error";
-  // 有失败原因时，「连接中」也要把原因摆出来，不能只让人干等
-  const showFix =
-    isBad || (tunnel.status === "connecting" && Boolean(tunnel.reason));
+  const serverName = server?.name ?? "（服务器已删除）";
+  const showRuntimeRow =
+    (tunnel.status === "running" && Boolean(tunnel.connectedSince || tunnel.uptimeSecs)) ||
+    tunnel.status === "disconnected" ||
+    (tunnel.status === "connecting" && tunnel.retryState === "active" && tunnel.retryInSecs != null);
 
   return (
-    <article className="card">
+    <article className="card" data-pending={pending ? "true" : undefined}>
       <div className="card-row1">
+        {selectable ? (
+          <label className="select-box">
+            <input
+              type="checkbox"
+              checked={selected}
+              aria-label={`选择「${tunnel.name}」`}
+              onChange={(e) => toggleSelect("tunnels", tunnelId, e.target.checked)}
+            />
+          </label>
+        ) : null}
         <span className={`dot ${tunnel.status}`} aria-hidden="true" />
         <span className={`status-word ${tunnel.status}`}>{meta.word}</span>
         <span className="service-name">{tunnel.name}</span>
+        <span className="card-badges">
+          <ProtectionBadge tunnelId={tunnelId} onOpenProtection={onOpenProtection} />
+          <PresetBadge preset={tunnel.preset} />
+        </span>
         <span className="card-actions">
           {tunnel.enabled ? (
-            <button className="btn btn-ghost btn-sm" onClick={onStop}>
-              暂停
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={pending}
+              aria-busy={pending}
+              onClick={() => actions.tunnelPause(tunnelId)}
+            >
+              {pending ? "正在暂停…" : "暂停"}
             </button>
           ) : (
-            <button className="btn btn-primary btn-sm" onClick={onStart}>
-              开始发布
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={pending}
+              aria-busy={pending}
+              onClick={() => actions.tunnelStart(tunnelId)}
+            >
+              {pending ? "处理中…" : "开始发布"}
             </button>
           )}
-          <span className="menu-anchor" ref={menuRef}>
-            <button
-              className="icon-btn"
-              aria-label="更多操作"
-              onClick={() => setMenuOpen(!menuOpen)}
-            >
-              ⋯
-            </button>
-            {menuOpen && (
-              <div className="menu" onMouseLeave={() => setMenuOpen(false)}>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onRestart();
-                  }}
-                >
-                  立刻重连
-                </button>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onEdit();
-                  }}
-                >
-                  编辑隧道
-                </button>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onNginx();
-                  }}
-                >
-                  云端配置（nginx）
-                </button>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onLogs();
-                  }}
-                >
-                  看发布日志
-                </button>
-                <button
-                  className="menu-item danger"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onRemove();
-                  }}
-                >
-                  删除隧道
-                </button>
-              </div>
-            )}
-          </span>
+          <CardMenu
+            tunnel={tunnel}
+            pending={pending}
+            onEdit={onEdit}
+            onNginx={onNginx}
+            onLogs={onLogs}
+            onClone={onClone}
+            onOpenProtection={onOpenProtection ?? (() => undefined)}
+            onRemove={onRemove}
+          />
         </span>
       </div>
 
@@ -133,56 +115,37 @@ export function TunnelCard({
         <span>
           云端 <span className="mono">{tunnel.remotePort}</span>
         </span>
-        {tunnel.url && (
+        {tunnel.url ? (
           <>
             <span aria-hidden="true">·</span>
             <span className="mono url">{tunnel.url}</span>
           </>
-        )}
+        ) : null}
       </div>
 
-      {!tunnel.serviceOk && (
-        <div className="card-note">
-          <span className="chip warn">本机服务没在跑（访问会失败）</span>
-          {onGoToServices && (
-            <button className="link-btn" onClick={onGoToServices}>
-              去本机服务页看看
-            </button>
-          )}
-        </div>
-      )}
-
-      {notice ? (
-        <div className="fix-ribbon error">
-          <span className="fix-text">⚠ {notice}</span>
-          <span className="fix-actions">
-            <button className="link-btn" onClick={onDismissNotice}>
-              知道了
-            </button>
-          </span>
-        </div>
-      ) : showFix ? (
-        <div className={`fix-ribbon ${tunnel.status}`}>
-          <span className="fix-text">
-            ⚠{" "}
-            {tunnel.reason
-              ? tunnel.status === "error"
-                ? `发布失败：${tunnel.reason}。`
-                : tunnel.status === "connecting"
-                  ? `上次连接失败：${tunnel.reason}。正在重试。`
-                  : `连不上云端：${tunnel.reason}。`
-              : meta.sentence}
-          </span>
-          <span className="fix-actions">
-            <button className="btn btn-primary btn-sm" onClick={onRestart}>
-              {tunnel.status === "error" ? "重试" : "立刻重连"}
-            </button>
-            <button className="link-btn" onClick={onLogs}>
-              看日志
-            </button>
-          </span>
+      {showRuntimeRow ? (
+        <div className="card-row3">
+          <UptimeLine tunnelId={tunnelId} />
+          <RetryLine tunnelId={tunnelId} />
         </div>
       ) : null}
+
+      {!tunnel.serviceOk ? (
+        <div className="card-note">
+          <span className="chip warn">⚠ 本机服务没在跑（访问会失败）</span>
+          {onGoToServices ? (
+            <button className="link-btn" onClick={onGoToServices}>
+              去启动
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      <CloudDriftBar tunnelId={tunnelId} onOpenNginx={onNginx} />
+
+      <FixRibbon tunnelId={tunnelId} onLogs={onLogs} onEditPort={onEdit} />
     </article>
   );
 }
+
+export const TunnelCard = memo(TunnelCardInner);

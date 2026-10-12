@@ -1,24 +1,24 @@
-// 一张本机服务卡片：状态三件套（圆点 + 中文状态词 + 一句人话）+ 看护/自启开关 + 坏状态修复带。
-// 规则：坏状态在卡片内就能修，最多两个动作，第一个必须是动词。
+// 一张本机服务卡片（D4 §3.3 相关）：状态三件套 + 健康徽标 + 看护/自启开关 + 修复带 + 批量勾选。
+// 卡片只收稳定 props，实体字段自己从 store 订阅。
 
-import { useRef, useState } from "react";
+import { memo } from "react";
 
 import { SERVICE_STATUS_META } from "../copy/status";
-import type { ServiceView } from "../api";
-import { useDismissOnOutside } from "./useModalA11y";
+import { actions } from "../store/actions";
+import { usePending } from "../store/pendingStore";
+import { useService } from "../store/useStore";
+import { FixRibbon } from "./card/FixRibbon";
+import { MenuButton } from "./card/Menu";
+import { formatDay } from "./card/time";
+import { toggleSelect, useIsSelected } from "./list/listPrefs";
 
 interface Props {
-  service: ServiceView;
-  onStart: () => void;
-  onStop: () => void;
-  onToggleWatch: (watch: boolean) => void;
-  onToggleAutostart: (autostart: boolean) => void;
-  onEdit: () => void;
-  onLogs: () => void;
-  onRemove: () => void;
-  /** 删除失败时后端返回的原文（原样展示） */
-  notice?: string;
-  onDismissNotice?: () => void;
+  serviceId: string;
+  selectable: boolean;
+  onStop(id: string): void;
+  onEdit(id: string): void;
+  onLogs(id: string): void;
+  onRemove(id: string): void;
 }
 
 /** 从完整路径里取程序名，卡片上只显示名字就够了 */
@@ -27,26 +27,38 @@ function baseName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function ServiceCard({
-  service,
-  onStart,
-  onStop,
-  onToggleWatch,
-  onToggleAutostart,
-  onEdit,
-  onLogs,
-  onRemove,
-  notice,
-  onDismissNotice,
-}: Props) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLSpanElement | null>(null);
-  useDismissOnOutside(menuRef, menuOpen, () => setMenuOpen(false));
+function healthChip(service: { health?: "up" | "down" | "unknown" }) {
+  if (service.health === "up") {
+    return (
+      <span className="chip health up" title="本机端口能连上">
+        ✓ 端口在听
+      </span>
+    );
+  }
+  if (service.health === "down") {
+    return (
+      <span className="chip health down" title="本机端口连不上">
+        端口不通
+      </span>
+    );
+  }
+  return (
+    <span className="chip health unknown" title="还没探测过这个端口">
+      还没探过
+    </span>
+  );
+}
+
+function ServiceCardInner({ serviceId, selectable, onStop, onEdit, onLogs, onRemove }: Props) {
+  const service = useService(serviceId);
+  const pending = usePending(`service:${serviceId}`);
+  const selected = useIsSelected("services", serviceId);
+
+  if (!service) return null;
   const meta = SERVICE_STATUS_META[service.status];
   // 没填启动程序 = 只监控：看护 / 开机自启都用不上
   const noLaunch = !service.launchExe;
-  const isBad =
-    service.status === "not_listening" || service.status === "failed";
+  const isBad = service.status === "not_listening" || service.status === "failed";
   // 「正在跑」的三种状态（启动中/在跑/端口不通）都显示「停止」
   const isUp =
     service.status === "starting" ||
@@ -54,61 +66,63 @@ export function ServiceCard({
     service.status === "not_listening";
 
   return (
-    <article className="card">
+    <article className="card" data-pending={pending ? "true" : undefined}>
       <div className="card-row1">
+        {selectable ? (
+          <label className="select-box">
+            <input
+              type="checkbox"
+              checked={selected}
+              aria-label={`选择「${service.name}」`}
+              onChange={(e) => toggleSelect("services", serviceId, e.target.checked)}
+            />
+          </label>
+        ) : null}
         <span className={`dot ${service.status}`} aria-hidden="true" />
         <span className={`status-word ${service.status}`}>{meta.word}</span>
         <span className="service-name">{service.name}</span>
+        <span className="card-badges">
+          {healthChip(service)}
+          {service.logOverflowed ? (
+            <span className="chip warn" title="程序日志太多，只保留了最近一部分；归档可以在看日志时切换">
+              日志太长了，只留了最近一段
+            </span>
+          ) : null}
+        </span>
         <span className="card-actions">
           {!service.launchExe ? null : isUp ? (
-            <button className="btn btn-ghost btn-sm" onClick={onStop}>
-              停止
+            <button
+              className="btn btn-ghost btn-sm"
+              disabled={pending}
+              aria-busy={pending}
+              onClick={() => onStop(serviceId)}
+            >
+              {pending ? "正在停止…" : "停止"}
             </button>
           ) : (
-            <button className="btn btn-primary btn-sm" onClick={onStart}>
-              启动
+            <button
+              className="btn btn-primary btn-sm"
+              disabled={pending}
+              aria-busy={pending}
+              onClick={() => actions.serviceStart(serviceId)}
+            >
+              {pending ? "正在启动…" : "启动"}
             </button>
           )}
-          <span className="menu-anchor" ref={menuRef}>
-            <button
-              className="icon-btn"
-              aria-label="更多操作"
-              onClick={() => setMenuOpen(!menuOpen)}
-            >
-              ⋯
-            </button>
-            {menuOpen && (
-              <div className="menu" onMouseLeave={() => setMenuOpen(false)}>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onEdit();
-                  }}
-                >
-                  编辑本机服务
-                </button>
-                <button
-                  className="menu-item"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onLogs();
-                  }}
-                >
-                  看程序日志
-                </button>
-                <button
-                  className="menu-item danger"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onRemove();
-                  }}
-                >
-                  删除本机服务
-                </button>
-              </div>
-            )}
-          </span>
+          <MenuButton
+            disabled={false}
+            items={[
+              { label: "编辑本机服务", run: () => onEdit(serviceId) },
+              { label: "看程序日志", run: () => onLogs(serviceId) },
+              {
+                label: "删除本机服务",
+                run: () => onRemove(serviceId),
+                danger: true,
+                dividerBefore: true,
+                disabled: pending,
+              },
+            ]}
+          />
         </span>
       </div>
 
@@ -122,12 +136,12 @@ export function ServiceCard({
         ) : (
           <span>只监控，不帮你启动</span>
         )}
-        {service.note && (
+        {service.note ? (
           <>
             <span aria-hidden="true">·</span>
             <span>{service.note}</span>
           </>
-        )}
+        ) : null}
       </div>
 
       <div className="card-row3">
@@ -135,70 +149,42 @@ export function ServiceCard({
           <input
             type="checkbox"
             checked={service.watch}
-            disabled={noLaunch}
-            onChange={(e) => onToggleWatch(e.target.checked)}
+            disabled={noLaunch || pending}
+            onChange={(e) => actions.serviceToggleWatch(serviceId, e.target.checked)}
           />
           看护
         </label>
-        <label
-          className="switch"
-          title={noLaunch ? "没填启动程序，用不了" : undefined}
-        >
+        <label className="switch" title={noLaunch ? "没填启动程序，用不了" : undefined}>
           <input
             type="checkbox"
             checked={service.autostart}
-            disabled={noLaunch}
-            onChange={(e) => onToggleAutostart(e.target.checked)}
+            disabled={noLaunch || pending}
+            onChange={(e) => actions.serviceToggleAutostart(serviceId, e.target.checked)}
           />
           开机自启
         </label>
-        <span
-          className="card-foot"
-          title={service.tunnelNames.join("、") || undefined}
-        >
-          {service.tunnelCount > 0
-            ? `已发布到 ${service.tunnelCount} 条隧道`
-            : "还没发布"}
+        <span className="card-foot" title={service.tunnelNames.join("、") || undefined}>
+          {service.tunnelCount > 0 ? `已发布到 ${service.tunnelCount} 条隧道` : "还没发布"}
         </span>
       </div>
 
-      {noLaunch && (
-        <p className="card-no-launch">
-          只监控，不帮你启动：没填启动程序时「看护」和「开机自启」用不上。想用的话，点「⋯」→「编辑本机服务」把启动程序填上。
-        </p>
-      )}
-
-      {notice ? (
-        <div className="fix-ribbon error">
-          <span className="fix-text">⚠ {notice}</span>
-          <span className="fix-actions">
-            <button className="link-btn" onClick={onDismissNotice}>
-              知道了
-            </button>
-          </span>
-        </div>
-      ) : isBad ? (
-        <div className={`fix-ribbon ${service.status}`}>
-          <span className="fix-text">
-            ⚠ {service.reason ? `${service.reason}` : meta.sentence}
-          </span>
-          <span className="fix-actions">
-            {service.status === "failed" && service.launchExe && (
-              <button className="btn btn-primary btn-sm" onClick={onStart}>
-                再试一次
-              </button>
-            )}
-            <button className="link-btn" onClick={onLogs}>
-              看日志
-            </button>
-            {service.status === "not_listening" && (
-              <button className="link-btn" onClick={onEdit}>
-                改端口
-              </button>
-            )}
+      {!isBad && service.lastFailure ? (
+        <div className="card-note">
+          <span className="uber-small">
+            上次失败（{formatDay(service.lastFailure.ts)}）：{service.lastFailure.reason}
           </span>
         </div>
       ) : null}
+
+      {noLaunch ? (
+        <p className="card-no-launch">
+          只监控，不帮你启动：没填启动程序时「看护」和「开机自启」用不上。想用的话，点「⋯」→「编辑本机服务」把启动程序填上。
+        </p>
+      ) : null}
+
+      <FixRibbon serviceId={serviceId} onLogs={onLogs} onEditPort={onEdit} />
     </article>
   );
 }
+
+export const ServiceCard = memo(ServiceCardInner);

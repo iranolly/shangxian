@@ -53,8 +53,7 @@ pub fn parse(output: &str) -> AccessCheck {
     };
 
     let mut in_conf = false;
-    // server 块内的花括号层级：server { 之后是 1，location/if 等子块里是 2 及以上。
-    let mut depth: i32 = 0;
+    let mut conf = String::new();
 
     for line in output.lines() {
         let line = line.trim();
@@ -63,21 +62,30 @@ pub fn parse(output: &str) -> AccessCheck {
                 in_conf = false;
                 continue;
             }
-            scan_conf_line(line, &mut check, &mut depth);
+            conf.push_str(line);
+            conf.push('\n');
             continue;
         }
 
         // 正文之外只认标记行（正文里出现的同样字样不作数）。
         match line {
-            CONF_BEGIN => {
-                in_conf = true;
-                depth = 0;
-            }
+            CONF_BEGIN => in_conf = true,
             "CONF_FOUND" => check.conf_found = true,
             "CONF_MISSING" => check.conf_found = false,
             "HTPASSWD_YES" => check.htpasswd_exists = true,
             "HTPASSWD_NO" => check.htpasswd_exists = false,
             _ => {}
+        }
+    }
+
+    // 只看 server 块顶层（大括号层级 == 1）的规则；location / if 等子块里的
+    // `deny all;` / `allow 1.2.3.4;` 是局部的，不能当成整站的保护。
+    for block in parse_block_tree(&conf) {
+        if !head_is(&block.head, "server") {
+            continue;
+        }
+        for stmt in &block.directives {
+            parse_directive(stmt, &mut check);
         }
     }
 
@@ -87,45 +95,459 @@ pub fn parse(output: &str) -> AccessCheck {
     check
 }
 
-/// 逐字符扫一行配置：数花括号层级，只在层级 == 1 时把 `;` 结束的语句当规则解析。
+// ---------- server 块扫描器（D3 §4：HTTPS / 证书 / 跳转 / 日志 / .well-known 判断用） ----------
+
+/// 一个 `listen` 指令：端口 + 是不是带 `ssl` 参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listen {
+    pub port: u16,
+    pub ssl: bool,
+    pub args: Vec<String>,
+}
+
+/// 一条 `return <code> <目标>;`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReturnRule {
+    pub code: u16,
+    pub target: String,
+}
+
+/// 一条 `rewrite <正则> <目标> [flag];`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewriteRule {
+    pub target: String,
+    pub flag: String,
+}
+
+/// 一个 `location` 子块（只收我们关心的那几样）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocationBlock {
+    /// `location` 后面的参数（已去引号），例：`/.well-known/`、`^~ /.well-known/`
+    pub args: String,
+    /// 子块里的语句原文（已去分号）
+    pub directives: Vec<String>,
+    /// 子块里有 `auth_basic off;`
+    pub auth_basic_off: bool,
+    /// 子块里有 `allow all;`
+    pub allow_all: bool,
+}
+
+/// 一个 `server { }` 块里我们关心的内容。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ServerBlock {
+    /// `server_name` 列表（已转小写、去掉结尾的点）
+    pub server_names: Vec<String>,
+    pub listens: Vec<Listen>,
+    /// 有 `ssl on;`
+    pub ssl_on: bool,
+    /// `ssl_certificate` 的路径（含 $ 变量的跳过）
+    pub ssl_certificates: Vec<String>,
+    pub returns: Vec<ReturnRule>,
+    pub rewrites: Vec<RewriteRule>,
+    /// `access_log` 的第一个参数；`off` 原样记成 "off"
+    pub access_logs: Vec<String>,
+    /// 直接的 `location` 子块
+    pub locations: Vec<LocationBlock>,
+    /// 块里（含子块）有没有 `proxy_pass`
+    pub has_proxy_pass: bool,
+    /// 块顶层的语句原文（已去分号）
+    pub directives: Vec<String>,
+}
+
+/// 命中这个网站的 server 块选择结果。
+#[derive(Debug)]
+pub enum ServerPick<'a> {
+    /// server_name 和域名对上的块（可能多个）
+    Matched(Vec<&'a ServerBlock>),
+    /// 没对上，但整个配置里只有一个 server 块：按它判断（调用方要给黄字提醒）
+    Single(&'a ServerBlock),
+    /// 对不上（或一个 server 块都没有）
+    None,
+}
+
+/// 80 跳 443 的跳转类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RedirectKind {
+    /// 301 / 308 / rewrite 到 https
+    Permanent,
+    /// 302 / 307（临时跳转，要提醒用户换 301）
+    Temporary,
+}
+
+impl ServerBlock {
+    /// 这个块开了 ssl：listen 带 ssl 参数，或有 `ssl on;`。
+    pub fn has_ssl(&self) -> bool {
+        self.ssl_on || self.listens.iter().any(|l| l.ssl)
+    }
+
+    /// 这个块是不是在监听指定端口；一条 `listen` 都没写时 nginx 默认监听 80。
+    pub fn listens_on(&self, port: u16) -> bool {
+        if self.listens.is_empty() {
+            port == 80
+        } else {
+            self.listens.iter().any(|l| l.port == port)
+        }
+    }
+
+    /// 块里第一个 `/.well-known/` 的 location。
+    pub fn wellknown(&self) -> Option<&LocationBlock> {
+        self.locations.iter().find(|l| is_wellknown_args(&l.args))
+    }
+
+    pub fn has_wellknown(&self) -> bool {
+        self.wellknown().is_some()
+    }
+
+    /// 块里有没有「跳到 https」的 return/rewrite（只在块顶层看，和 D3 §4 一致）。
+    pub fn redirect_to_https(&self) -> Option<RedirectKind> {
+        let mut temporary = None;
+        for r in &self.returns {
+            if !target_is_https(&r.target) {
+                continue;
+            }
+            match r.code {
+                301 | 308 => return Some(RedirectKind::Permanent),
+                302 | 307 => temporary = Some(RedirectKind::Temporary),
+                _ => {}
+            }
+        }
+        for r in &self.rewrites {
+            if target_is_https(&r.target)
+                && (r.flag == "permanent" || r.flag == "redirect")
+            {
+                temporary = Some(RedirectKind::Temporary);
+            }
+        }
+        temporary
+    }
+
+    /// 第一个不是 off 的 `access_log` 路径。
+    pub fn access_log_path(&self) -> Option<&str> {
+        self.access_logs
+            .iter()
+            .map(String::as_str)
+            .find(|p| !p.eq_ignore_ascii_case("off"))
+    }
+}
+
+/// 域名和一条 server_name 是否匹配（忽略大小写、忽略结尾的点；支持 *./. 通配）。
 ///
-/// - 引号里的 `{` `}` `#` 和 `;` 都只是普通字符；
-/// - `#` 到行尾算注释；
-/// - 一行写完的 `location x { deny all; }`：`{` 先把层级 +1，后面的语句在层级 2，
-///   不会被误当成整站规则。
-fn scan_conf_line(line: &str, check: &mut AccessCheck, depth: &mut i32) {
+/// - `a.example.com` 精确匹配；
+/// - `*.example.com` 匹配子域名（不匹配裸域名，和 nginx 一致）；
+/// - `.example.com` 匹配裸域名和所有子域名。
+/// - `_`（nginx 的默认块占位）永远不匹配。
+pub fn server_name_matches(domain: &str, name: &str) -> bool {
+    let d = normalize_name(domain);
+    let n = normalize_name(name);
+    if d.is_empty() || n.is_empty() || n == "_" {
+        return false;
+    }
+    if let Some(suffix) = n.strip_prefix("*.") {
+        if suffix.is_empty() || !d.ends_with(suffix) || d.len() <= suffix.len() {
+            return false;
+        }
+        return d.as_bytes()[d.len() - suffix.len() - 1] == b'.';
+    }
+    if let Some(suffix) = n.strip_prefix('.') {
+        return d == suffix
+            || (d.len() > suffix.len() && d.ends_with(suffix));
+    }
+    d == n
+}
+
+/// 从一份站点配置里挑出「本隧道的块」。
+pub fn pick_server<'a>(blocks: &'a [ServerBlock], domain: &str) -> ServerPick<'a> {
+    let matched: Vec<&ServerBlock> = blocks
+        .iter()
+        .filter(|b| b.server_names.iter().any(|n| server_name_matches(domain, n)))
+        .collect();
+    if !matched.is_empty() {
+        return ServerPick::Matched(matched);
+    }
+    if blocks.len() == 1 {
+        return ServerPick::Single(&blocks[0]);
+    }
+    ServerPick::None
+}
+
+/// 扫一份 nginx 配置（站点 conf 或 `nginx -T` 的输出都行），列出所有 server 块。
+pub fn scan_servers(conf: &str) -> Vec<ServerBlock> {
+    let mut out = Vec::new();
+    for root in parse_block_tree(conf) {
+        collect_servers(&root, &mut out);
+    }
+    out
+}
+
+fn collect_servers(node: &RawBlock, out: &mut Vec<ServerBlock>) {
+    if head_is(&node.head, "server") {
+        out.push(build_server(node));
+        return;
+    }
+    for child in &node.children {
+        collect_servers(child, out);
+    }
+}
+
+fn build_server(node: &RawBlock) -> ServerBlock {
+    let mut sb = ServerBlock::default();
+    sb.has_proxy_pass = subtree_has_directive(node, "proxy_pass");
+
+    for stmt in &node.directives {
+        let (name, args) = split_directive(stmt);
+        match name.to_ascii_lowercase().as_str() {
+            "server_name" => {
+                for a in &args {
+                    let token = normalize_name(a);
+                    if !token.is_empty() {
+                        sb.server_names.push(token);
+                    }
+                }
+            }
+            "listen" => {
+                if let Some(port) = parse_listen_port(args.first().map(String::as_str)) {
+                    let ssl = args.iter().any(|a| a.eq_ignore_ascii_case("ssl"));
+                    sb.listens.push(Listen {
+                        port,
+                        ssl,
+                        args: args.clone(),
+                    });
+                }
+            }
+            "ssl" => {
+                if args.first().map(|a| a.eq_ignore_ascii_case("on")).unwrap_or(false) {
+                    sb.ssl_on = true;
+                }
+            }
+            "ssl_certificate" => {
+                if let Some(path) = args.first() {
+                    if !path.is_empty() && !path.contains('$') {
+                        sb.ssl_certificates.push(path.clone());
+                    }
+                }
+            }
+            "return" => {
+                if let Some(code) = args.first().and_then(|a| a.parse::<u16>().ok()) {
+                    sb.returns.push(ReturnRule {
+                        code,
+                        target: args.get(1).cloned().unwrap_or_default(),
+                    });
+                }
+            }
+            "rewrite" => {
+                if let Some(target) = args.get(1) {
+                    sb.rewrites.push(RewriteRule {
+                        target: target.clone(),
+                        flag: args
+                            .get(2)
+                            .map(|f| f.to_ascii_lowercase())
+                            .unwrap_or_default(),
+                    });
+                }
+            }
+            "access_log" => {
+                if let Some(path) = args.first() {
+                    if path.eq_ignore_ascii_case("off") {
+                        sb.access_logs.push("off".to_string());
+                    } else {
+                        sb.access_logs.push(path.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+        sb.directives.push(stmt.clone());
+    }
+
+    for child in &node.children {
+        if !head_is(&child.head, "location") {
+            continue;
+        }
+        let args = child
+            .head
+            .split_once(char::is_whitespace)
+            .map(|(_, rest)| rest.trim().to_string())
+            .unwrap_or_default();
+        let mut lb = LocationBlock {
+            args,
+            directives: child.directives.clone(),
+            auth_basic_off: false,
+            allow_all: false,
+        };
+        for stmt in &child.directives {
+            let (name, args) = split_directive(stmt);
+            match name.to_ascii_lowercase().as_str() {
+                "auth_basic" => {
+                    if args
+                        .first()
+                        .map(|v| v.eq_ignore_ascii_case("off"))
+                        .unwrap_or(false)
+                    {
+                        lb.auth_basic_off = true;
+                    }
+                }
+                "allow" => {
+                    if args
+                        .first()
+                        .map(|v| v.eq_ignore_ascii_case("all"))
+                        .unwrap_or(false)
+                    {
+                        lb.allow_all = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        sb.locations.push(lb);
+    }
+
+    sb
+}
+
+/// 一层一层地把配置拆成块树（引号、注释、花括号的规则和现有解析器一致）。
+#[derive(Debug, Clone, Default)]
+struct RawBlock {
+    head: String,
+    directives: Vec<String>,
+    children: Vec<RawBlock>,
+}
+
+fn parse_block_tree(text: &str) -> Vec<RawBlock> {
+    let mut stack: Vec<RawBlock> = vec![RawBlock::default()];
     let mut stmt = String::new();
     let mut quote: Option<char> = None;
+    let mut comment = false;
 
-    for ch in line.chars() {
+    for ch in text.chars() {
+        if comment {
+            if ch == '\n' {
+                comment = false;
+            }
+            continue;
+        }
         if let Some(q) = quote {
+            stmt.push(ch);
             if ch == q {
                 quote = None;
-            } else {
-                stmt.push(ch);
             }
             continue;
         }
         match ch {
-            '"' | '\'' => quote = Some(ch),
-            '#' => break, // 行尾注释，剩下的都不算
+            '"' | '\'' => {
+                quote = Some(ch);
+                stmt.push(ch);
+            }
+            '#' => comment = true,
             '{' => {
-                *depth += 1;
+                let head = stmt.trim().to_string();
                 stmt.clear();
+                stack.push(RawBlock {
+                    head,
+                    ..RawBlock::default()
+                });
             }
             '}' => {
-                *depth = (*depth - 1).max(0);
-                stmt.clear();
-            }
-            ';' => {
-                if *depth == 1 {
-                    parse_directive(&stmt, check);
+                flush_stmt(&mut stmt, &mut stack);
+                if stack.len() > 1 {
+                    let done = stack.pop().unwrap();
+                    if let Some(parent) = stack.last_mut() {
+                        parent.children.push(done);
+                    }
                 }
-                stmt.clear();
             }
-            _ => stmt.push(ch),
+            ';' => flush_stmt(&mut stmt, &mut stack),
+            _ => {
+                if ch.is_whitespace() {
+                    if !stmt.is_empty() && !stmt.ends_with(' ') {
+                        stmt.push(' ');
+                    }
+                } else {
+                    stmt.push(ch);
+                }
+            }
         }
     }
+    flush_stmt(&mut stmt, &mut stack);
+    // 最后一个大括号没闭合也照样收拢（配置文件被截断时不丢内容）
+    while stack.len() > 1 {
+        let done = stack.pop().unwrap();
+        if let Some(parent) = stack.last_mut() {
+            parent.children.push(done);
+        }
+    }
+    stack.remove(0).children
+}
+
+fn flush_stmt(stmt: &mut String, stack: &mut [RawBlock]) {
+    let text = stmt.trim().to_string();
+    stmt.clear();
+    if text.is_empty() {
+        return;
+    }
+    if let Some(block) = stack.last_mut() {
+        block.directives.push(text);
+    }
+}
+
+fn subtree_has_directive(node: &RawBlock, name: &str) -> bool {
+    if node
+        .directives
+        .iter()
+        .any(|d| split_directive(d).0.eq_ignore_ascii_case(name))
+    {
+        return true;
+    }
+    node.children.iter().any(|c| subtree_has_directive(c, name))
+}
+
+fn head_is(head: &str, word: &str) -> bool {
+    head.split_whitespace()
+        .next()
+        .map(|w| w.eq_ignore_ascii_case(word))
+        .unwrap_or(false)
+}
+
+fn split_directive(text: &str) -> (String, Vec<String>) {
+    let text = text.trim();
+    let (head, rest) = match text.split_once(char::is_whitespace) {
+        Some((head, rest)) => (head, rest),
+        None => (text, ""),
+    };
+    let args = rest
+        .split_whitespace()
+        .map(unquote)
+        .filter(|a| !a.is_empty())
+        .collect();
+    (head.to_string(), args)
+}
+
+fn parse_listen_port(token: Option<&str>) -> Option<u16> {
+    let token = token?.trim();
+    if token.is_empty() || token.contains('/') {
+        return None;
+    }
+    if let Ok(port) = token.parse::<u16>() {
+        return Some(port);
+    }
+    // 127.0.0.1:8080 / [::]:8080 / *:8080
+    token.rsplit(':').next()?.parse::<u16>().ok()
+}
+
+fn normalize_name(raw: &str) -> String {
+    raw.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn target_is_https(target: &str) -> bool {
+    let t = target.trim();
+    t.len() >= 8 && t.as_bytes()[..8].eq_ignore_ascii_case(b"https://")
+}
+
+/// `location` 的参数是不是 `/.well-known/` 这一块（前缀匹配，去掉 = ^~ ~ 等修饰）。
+fn is_wellknown_args(args: &str) -> bool {
+    args.split_whitespace().any(|part| {
+        let p = part.trim_matches(|c| c == '=' || c == '~' || c == '^');
+        p.starts_with("/.well-known/")
+    })
 }
 
 /// 把层级 1 的一条语句（`auth_basic "需要密码"` 这种）按规则记进结果。
@@ -467,5 +889,158 @@ HTPASSWD_NO
         let check = parse(text);
         assert!(check.ip_on);
         assert_eq!(check.allow_ips, vec!["1.2.3.4"]);
+    }
+
+    // ---------- server 块扫描器 ----------
+
+    const SITE: &str = r#"
+# 站点注释
+server {
+    listen 80;
+    listen [::]:80;
+    server_name album.example.com www.album.example.com;
+    access_log /www/wwwlogs/album.example.com.log main;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name album.example.com;
+    ssl_certificate /www/server/panel/vhost/cert/album.example.com/fullchain.pem;
+    access_log /www/wwwlogs/album.example.com.log;
+    proxy_pass http://127.0.0.1:18080;
+    location /.well-known/ {
+        auth_basic off;
+        allow all;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:18080;
+    }
+}
+"#;
+
+    #[test]
+    fn scans_server_blocks() {
+        let blocks = scan_servers(SITE);
+        assert_eq!(blocks.len(), 2, "应该扫到两个 server 块");
+        let http = &blocks[0];
+        assert_eq!(http.server_names, vec!["album.example.com", "www.album.example.com"]);
+        assert_eq!(http.listens.len(), 2);
+        assert!(http.listens_on(80) && !http.listens_on(443));
+        assert!(!http.has_ssl());
+        assert_eq!(http.redirect_to_https(), Some(RedirectKind::Permanent));
+        assert_eq!(http.access_log_path(), Some("/www/wwwlogs/album.example.com.log"));
+
+        let https = &blocks[1];
+        assert!(https.has_ssl(), "listen 443 ssl 要算开了 ssl");
+        assert!(https.listens_on(443) && !https.listens_on(80));
+        assert_eq!(
+            https.ssl_certificates,
+            vec!["/www/server/panel/vhost/cert/album.example.com/fullchain.pem"]
+        );
+        assert!(https.has_proxy_pass);
+        assert!(https.has_wellknown());
+        let wk = https.wellknown().unwrap();
+        assert!(wk.auth_basic_off && wk.allow_all);
+    }
+
+    #[test]
+    fn default_listen_is_80() {
+        let blocks = scan_servers("server { server_name a.example.com; proxy_pass http://127.0.0.1:1; }");
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].listens_on(80), "没写 listen 时 nginx 默认监听 80");
+        assert!(!blocks[0].listens_on(443));
+    }
+
+    #[test]
+    fn ssl_on_shortcut_counts() {
+        let blocks = scan_servers("server { ssl on; server_name a.example.com; }");
+        assert!(blocks[0].has_ssl());
+    }
+
+    #[test]
+    fn picks_wildcard_and_dot_names() {
+        let blocks = scan_servers(
+            r#"server { server_name *.example.com; }
+server { server_name .dot.example.com; }
+server { server_name _; }"#,
+        );
+        assert!(server_name_matches("a.example.com", "*.example.com"));
+        assert!(!server_name_matches("example.com", "*.example.com"), "*. 不匹配裸域名");
+        assert!(server_name_matches("example.com", ".dot.example.com") == false);
+        assert!(server_name_matches("dot.example.com", ".dot.example.com"));
+        assert!(server_name_matches("x.dot.example.com", ".dot.example.com"));
+        assert!(!server_name_matches("a.example.com", "_"));
+        assert!(server_name_matches("ALBUM.example.com.", "album.example.com"));
+
+        match pick_server(&blocks, "demo.example.com") {
+            ServerPick::Matched(v) => assert_eq!(v.len(), 1),
+            other => panic!("应该按通配符命中：{other:?}"),
+        }
+        match pick_server(&blocks, "nothing.org") {
+            ServerPick::None => {}
+            other => panic!("多条但都对不上应该 None：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_block_fallback() {
+        let blocks = scan_servers("server { server_name other.example.com; }");
+        match pick_server(&blocks, "album.example.com") {
+            ServerPick::Single(b) => assert_eq!(b.server_names, vec!["other.example.com"]),
+            other => panic!("只有一个块时应该直接用它：{other:?}"),
+        }
+    }
+
+    #[test]
+    fn temporary_redirect_is_flagged() {
+        let blocks = scan_servers(
+            "server { listen 80; server_name a.example.com; return 302 https://$host$request_uri; }",
+        );
+        assert_eq!(blocks[0].redirect_to_https(), Some(RedirectKind::Temporary));
+    }
+
+    #[test]
+    fn rewrite_permanent_counts_as_redirect() {
+        let blocks = scan_servers(
+            "server { listen 80; server_name a.example.com; rewrite ^ https://$host$request_uri permanent; }",
+        );
+        assert!(blocks[0].redirect_to_https().is_some());
+    }
+
+    #[test]
+    fn wellknown_modifiers_are_recognized() {
+        let blocks = scan_servers(
+            "server { server_name a.example.com; location ^~ /.well-known/ { auth_basic off; } }",
+        );
+        let wk = blocks[0].wellknown().expect("^~ 的 location 也要认出来");
+        assert!(wk.auth_basic_off);
+        assert!(!wk.allow_all);
+    }
+
+    #[test]
+    fn certificates_with_variables_are_skipped() {
+        let blocks = scan_servers(
+            "server { server_name a.example.com; ssl_certificate $ssl_server_name.crt; ssl_certificate /etc/ssl/real.pem; }",
+        );
+        assert_eq!(blocks[0].ssl_certificates, vec!["/etc/ssl/real.pem"]);
+    }
+
+    #[test]
+    fn http_wrapped_conf_is_scanned() {
+        // nginx -T 的整份输出是 http { server { ... } } 套起来的
+        let blocks = scan_servers(
+            "http {\n  server { listen 443 ssl; server_name a.example.com; }\n}\n",
+        );
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].has_ssl());
+    }
+
+    #[test]
+    fn truncated_block_does_not_lose_directives() {
+        let blocks = scan_servers("server { listen 443 ssl; server_name a.example.com;");
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].has_ssl());
+        assert_eq!(blocks[0].server_names, vec!["a.example.com"]);
     }
 }

@@ -1,0 +1,467 @@
+/* E3 新增弹层 / 日志 / 通知中心样式（导入用；不覆盖 app.css）。
+   色板全部沿用 tokens.css，不新增颜色。 */
+
+/* ---------- 日志弹层 ---------- */
+
+.logs-modal {
+  width: 720px;
+}
+.logs-modal.all {
+  width: 820px;
+}
+
+.logs-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.logs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.logs-search {
+  flex: 1;
+  min-width: 180px;
+}
+
+.logs-hit {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  overflow: hidden;
+}
+.seg button {
+  border: 0;
+  background: var(--bg-card);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.seg button + button {
+  border-left: 1px solid var(--border);
+}
+.seg button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+.seg button:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+
+.logs-tool {
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+}
+.logs-tool select,
+.logs-tool input {
+  font-size: 12px;
+}
+
+.logs-path-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  padding: 6px 10px;
+}
+
+.log-viewer {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 46vh;
+  min-height: 220px;
+  overflow: auto;
+  padding: 8px 10px;
+  margin: 0;
+  position: relative;
+}
+
+.log-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 19px;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin: 0 -4px;
+}
+.log-line.current {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.log-line.human {
+  color: var(--text);
+}
+.log-line.tech {
+  color: var(--text-2);
+}
+.log-line.warn {
+  color: var(--st-disconnected-fg);
+}
+.log-line.error {
+  color: var(--st-error-fg);
+}
+.log-time,
+.log-src {
+  color: var(--text-3);
+}
+.log-line mark {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-radius: 2px;
+}
+
+.log-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  padding: 3px 6px;
+  border-radius: var(--r-control);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  position: sticky;
+  top: -8px;
+  z-index: 1;
+}
+.log-group-head:first-child {
+  margin-top: 0;
+}
+.log-group-count {
+  margin-left: auto;
+  font-weight: 400;
+  color: var(--text-2);
+}
+
+.log-empty {
+  padding: 26px 12px;
+  text-align: center;
+  color: var(--text-2);
+  font-family: var(--font-ui);
+}
+.log-empty .log-empty-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+.log-empty p {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.log-float-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: var(--shadow-modal);
+  padding: 5px 12px;
+  font-family: var(--font-ui);
+  font-size: 12px;
+  z-index: 2;
+}
+
+.log-truncated {
+  padding: 6px 4px 2px;
+  color: var(--text-3);
+  font-family: var(--font-ui);
+  font-size: 12px;
+}
+
+/* ---------- 二维码 ---------- */
+
+.qr-box {
+  background: #ffffff;
+  padding: 12px;
+  border-radius: 8px;
+  display: inline-block;
+  line-height: 0;
+  border: 1px solid var(--border);
+}
+.qr-svg {
+  display: block;
+}
+.qr-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.qr-url .mono {
+  flex: 1;
+  min-width: 0;
+  word-break: break-all;
+  user-select: text;
+}
+
+/* ---------- IP 助手 ---------- */
+
+.ip-assist {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.ip-assist-result {
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+/* ---------- 保护状态 / 漂移 / 环境横幅 ---------- */
+
+.chip.danger {
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.drift-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  background: var(--st-connecting-bg);
+  border-left: 3px solid var(--st-connecting);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
+  color: var(--st-connecting-fg);
+}
+
+.env-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  background: var(--st-connecting-bg);
+  border-left: 3px solid var(--st-connecting);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
+  color: var(--st-connecting-fg);
+}
+.env-banner .env-text {
+  flex: 1;
+  min-width: 220px;
+  line-height: 1.6;
+}
+
+/* ---------- nginx 可选附加行 ---------- */
+
+.optional-block {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-control);
+  padding: 8px 10px;
+  background: var(--bg-sidebar);
+}
+.optional-block pre {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-2);
+}
+.optional-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* ---------- 通知中心 ---------- */
+
+.tb-bell {
+  position: relative;
+}
+.tb-bell svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nav-badge {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--st-error);
+  color: #ffffff;
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.notif-panel {
+  position: absolute;
+  top: 38px;
+  right: 8px;
+  width: 360px;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-modal);
+  z-index: 40;
+  text-align: left;
+}
+
+.notif-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.notif-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+}
+.notif-list {
+  overflow-y: auto;
+  padding: 6px 0 8px;
+}
+.notif-group {
+  padding: 6px 14px 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.notif-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+.notif-item:hover {
+  background: var(--row-hover);
+}
+.notif-item.unread .notif-text {
+  font-weight: 500;
+}
+.notif-level {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 18px;
+}
+.notif-body {
+  flex: 1;
+  min-width: 0;
+}
+.notif-text {
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+}
+.notif-time {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.notif-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.notif-empty {
+  padding: 24px 16px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.notif-empty .notif-empty-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+.notif-foot {
+  border-top: 1px solid var(--border);
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---------- 导入 ---------- */
+
+.import-summary {
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--bg-sidebar);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.7;
+}
+.import-summary strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.import-mode {
+  margin-top: 10px;
+}
+.import-file {
+  margin-top: 8px;
+}

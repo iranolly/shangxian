@@ -1,0 +1,60 @@
+; 上线助手 —— NSIS 安装器简体中文文案
+; 由 tauri.conf.json > bundle.windows.nsis.customLanguageFiles 引入（编排在 MUI_LANGUAGE 之后）。
+; 分两部分：
+;   1) Tauri 安装模板的自定义文案（27 条，名字必须和官方 English.nsh 一一对应，一条不能少）；
+;   2) 覆盖 NSIS 自带中文串里带 “Shangxian / ^NameDA” 的显示文案
+;      （重复定义 LangString 只会告警 6030，最后一条生效）。
+; 编码：UTF-8（带 BOM）。改完不要去掉 BOM，否则 makensis 会按系统代码页读，中文会乱。
+
+; ---------- 1) Tauri 自定义文案（27 条，名字不能改） ----------
+LangString addOrReinstall            ${LANG_SIMPCHINESE} "补装 / 重新装一次"
+LangString alreadyInstalled          ${LANG_SIMPCHINESE} "已经装过了"
+LangString alreadyInstalledLong      ${LANG_SIMPCHINESE} "这台电脑上已经装了 上线助手 ${VERSION}。选一个操作，再点「下一步」。"
+LangString appRunning                ${LANG_SIMPCHINESE} "上线助手 正在运行，请先把它关掉再试。"
+LangString appRunningOkKill          ${LANG_SIMPCHINESE} "上线助手 正在运行。点「确定」就把它关掉，接着装。"
+LangString chooseMaintenanceOption   ${LANG_SIMPCHINESE} "选一个操作。"
+LangString choowHowToInstall         ${LANG_SIMPCHINESE} "选怎么装 上线助手。"
+LangString createDesktop             ${LANG_SIMPCHINESE} "在桌面上放一个快捷方式"
+LangString dontUninstall             ${LANG_SIMPCHINESE} "不卸载，直接装"
+LangString dontUninstallDowngrade    ${LANG_SIMPCHINESE} "不卸载（这个安装包是旧版本，不允许直接覆盖）"
+LangString failedToKillApp           ${LANG_SIMPCHINESE} "关不掉 上线助手。请到任务管理器里结束 app.exe，再试。"
+LangString installingWebview2        ${LANG_SIMPCHINESE} "正在安装「网页显示组件」…"
+LangString newerVersionInstalled     ${LANG_SIMPCHINESE} "这台电脑上已经装了更新的 上线助手。装旧版本会让配置打不开（新版本存的配置，旧版本不认识）。真要装旧版本，先卸载现在这个。选一个操作，再点「下一步」。"
+LangString older                     ${LANG_SIMPCHINESE} "更老的"
+LangString olderOrUnknownVersionInstalled ${LANG_SIMPCHINESE} "这台电脑上装了一个$R4版本的 上线助手。建议先卸载再安装。选一个操作，再点「下一步」。"
+LangString silentDowngrades          ${LANG_SIMPCHINESE} "这个安装包不允许降级安装，静默安装走不下去；请双击安装包用图形界面装。$\n"
+LangString unableToUninstall         ${LANG_SIMPCHINESE} "卸载失败。请到任务管理器里结束 app.exe，再重试卸载。"
+LangString uninstallApp              ${LANG_SIMPCHINESE} "卸载 上线助手"
+LangString uninstallBeforeInstalling ${LANG_SIMPCHINESE} "先卸载，再安装"
+LangString unknown                   ${LANG_SIMPCHINESE} "未知"
+LangString webview2AbortError        ${LANG_SIMPCHINESE} "装不上：这台电脑缺「网页显示组件」(WebView2)，去下载也没成功。请连上网，重新运行本安装包；还不行，就去微软官网下载「WebView2 Evergreen 安装包」装好，再运行本安装包。"
+LangString webview2DownloadError     ${LANG_SIMPCHINESE} "下载「网页显示组件」失败（$0）"
+LangString webview2DownloadSuccess   ${LANG_SIMPCHINESE} "「网页显示组件」下载好了"
+LangString webview2Downloading       ${LANG_SIMPCHINESE} "正在下载「网页显示组件」…"
+LangString webview2InstallError      ${LANG_SIMPCHINESE} "安装「网页显示组件」失败（错误码 $1）"
+LangString webview2InstallSuccess    ${LANG_SIMPCHINESE} "「网页显示组件」装好了"
+LangString deleteAppData             ${LANG_SIMPCHINESE} "同时删除配置和密钥（配置文件夹，删了找不回）"
+
+; ---------- 2) 覆盖 NSIS 自带中文串（把 “Shangxian” 从用户可见文案里赶走） ----------
+LangString MUI_TEXT_WELCOME_INFO_TITLE   ${LANG_SIMPCHINESE} "欢迎使用 上线助手"
+LangString MUI_TEXT_WELCOME_INFO_TEXT    ${LANG_SIMPCHINESE} "这个向导会把 上线助手 装到这台电脑上。$\r$\n$\r$\n装之前请先把正在运行的 上线助手 关掉。$\r$\n$\r$\n点「下一步」继续。"
+LangString MUI_TEXT_DIRECTORY_TITLE      ${LANG_SIMPCHINESE} "装到哪儿"
+LangString MUI_TEXT_DIRECTORY_SUBTITLE   ${LANG_SIMPCHINESE} "不改也行，默认装在你自己账号的目录里，不需要管理员。"
+LangString MUI_TEXT_INSTALLING_TITLE     ${LANG_SIMPCHINESE} "正在安装"
+LangString MUI_TEXT_INSTALLING_SUBTITLE  ${LANG_SIMPCHINESE} "稍等，马上好。"
+LangString MUI_TEXT_FINISH_TITLE         ${LANG_SIMPCHINESE} "装好了"
+LangString MUI_TEXT_FINISH_SUBTITLE      ${LANG_SIMPCHINESE} "点「完成」就结束。"
+LangString MUI_TEXT_FINISH_INFO_TITLE    ${LANG_SIMPCHINESE} "上线助手 装好了"
+LangString MUI_TEXT_FINISH_INFO_TEXT     ${LANG_SIMPCHINESE} "开始菜单和桌面都有快捷方式，双击就能用。$\r$\n$\r$\n第一次打开如果 Windows 提示「未知发布者」，点「更多信息」→「仍要运行」就行（安装包没买签名证书）。"
+LangString MUI_TEXT_FINISH_RUN           ${LANG_SIMPCHINESE} "现在就打开 上线助手(&R)"
+LangString MUI_TEXT_FINISH_SHOWREADME    ${LANG_SIMPCHINESE} "在桌面上放一个快捷方式(&M)"
+LangString MUI_UNTEXT_WELCOME_INFO_TITLE ${LANG_SIMPCHINESE} "卸载 上线助手"
+LangString MUI_UNTEXT_WELCOME_INFO_TEXT  ${LANG_SIMPCHINESE} "这个向导会把 上线助手 从这台电脑上卸掉。$\r$\n$\r$\n下一步会让你选「要不要把配置和密钥一起删掉」。$\r$\n$\r$\n点「下一步」继续。"
+LangString MUI_UNTEXT_CONFIRM_TITLE      ${LANG_SIMPCHINESE} "卸载 上线助手"
+LangString MUI_UNTEXT_CONFIRM_SUBTITLE   ${LANG_SIMPCHINESE} "确认一下就开卸。"
+LangString MUI_UNTEXT_UNINSTALLING_TITLE ${LANG_SIMPCHINESE} "正在卸载"
+LangString MUI_UNTEXT_UNINSTALLING_SUBTITLE ${LANG_SIMPCHINESE} "先把正在跑的隧道停掉，再删文件。"
+LangString MUI_UNTEXT_FINISH_TITLE       ${LANG_SIMPCHINESE} "卸载完成"
+LangString MUI_UNTEXT_FINISH_INFO_TEXT   ${LANG_SIMPCHINESE} "上线助手 已经卸掉了。配置和密钥按你刚才的选择处理。"
+LangString MUI_TEXT_ABORTWARNING         ${LANG_SIMPCHINESE} "确定要退出「上线助手」安装程序吗？"
+LangString MUI_UNTEXT_ABORTWARNING       ${LANG_SIMPCHINESE} "确定要退出「上线助手」卸载程序吗？"

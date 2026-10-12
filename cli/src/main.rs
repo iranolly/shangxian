@@ -7,21 +7,24 @@
 //! 配置文件，状态字段标成 unknown；要改东西就先 `cli app start`。
 
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
-use shangxian_core::config::{default_data_dir, AppConfig};
+use shangxian_core::config::{self, default_data_dir, AppConfig};
 use shangxian_core::ctl;
+use shangxian_core::doctor::{self, DoctorMode, DoctorRequest};
+use shangxian_core::events::EventLog;
 
 #[derive(Parser)]
 #[command(
     name = "cli",
     version,
     about = "上线助手命令行：查询与配置（默认人话输出，--json 给机器看）",
-    after_help = "给 AI agent 的速查：cli guide\n全部底层方法：cli methods\n危险操作（删除 / 暂停）在非交互环境里必须加 --yes；在交互终端会问你 y/N"
+    after_help = "给 AI agent 的速查：cli guide\n全部底层方法：cli methods\n危险操作（删除 / 暂停 / 停一切 / 重置指纹 / 导入配置）在非交互环境里必须加 --yes；在交互终端会问你 y/N\n应用没在跑时：只读命令看旧配置；需要应用的命令（stats / diag / logs / undo / config import / app update-check）退出码 3；cli doctor 离线也能跑，cli app stop-all 没在跑直接 0"
 )]
 struct Cli {
     /// 输出 JSON（AI agent / 脚本用这个）
@@ -43,17 +46,61 @@ enum Cmd {
     Servers,
     /// 本机正在监听的端口（带进程名和程序路径）
     Ports,
-    /// 读日志：隧道日志或本机服务日志
+    /// 体检：应用、文件夹、SSH、本机端口、服务器、隧道、云端、公网、域名
+    #[command(after_help = "例：
+  cli doctor                # 快速检查（不连服务器）
+  cli doctor --deep         # 深度检查（会连服务器和域名，慢一点）
+  cli doctor --strict       # 只要有 1 项没过就退出码 1（给脚本用；不算命令写错）")]
+    Doctor {
+        #[arg(long)]
+        deep: bool,
+        /// 有没过就退出码 1（不算命令错误；人话输出会写清「自检有 N 项没过」）
+        #[arg(long)]
+        strict: bool,
+    },
+    /// 打一个脱敏诊断包（发给帮你排查的人）
+    Diag {
+        /// 存到哪；不写 = 存到数据目录的 diag 文件夹
+        #[arg(long)]
+        out: Option<String>,
+        #[arg(long)]
+        deep: bool,
+    },
+    /// 运行统计：应用运行多久、隧道重连情况、今日重连次数
+    Stats,
+    /// 读日志：事件（应用里发生的事）/ 应用日志 / 隧道日志 / 本机服务日志
     #[command(after_help = "例：
   cli logs <隧道id> --lines 80
-  cli logs <服务id> --kind service --lines 80")]
+  cli logs <服务id> --kind service --lines 80
+  cli logs --source all --format json --json    # 全部来源，带 JSON 信封
+  cli logs --source app --format json           # 事件 + 应用日志，一行一条 JSON（给管道用）
+  cli logs <隧道id> --archive 1                 # 看上一份轮转备份")]
     Logs {
-        id: String,
-        /// tunnel（隧道日志）或 service（服务日志）；别的值会直接报错
+        /// 隧道 / 服务 id；不写 = 看全部来源（事件 + 应用日志 + 所有隧道 / 服务）
+        id: Option<String>,
+        /// tunnel（隧道日志）或 service（服务日志）；不写 = tunnel（旧写法兼容）
         #[arg(long, default_value = "tunnel")]
         kind: String,
-        #[arg(long, default_value_t = 60)]
+        /// all | tunnel | service | app；写了它就以它为准（--kind 只作旧写法兼容）
+        #[arg(long)]
+        source: Option<String>,
+        /// lines（默认，人话文本）或 json（一行一条 JSON，给管道用）
+        #[arg(long, default_value = "lines")]
+        format: String,
+        /// 0 = 只看当前文件，1 / 2 = 连上一份 / 上两份轮转备份
+        #[arg(long, default_value_t = 0, allow_negative_numbers = true)]
+        archive: i64,
+        #[arg(long, default_value_t = 200)]
         lines: usize,
+    },
+    /// 撤销删除（删除后 10 分钟内有效；找不到就退出码 1）
+    #[command(after_help = "例：
+  cli undo              # 撤销最近一次删除（= cli undo last）
+  cli undo list         # 看还能撤销哪些
+  cli undo und-3f9a1c2d # 按令牌撤销指定的一条")]
+    Undo {
+        /// 撤销令牌，或 last（最近一次）/ list（列出能撤销的）；不写 = last
+        target: Option<String>,
     },
     /// 生成 nginx 配置片段（人工贴到面板上）
     Nginx { id: String },
@@ -72,10 +119,15 @@ enum Cmd {
         #[command(subcommand)]
         sub: ServerCmd,
     },
-    /// 应用自己：启动、看状态
+    /// 应用自己：启动、看状态、停全部服务、查更新
     App {
         #[command(subcommand)]
         sub: AppCmd,
+    },
+    /// 配置备份：导出 / 导入
+    Config {
+        #[command(subcommand)]
+        sub: ConfigCmd,
     },
     /// 列出所有可调用的底层方法（给 agent 看）
     Methods,
@@ -195,6 +247,9 @@ enum TunnelCmd {
         /// 只允许这些 IP（access 含 ip 时用，例 "1.2.3.4,5.6.7.8"）
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
+        /// 发布预设：web（默认，普通网站）/ ws（WebSocket）/ upload（传大文件）
+        #[arg(long)]
+        preset: Option<String>,
     },
     /// 改：只写你要改的字段，其余保持不变
     #[command(after_help = "例：
@@ -219,6 +274,9 @@ enum TunnelCmd {
         access_password: Option<String>,
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
+        /// 发布预设：web / ws / upload；不传 = 保持原来的
+        #[arg(long)]
+        preset: Option<String>,
     },
     /// 核对云端 nginx 上这条隧道实际开着的访问保护（走 SSH 只读读配置）
     Check { id: String },
@@ -241,6 +299,50 @@ enum TunnelCmd {
     Remove {
         id: String,
         /// 跳过 y/N 确认，直接删（脚本 / agent 用）
+        #[arg(long)]
+        yes: bool,
+    },
+    /// 重置服务器指纹（服务器重装过 / 换过机器时用；要确认）
+    #[command(after_help = "例：
+  cli tunnel forget-key <隧道id> --yes")]
+    ForgetKey {
+        /// 这条隧道对应的服务器会被重新信任，然后隧道重新连
+        id: String,
+        /// 跳过 y/N 确认，直接重置（脚本 / agent 用）
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// 导出设置（默认不含密码哈希、不含密钥路径）
+    #[command(after_help = "例：
+  cli config export --out 备份.json
+  cli config export --json          # 直接拿 JSON（机器用）
+  cli config export --with-paths    # 连密钥路径一起导出（仍然不含密码哈希）")]
+    Export {
+        /// 存到哪；不写 = 打印出来（自己存成 .json 就是备份）
+        #[arg(long)]
+        out: Option<String>,
+        /// 连密钥路径一起导出（仍然不含密码哈希）
+        #[arg(long = "with-paths")]
+        with_paths: bool,
+    },
+    /// 导入设置（会改设置；交互会问你 y/N，非交互要 --yes；--dry-run 只检查）
+    #[command(after_help = "例：
+  cli config import 备份.json --dry-run              # 只看会改什么，不写盘
+  cli config import 备份.json --yes                  # 合并导入（默认）
+  cli config import 备份.json --mode replace --yes   # 整份替换（会先自动备份）")]
+    Import {
+        file: String,
+        /// merge（默认，按 id 合并）或 replace（整份替换）
+        #[arg(long, default_value = "merge")]
+        mode: String,
+        /// 只检查、不写盘；不用确认
+        #[arg(long = "dry-run")]
+        dry_run: bool,
+        /// 跳过 y/N 确认（脚本 / agent 用）
         #[arg(long)]
         yes: bool,
     },
@@ -311,6 +413,17 @@ enum AppCmd {
     Start,
     /// 应用在不在跑
     Status,
+    /// 停掉全部发布隧道和应用拉起的本机服务（升级 / 卸载前用；要确认）
+    #[command(after_help = "例：
+  cli app stop-all --yes   # 安装器升级/卸载前调它：先停服务和隧道，再让安装程序动 app.exe
+  应用没在跑时：什么都不会做，退出码 0（安装器脚本不用管失败）")]
+    StopAll {
+        /// 跳过 y/N 确认，直接停（脚本 / agent / 安装器用）
+        #[arg(long)]
+        yes: bool,
+    },
+    /// 检查有没有新版本（只查，不下载、不安装）
+    UpdateCheck,
 }
 
 fn main() {
@@ -335,20 +448,45 @@ fn main() {
             if want_json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&json!({"ok": false, "error": e})).unwrap()
+                    serde_json::to_string_pretty(&json!({"ok": false, "error": shown_error(&e)})).unwrap()
                 );
             } else {
-                eprintln!("✗ {e}");
+                eprintln!("✗ {}", shown_error(&e));
             }
-            std::process::exit(1);
+            std::process::exit(exit_code_for_error(&e));
         }
+    }
+}
+
+/// 需要应用、但应用没在跑的错：带这个内部前缀，退出码映射成 3，打印前剥掉。
+const OFFLINE_ERR: &str = "\u{1}离线\u{1}";
+
+fn offline_error(msg: &str) -> String {
+    format!("{OFFLINE_ERR}{msg}")
+}
+
+fn is_offline_error(msg: &str) -> bool {
+    msg.starts_with(OFFLINE_ERR) || msg.starts_with(ctl::APP_NOT_RUNNING)
+}
+
+/// 打印前剥掉内部前缀（用户看不到任何标记）。
+fn shown_error(msg: &str) -> &str {
+    msg.strip_prefix(OFFLINE_ERR).unwrap_or(msg)
+}
+
+/// 退出码：命令本身的问题 → 1；需要应用而应用没在跑 → 3（0/2 由别处给）。
+fn exit_code_for_error(msg: &str) -> i32 {
+    if is_offline_error(msg) {
+        3
+    } else {
+        1
     }
 }
 
 fn run(cli: &Cli) -> Result<i32, String> {
     match &cli.cmd {
         Cmd::Status => {
-            let snap = snapshot();
+            let snap = snapshot()?;
             if cli.json {
                 print_ok(&snap);
             } else {
@@ -356,7 +494,7 @@ fn run(cli: &Cli) -> Result<i32, String> {
             }
         }
         Cmd::Services => {
-            let snap = snapshot();
+            let snap = snapshot()?;
             if cli.json {
                 print_ok(&snap["services"]);
             } else {
@@ -364,7 +502,7 @@ fn run(cli: &Cli) -> Result<i32, String> {
             }
         }
         Cmd::Tunnels => {
-            let snap = snapshot();
+            let snap = snapshot()?;
             if cli.json {
                 print_ok(&snap["tunnels"]);
             } else {
@@ -372,7 +510,7 @@ fn run(cli: &Cli) -> Result<i32, String> {
             }
         }
         Cmd::Servers => {
-            let snap = snapshot();
+            let snap = snapshot()?;
             if cli.json {
                 print_ok(&snap["servers"]);
             } else {
@@ -387,31 +525,26 @@ fn run(cli: &Cli) -> Result<i32, String> {
                 print_ports(&v);
             }
         }
-        Cmd::Logs { id, kind, lines } => {
-            // --kind 写错不能悄悄按隧道处理；先严格认，再确认 id 存在
-            // （免得脚本把「空输出」当成「一切正常」）
-            let is_service = match kind.as_str() {
-                "tunnel" => false,
-                "service" => true,
-                other => {
-                    return Err(format!(
-                        "--kind 只认 tunnel（隧道日志）或 service（服务日志），你写的是「{other}」。\n隧道日志：cli logs {id} --kind tunnel；服务日志：cli logs {id} --kind service"
-                    ));
-                }
-            };
-            if is_service {
-                find_service(id)?;
-            } else {
-                find_tunnel(id)?;
-            }
-            let method = if is_service { "get_service_logs" } else { "get_logs" };
-            let v = call(method, json!({"id": id, "lines": lines}))?;
-            if cli.json {
-                print_ok(&v);
-            } else {
-                println!("{}", v["text"].as_str().unwrap_or(""));
-            }
-        }
+        Cmd::Doctor { deep, strict } => return doctor_cmd(*deep, *strict, cli.json),
+        Cmd::Diag { out, deep } => diag_cmd(out.as_deref(), *deep, cli.json)?,
+        Cmd::Stats => stats_cmd(cli.json)?,
+        Cmd::Logs {
+            id,
+            kind,
+            source,
+            format,
+            archive,
+            lines,
+        } => logs_cmd(
+            id.as_deref(),
+            kind,
+            source.as_deref(),
+            format,
+            *archive,
+            *lines,
+            cli.json,
+        )?,
+        Cmd::Undo { target } => undo_cmd(target.as_deref(), cli.json)?,
         Cmd::Nginx { id } => {
             let v = call("get_nginx_snippet", json!({"id": id}))?;
             if cli.json {
@@ -435,6 +568,7 @@ fn run(cli: &Cli) -> Result<i32, String> {
         Cmd::Tunnel { sub } => tunnel_cmd(sub, cli.json)?,
         Cmd::Server { sub } => server_cmd(sub, cli.json)?,
         Cmd::App { sub } => return app_cmd(sub, cli.json),
+        Cmd::Config { sub } => config_cmd(sub, cli.json)?,
         Cmd::Methods => {
             let v = call("methods", json!({}))?;
             if cli.json {
@@ -601,7 +735,11 @@ fn service_cmd(sub: &ServiceCmd, want_json: bool) -> Result<(), String> {
                 return cancelled(want_json);
             }
             let v = call("remove_service", json!({"id": id}))?;
-            done(want_json, &v, &format!("✓ 已删除本机服务「{name}」（{id}）"));
+            done(
+                want_json,
+                &v,
+                &format!("✓ 已删除本机服务「{name}」（{id}）\n（10 分钟内可以撤销：cli undo last）"),
+            );
         }
     }
     Ok(())
@@ -619,6 +757,7 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
             access_user,
             access_password,
             access_ips,
+            preset,
         } => {
             // --access 拼错、或 --access-password / --access-ips 没配套：先报错，
             // 不让它们被 core 柔性丢掉，变成「看着开了保护其实没有」。
@@ -629,6 +768,9 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                 access_ips.as_deref(),
                 false,
             )?;
+            if let Some(p) = preset {
+                config::check_preset_strict(p)?;
+            }
             let svc = find_service(service)?;
             let svc_name = str_of(&svc, "name");
             let name = name
@@ -650,6 +792,7 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                     "accessUser": access_user,
                     "accessHash": hash,
                     "accessDetail": access_ips,
+                    "preset": preset,
                 }),
             )?;
             done(
@@ -671,8 +814,12 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
             access_user,
             access_password,
             access_ips,
+            preset,
         } => {
             let old = find_tunnel(id)?;
+            if let Some(p) = preset {
+                config::check_preset_strict(p)?;
+            }
             // 不传 --access = 保持原样（从查到的那条隧道里把数组读回来）；
             // 传 none = 清空；传别的 = 整体替换，可以叠加。
             let access_new = if access.is_empty() {
@@ -711,6 +858,7 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                     "accessUser": access_user.clone().or_else(|| opt_str(&old, "accessUser")),
                     "accessHash": hash,
                     "accessDetail": access_ips.clone().or_else(|| opt_str(&old, "accessDetail")),
+                    "preset": preset.clone().or_else(|| opt_str(&old, "preset")),
                 }),
             )?;
             done(
@@ -760,7 +908,29 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                 return cancelled(want_json);
             }
             let v = call("remove_tunnel", json!({"id": id}))?;
-            done(want_json, &v, &format!("✓ 已删除隧道「{name}」（{id}）"));
+            done(
+                want_json,
+                &v,
+                &format!("✓ 已删除隧道「{name}」（{id}）\n（10 分钟内可以撤销：cli undo last）"),
+            );
+        }
+        TunnelCmd::ForgetKey { id, yes } => {
+            let t = find_tunnel(id)?;
+            let name = str_of(&t, "name");
+            let server = str_of(&t, "serverName");
+            if !confirm_destructive(
+                &format!(
+                    "要重新信任服务器「{server}」的新指纹（隧道「{name}」，{id}）。\n只有确认服务器确实重装过、或换过机器时才做；做完这条隧道会重新连。"
+                ),
+                *yes,
+            )? {
+                return cancelled(want_json);
+            }
+            let v = call("forget_host_key", json!({"id": id}))?;
+            let msg = v["message"]
+                .as_str()
+                .unwrap_or("已忘掉旧指纹，下次连接会重新记下来。");
+            done(want_json, &v, &format!("✓ {msg}"));
         }
     }
     Ok(())
@@ -850,7 +1020,11 @@ fn server_cmd(sub: &ServerCmd, want_json: bool) -> Result<(), String> {
                 return cancelled(want_json);
             }
             let v = call("delete_server", json!({"id": id}))?;
-            done(want_json, &v, &format!("✓ 已删除服务器「{name}」（{id}）"));
+            done(
+                want_json,
+                &v,
+                &format!("✓ 已删除服务器「{name}」（{id}）\n（10 分钟内可以撤销：cli undo last）"),
+            );
         }
         ServerCmd::SetupKey { id } => {
             let pw = read_secret("请输入这台服务器的登录密码（不会存下来、不会进日志）：")?;
@@ -934,7 +1108,874 @@ fn app_cmd(sub: &AppCmd, want_json: bool) -> Result<i32, String> {
             }
             return Err("应用起来了但控制通道没通（看托盘图标，或手动打开应用）".into());
         }
+        AppCmd::UpdateCheck => {
+            let v = match call("check_update", json!({})) {
+                Ok(v) => v,
+                Err(e) if is_offline_error(&e) => {
+                    return Err(offline_error("应用没在跑；先 cli app start 再查更新"));
+                }
+                Err(e) => return Err(e),
+            };
+            if want_json {
+                print_ok(&v);
+            } else {
+                print_update(&v);
+            }
+        }
+        AppCmd::StopAll { yes } => return stop_all_cmd(*yes, want_json),
     }
+    Ok(0)
+}
+
+/// `cli app stop-all`：安装 / 卸载前把隧道和本机服务都停掉（D5 §5.3）。
+///
+/// - 应用没在跑：没东西可停，打印一句人话、退出码 0（安装器会忽略失败，不能卡它）。
+/// - 非交互必须 `--yes`（跟别的破坏性命令一个规矩）；交互会问 y/N。
+/// - 总耗时硬上限 15 秒：超时就先返回 0 让安装器继续，应用那头会自己把剩下的停完。
+fn stop_all_cmd(yes: bool, want_json: bool) -> Result<i32, String> {
+    let dir = default_data_dir();
+    // 连 ctl.json 都没有：不用问也不用连
+    if ctl::read_ctl_info(&dir).is_none() {
+        stop_all_nothing(want_json);
+        return Ok(0);
+    }
+    if !confirm_destructive(
+        "要停掉全部发布隧道和应用拉起的本机服务（安装 / 卸载前会这么做）。",
+        yes,
+    )? {
+        // 确认里选「不」：什么都没做，退出码 0
+        return Ok(0);
+    }
+
+    // 15 秒硬上限：把请求丢给一条线程，主线程最多等 15 秒。
+    // 超时就直接走人（进程退出会断开连接）；应用收到请求后会自己把该停的停完。
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(call("stop_all", json!({})));
+    });
+    let result = match rx.recv_timeout(std::time::Duration::from_secs(15)) {
+        Ok(result) => result,
+        Err(_) => {
+            if want_json {
+                print_ok(&json!({
+                    "running": true,
+                    "timedOut": true,
+                    "message": "等了 15 秒还没停完；先让安装/卸载继续，应用会把剩下的停完。",
+                }));
+            } else {
+                println!("等了 15 秒还没停完；先这样，安装/卸载可以继续（应用会把剩下的停完）。");
+            }
+            return Ok(0);
+        }
+    };
+    let v = match result {
+        Ok(v) => v,
+        // 这 15 秒里应用刚好退出：也算没东西可停
+        Err(e) if is_offline_error(&e) => {
+            stop_all_nothing(want_json);
+            return Ok(0);
+        }
+        Err(e) => return Err(e),
+    };
+    if want_json {
+        print_ok(&v);
+    } else {
+        println!("{}", stop_all_summary_text(&v));
+    }
+    Ok(0)
+}
+
+/// stop_all 结果 → 人话汇总。
+fn stop_all_summary_text(v: &Value) -> String {
+    let tunnels = num_of(v, "tunnelsStopped");
+    let tunnels_failed = num_of(v, "tunnelsFailed");
+    let services = num_of(v, "servicesStopped");
+    let services_failed = num_of(v, "servicesFailed");
+    let mut text = format!("✓ 已停止 {tunnels} 条发布隧道、{services} 个本机服务。");
+    if tunnels_failed + services_failed > 0 {
+        text.push_str(&format!(
+            "\n还有 {tunnels_failed} 条隧道、{services_failed} 个服务没能停（可能是脚本启动的或是别的程序在占用）；现在要动 app.exe 的话，先手动处理一下。"
+        ));
+    }
+    text
+}
+
+/// stop-all 的「应用没在跑」统一输出（退出码由调用方给 0）。
+fn stop_all_nothing(want_json: bool) {
+    if want_json {
+        print_ok(&json!({
+            "running": false,
+            "stopped": false,
+            "message": "应用没在跑，没什么要停的",
+        }));
+    } else {
+        println!("应用没在跑，没什么要停的。");
+    }
+}
+
+/// 更新检查的人话输出（有新版额外一行下载地址）。
+fn print_update(v: &Value) {
+    match str_of(v, "status").as_str() {
+        "available" => {
+            let latest = opt_str(v, "latest").unwrap_or_else(|| "?".into());
+            println!("发现新版本 {latest}，下载：{}", opt_str(v, "url").unwrap_or_default());
+        }
+        "upToDate" => println!("✓ 已经是最新版（{}）", opt_str(v, "latest").unwrap_or_default()),
+        "error" => println!(
+            "这次没连上更新服务器：{}",
+            opt_str(v, "error").unwrap_or_else(|| "稍后再试".into())
+        ),
+        _ => println!("更新检查还没跑过；再试一次：cli app update-check"),
+    }
+}
+
+// ---------- 体检 / 诊断包 / 统计 / 日志 / 撤销 / 配置备份 ----------
+
+/// `cli doctor`：应用在跑就让应用体检；没在跑就本地跑能跑的那几步（D2 §14.4）。
+/// `--strict`：有没过 → 退出码 1（这不算命令错误，是「检查没过」）。
+fn doctor_cmd(deep: bool, strict: bool, want_json: bool) -> Result<i32, String> {
+    let mode = if deep { "deep" } else { "quick" };
+    let report = match call("doctor", json!({"mode": mode})) {
+        Ok(v) => v,
+        Err(e) if is_offline_error(&e) => offline_doctor(deep),
+        Err(e) => return Err(e),
+    };
+    if want_json {
+        print_ok(&report);
+    } else {
+        print_doctor(&report);
+    }
+    let fails = report["summary"]["fail"].as_u64().unwrap_or(0);
+    if strict && fails > 0 {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+fn doctor_mark(status: &str) -> &'static str {
+    match status {
+        "pass" => "✓",
+        "warn" => "!",
+        "fail" => "✗",
+        "skip" => "·",
+        _ => "?",
+    }
+}
+
+/// 离线体检：直接复用 core::doctor::run，跟应用里跑的是同一套 9 步。
+/// deep 时 cloud / dns 会真连服务器、查域名；跑完 core 自己写 doctor-last.json、发 doctorRan。
+fn offline_doctor(deep: bool) -> Value {
+    offline_doctor_in(&default_data_dir(), deep)
+}
+
+/// offline_doctor 的可测版本：数据目录从参数来，单测能指到临时目录。
+fn offline_doctor_in(dir: &Path, deep: bool) -> Value {
+    let config_path = dir.join("config.json");
+    let (config, config_error) = match read_config_for_doctor(&config_path) {
+        Ok(cfg) => (Some(cfg), None),
+        Err(e) => (None, Some(e)),
+    };
+    let mode = if deep {
+        DoctorMode::Deep
+    } else {
+        DoctorMode::Quick
+    };
+    let req = DoctorRequest {
+        mode,
+        app_running: false,
+        data_dir: dir.to_path_buf(),
+        config_trusted: config_error.is_none(),
+        config,
+        config_error,
+        events: Some(Arc::new(EventLog::new(dir))),
+        ..DoctorRequest::default()
+    };
+    let report = doctor::run(&req);
+    serde_json::to_value(&report)
+        .unwrap_or_else(|e| json!({"error": format!("体检报告生成失败：{e}")}))
+}
+
+/// 体检用只读读配置：不迁移、不写盘（doctor 不自动改任何东西）。
+fn read_config_for_doctor(path: &Path) -> Result<AppConfig, String> {
+    if !path.exists() {
+        return Ok(AppConfig::default());
+    }
+    if let Some(v) = config::config_version_too_new(path) {
+        return Err(config::config_unsupported_message(v));
+    }
+    let text = std::fs::read_to_string(path).map_err(|e| format!("设置文件读不出来：{e}"))?;
+    serde_json::from_str::<AppConfig>(&text).map_err(|e| format!("设置文件读不出来：{e}"))
+}
+
+fn print_doctor(r: &Value) {
+    let mode_word = if str_of(r, "mode") == "deep" {
+        "深度检查"
+    } else {
+        "快速检查"
+    };
+    println!("「上线助手」体检（{mode_word}）");
+    for s in r["steps"].as_array().cloned().unwrap_or_default() {
+        let mark = doctor_mark(str_of(&s, "status").as_str());
+        println!(
+            "{mark} {} {}",
+            pad(&str_of(&s, "title"), 12),
+            str_of(&s, "detail")
+        );
+        let advice = str_of(&s, "advice");
+        if !advice.is_empty() {
+            println!("    怎么办：{advice}");
+        }
+    }
+    let sm = &r["summary"];
+    let (pass, warn, fail, skip) = (
+        num_of(sm, "pass"),
+        num_of(sm, "warn"),
+        num_of(sm, "fail"),
+        num_of(sm, "skip"),
+    );
+    let skip_note = if skip > 0 {
+        format!("，{skip} 项跳过")
+    } else {
+        String::new()
+    };
+    if fail > 0 {
+        println!("✗ 自检有 {fail} 项没过{skip_note}");
+    } else if warn > 0 {
+        println!("! 自检基本正常：{pass} 项通过，{warn} 项要留意{skip_note}");
+    } else {
+        println!("✓ 自检全过：{pass} 项都正常{skip_note}");
+    }
+}
+
+/// `cli diag`：让应用打个诊断包（要应用在跑；离线退出码 3）。
+fn diag_cmd(out: Option<&str>, deep: bool, want_json: bool) -> Result<(), String> {
+    let mut params = json!({"deep": deep});
+    if let Some(o) = out {
+        params["out"] = json!(abs_out_path(o));
+    }
+    let v = call("build_diag", params)?;
+    if want_json {
+        print_ok(&v);
+    } else {
+        println!(
+            "✓ 诊断包已生成：{}（{}，已脱敏）",
+            str_of(&v, "path"),
+            fmt_bytes(num_of(&v, "bytes"))
+        );
+        println!("  请自己把这个文件发给帮你排查的人；包里不含密码、密钥和通行证。");
+    }
+    Ok(())
+}
+
+fn stats_cmd(want_json: bool) -> Result<(), String> {
+    let v = call("stats", json!({}))?;
+    if want_json {
+        print_ok(&v);
+    } else {
+        print_stats(&v);
+    }
+    Ok(())
+}
+
+fn print_stats(v: &Value) {
+    let app = &v["app"];
+    println!(
+        "「上线助手」{}（进程 {}）已运行 {}",
+        opt_str(app, "appVersion").unwrap_or_else(|| "?".into()),
+        opt_str(app, "pid").unwrap_or_else(|| "?".into()),
+        fmt_duration(num_of(app, "uptimeSecs"))
+    );
+    let svc = &v["services"];
+    println!(
+        "本机服务：{} 台，{} 台在跑，{} 台没在跑，{} 台不知道",
+        num_of(svc, "total"),
+        num_of(svc, "up"),
+        num_of(svc, "down"),
+        num_of(svc, "unknown")
+    );
+    let t = &v["tunnels"];
+    let mut line = format!(
+        "发布隧道：{} 条（{} 条开着），{} 条正在发布",
+        num_of(t, "total"),
+        num_of(t, "enabled"),
+        num_of(t, "running")
+    );
+    if num_of(t, "retrying") > 0 {
+        line.push_str(&format!("，{} 条正在重试", num_of(t, "retrying")));
+    }
+    line.push_str(&format!("，今日重连 {} 次", num_of(t, "reconnectsToday")));
+    println!("{line}");
+    for item in t["items"].as_array().cloned().unwrap_or_default() {
+        if let Some(secs) = item["retryInSecs"].as_u64() {
+            println!(
+                "  ·「{}」第 {} 次没连上，{}后重试",
+                str_of(&item, "name"),
+                num_of(&item, "attempt").max(1),
+                fmt_duration_short(secs)
+            );
+        }
+    }
+    let u = &v["update"];
+    match str_of(u, "status").as_str() {
+        "available" => println!(
+            "更新：有新版本 {}，下载：{}",
+            opt_str(u, "latest").unwrap_or_default(),
+            opt_str(u, "url").unwrap_or_default()
+        ),
+        "upToDate" => println!("更新：已经是最新版"),
+        "error" => println!(
+            "更新：上次检查没连上更新服务器（{}）",
+            opt_str(u, "error").unwrap_or_default()
+        ),
+        _ => println!("更新：还没查过（cli app update-check 查一次）"),
+    }
+}
+
+/// 把 --source / --kind / id 归一成真正要调 logs_query 的 source 与 id。
+fn resolve_logs_source(
+    source: Option<&str>,
+    id: Option<&str>,
+    kind: &str,
+) -> Result<(String, Option<String>), String> {
+    match source {
+        Some("all") => Ok(("all".into(), None)),
+        Some("app") => Ok(("app".into(), None)),
+        Some("tunnel") => match id {
+            Some(i) => Ok(("tunnel".into(), Some(i.to_string()))),
+            None => Err(
+                "--source tunnel 要带 id：cli logs <隧道id> --source tunnel".into(),
+            ),
+        },
+        Some("service") => match id {
+            Some(i) => Ok(("service".into(), Some(i.to_string()))),
+            None => Err(
+                "--source service 要带 id：cli logs <服务id> --source service".into(),
+            ),
+        },
+        Some(other) => Err(format!(
+            "--source 只认 all / tunnel / service / app，你写的是「{other}」。\n例：cli logs --source all --format json"
+        )),
+        None => {
+            if kind != "tunnel" && kind != "service" {
+                return Err(format!(
+                    "--kind 只认 tunnel（隧道日志）或 service（服务日志），你写的是「{kind}」。\n看隧道日志：cli logs <隧道id>；看服务日志：cli logs <服务id> --kind service"
+                ));
+            }
+            match id {
+                Some(i) => Ok((kind.to_string(), Some(i.to_string()))),
+                None => Ok(("all".into(), None)),
+            }
+        }
+    }
+}
+
+/// --archive 越界 → 退出码 1，文案固定。
+fn check_archive(archive: i64) -> Result<u8, String> {
+    match archive {
+        0..=2 => Ok(archive as u8),
+        _ => Err("--archive 只能是 0、1、2；0 = 只看当前文件".into()),
+    }
+}
+
+fn logs_cmd(
+    id: Option<&str>,
+    kind: &str,
+    source: Option<&str>,
+    format: &str,
+    archive: i64,
+    lines: usize,
+    want_json: bool,
+) -> Result<(), String> {
+    let archive = check_archive(archive)?;
+    if format != "lines" && format != "json" {
+        return Err(format!(
+            "--format 只认 lines（人话文本）或 json（一行一条 JSON），你写的是「{format}」"
+        ));
+    }
+    let (source, id) = resolve_logs_source(source, id, kind)?;
+    // id 存在性先查（报错信息更人话；离线时用配置对照）
+    if let Some(id) = &id {
+        match source.as_str() {
+            "tunnel" => {
+                find_tunnel(id)?;
+            }
+            "service" => {
+                find_service(id)?;
+            }
+            _ => {}
+        }
+    }
+    let v = call(
+        "logs_query",
+        json!({"source": source, "id": id, "lines": lines, "archive": archive, "format": format}),
+    )?;
+    if format == "json" {
+        if want_json {
+            print_ok(&v);
+        } else {
+            // JSONL：一 entry 一行（给管道用；没有信封）
+            for e in v["entries"].as_array().cloned().unwrap_or_default() {
+                println!("{}", serde_json::to_string(&e).unwrap_or_default());
+            }
+        }
+    } else if want_json {
+        // 旧形状别破：result 里先给 text
+        print_ok(&json!({"text": v["text"].as_str().unwrap_or("")}));
+    } else {
+        println!("{}", v["text"].as_str().unwrap_or(""));
+        if bool_of(&v, "truncated") {
+            eprintln!("（日志太多，只显示了最近的 {lines} 条；看上一份备份加 --archive 1）");
+        }
+    }
+    Ok(())
+}
+
+fn expired_undo_msg() -> String {
+    "这条撤销已经过期了（删除超过 10 分钟）；要恢复只能重新建一个".to_string()
+}
+
+fn undo_type_word(t: &str) -> &'static str {
+    match t {
+        "tunnel" => "隧道",
+        "service" => "本机服务",
+        "server" => "服务器",
+        _ => "对象",
+    }
+}
+
+fn undo_cmd(target: Option<&str>, want_json: bool) -> Result<(), String> {
+    if target == Some("list") {
+        return undo_list(want_json);
+    }
+    // 撤销要改配置：应用没在跑就不动手（退出码 3）。
+    let listing = match call("list_deleted", json!({})) {
+        Ok(v) => v,
+        Err(e) if is_offline_error(&e) => {
+            return Err(offline_error(
+                "撤销要改设置，得先让应用跑起来：cli app start 之后再 cli undo",
+            ))
+        }
+        Err(e) => return Err(e),
+    };
+    let token = match target {
+        None | Some("last") => latest_undo_token(&listing).ok_or_else(expired_undo_msg)?,
+        Some(t) => {
+            let found = listing["items"]
+                .as_array()
+                .map(|a| a.iter().any(|i| i["token"] == t))
+                .unwrap_or(false);
+            if !found {
+                return Err(expired_undo_msg());
+            }
+            t.to_string()
+        }
+    };
+    let v = call("restore_deleted", json!({"token": token}))?;
+    if want_json {
+        print_ok(&v);
+        return Ok(());
+    }
+    let restored = &v["restored"];
+    let typ = str_of(restored, "type");
+    let id = str_of(restored, "id");
+    let tail = match typ.as_str() {
+        "tunnel" => format!("（隧道保持暂停状态；想继续发布点「开始」或 cli tunnel start {id}）"),
+        "service" => "（不会自动启动；要用再点「启动」）".to_string(),
+        _ => String::new(),
+    };
+    println!("✓ 已恢复「{}」{tail}", str_of(restored, "name"));
+    Ok(())
+}
+
+fn undo_list(want_json: bool) -> Result<(), String> {
+    let listing = match call("list_deleted", json!({})) {
+        Ok(v) => v,
+        // 离线也能看：state.json 是只读件（真撤销还是要等应用跑起来）
+        Err(e) if is_offline_error(&e) => offline_undo_list(),
+        Err(e) => return Err(e),
+    };
+    if want_json {
+        print_ok(&listing);
+        return Ok(());
+    }
+    let items = listing["items"].as_array().cloned().unwrap_or_default();
+    if items.is_empty() {
+        println!("没有能撤销的删除（删除后 10 分钟内可以撤销，最多留 20 条）。");
+        return Ok(());
+    }
+    println!("能撤销的删除（删除后 10 分钟内有效，最多留 20 条）：");
+    let now = shangxian_core::state::now_ms();
+    for it in &items {
+        println!(
+            "  {}  {}「{}」  还能撤销 {}",
+            str_of(it, "token"),
+            undo_type_word(&str_of(it, "type")),
+            str_of(it, "name"),
+            fmt_remaining(i64_of(it, "expiresAt"), now)
+        );
+    }
+    Ok(())
+}
+
+/// 离线读 state.json 的墓碑（纯读，不碰文件）。
+fn offline_undo_list() -> Value {
+    let dir = default_data_dir();
+    let text = std::fs::read_to_string(dir.join("state.json")).unwrap_or_default();
+    let state: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+    let now = shangxian_core::state::now_ms();
+    let items: Vec<Value> = state["trash"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter(|t| i64_of(t, "expiresAt") > now)
+        .map(|t| {
+            json!({
+                "token": str_of(t, "token"),
+                "type": str_of(t, "kind"),
+                "id": t["item"]["id"].as_str().unwrap_or(""),
+                "name": t["item"]["name"].as_str().unwrap_or(""),
+                "deletedAt": i64_of(t, "deletedAt"),
+                "expiresAt": i64_of(t, "expiresAt"),
+            })
+        })
+        .collect();
+    json!({"items": items})
+}
+
+fn latest_undo_token(listing: &Value) -> Option<String> {
+    listing["items"]
+        .as_array()?
+        .iter()
+        .filter(|i| i["token"].as_str().is_some())
+        .max_by_key(|i| i64_of(i, "deletedAt"))
+        .and_then(|i| i["token"].as_str().map(str::to_string))
+}
+
+fn config_cmd(sub: &ConfigCmd, want_json: bool) -> Result<(), String> {
+    match sub {
+        ConfigCmd::Export { out, with_paths } => export_cmd(out.as_deref(), *with_paths, want_json),
+        ConfigCmd::Import {
+            file,
+            mode,
+            dry_run,
+            yes,
+        } => import_cmd(file, mode, *dry_run, *yes, want_json),
+    }
+}
+
+fn export_cmd(out: Option<&str>, with_paths: bool, want_json: bool) -> Result<(), String> {
+    let redacted = !with_paths;
+    let mut params = json!({"redacted": redacted});
+    if let Some(o) = out {
+        params["out"] = json!(abs_out_path(o));
+    }
+    let v = match call("export_config", params) {
+        Ok(v) => v,
+        // 导出是纯读：应用没在跑也能导（离线读 config.json）
+        Err(e) if is_offline_error(&e) => offline_export(redacted, out)?,
+        Err(e) => return Err(e),
+    };
+    if want_json {
+        print_ok(&v);
+    } else {
+        print_export(&v, with_paths);
+    }
+    Ok(())
+}
+
+/// 离线导出：读 config.json，按导出白名单重建。
+/// 版本高于程序支持时不拒绝（D2 §13 的自救路径）：原文按已知键脱敏后照导。
+fn offline_export(redacted: bool, out: Option<&str>) -> Result<Value, String> {
+    offline_export_from(&default_data_dir(), redacted, out)
+}
+
+/// 离线导出（可测版）：`dir` 是数据目录。
+/// 第一次运行还没有 config.json 时导出一份默认设置（空备份），
+/// 不再报含糊的「设置文件读不出来」。
+fn offline_export_from(dir: &Path, redacted: bool, out: Option<&str>) -> Result<Value, String> {
+    let path = dir.join("config.json");
+    let (config_value, config_version) = if !path.exists() {
+        let cfg = AppConfig::default();
+        (
+            shangxian_core::import::config_to_export_value(&cfg, redacted, cfg.version),
+            cfg.version,
+        )
+    } else {
+        match AppConfig::load(&path) {
+            Ok(cfg) => (
+                shangxian_core::import::config_to_export_value(&cfg, redacted, cfg.version),
+                cfg.version,
+            ),
+            Err(_) => {
+                let found = config::config_version_too_new(&path)
+                    .ok_or_else(|| format!("读设置失败：{} 读不出来", path.display()))?;
+                let text =
+                    std::fs::read_to_string(&path).map_err(|e| format!("读设置失败：{e}"))?;
+                let raw: Value = serde_json::from_str(&text)
+                    .map_err(|e| format!("设置文件不是一份 JSON：{e}"))?;
+                (scrub_raw_config(&raw, redacted), found)
+            }
+        }
+    };
+    let doc = json!({
+        "kind": "shangxian.config-export",
+        "formatVersion": 1,
+        "exportedAt": shangxian_core::state::now_ms(),
+        "appVersion": shangxian_core::import::app_version(),
+        "configVersion": config_version,
+        "redacted": redacted,
+        "config": config_value.clone(),
+    });
+    let mut result = json!({"redacted": redacted, "config": config_value});
+    if let Some(o) = out.map(str::trim).filter(|o| !o.is_empty()) {
+        let target = PathBuf::from(abs_out_path(o));
+        shangxian_core::import::write_json_atomic(&target, &doc)
+            .map_err(|e| format!("导出失败：{e}"))?;
+        result["path"] = json!(target.display().to_string());
+    }
+    Ok(result)
+}
+
+/// 把用户给的相对路径按命令行的当前目录补成绝对路径：
+/// 应用（ctl）的工作目录跟这里不一定一样，直接传相对路径会写到别处去。
+fn abs_out_path(out: &str) -> String {
+    let p = Path::new(out.trim());
+    if p.is_absolute() {
+        return p.display().to_string();
+    }
+    match std::env::current_dir() {
+        Ok(cwd) => cwd.join(p).display().to_string(),
+        Err(_) => p.display().to_string(),
+    }
+}
+
+/// 按已知键脱敏一份「版本比程序新」的配置原文（accessHash 永不出，keyPath 看开关）。
+fn scrub_raw_config(v: &Value, redacted: bool) -> Value {
+    match v {
+        Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, val) in map {
+                match k.as_str() {
+                    "accessHash" => {
+                        out.insert("hasPassword".into(), json!(!val.is_null()));
+                    }
+                    "keyPath" if redacted => {
+                        out.insert("keyPathPresent".into(), json!(!val.is_null()));
+                    }
+                    _ => {
+                        out.insert(k.clone(), scrub_raw_config(val, redacted));
+                    }
+                }
+            }
+            Value::Object(out)
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|i| scrub_raw_config(i, redacted)).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+fn print_export(v: &Value, with_paths: bool) {
+    if let Some(path) = opt_str(v, "path") {
+        let extra = if with_paths {
+            "含密钥路径，不含密码哈希"
+        } else {
+            "已脱敏：不含密码哈希、不含密钥路径"
+        };
+        println!("✓ 设置已导出到 {path}（{extra}）");
+        println!("  要导回来：cli config import {path}");
+        return;
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&v["config"]).unwrap_or_default()
+    );
+    if std::io::stdout().is_terminal() {
+        println!();
+        println!("把上面整段存成 .json 文件就是一份备份；要导回来：cli config import <文件>");
+        if !with_paths {
+            println!("（默认已脱敏：不含密码哈希、不含密钥路径）");
+        }
+    }
+}
+
+/// 导入前要不要人确认：--dry-run / --yes 都不用；非交互又没有 --yes → 拒绝（退出码 1）。
+fn import_needs_confirm(dry_run: bool, yes: bool, interactive: bool) -> Result<bool, String> {
+    if dry_run || yes {
+        return Ok(false);
+    }
+    if !interactive {
+        return Err(
+            "导入会改设置；现在不是交互终端（脚本 / agent），必须加 --yes 才能动手。\n想先看看会改什么，加 --dry-run。"
+                .into(),
+        );
+    }
+    Ok(true)
+}
+
+fn import_cmd(file: &str, mode: &str, dry_run: bool, yes: bool, want_json: bool) -> Result<(), String> {
+    let mode = shangxian_core::import::ImportMode::parse(mode)?;
+    let path = PathBuf::from(abs_out_path(file));
+    if !path.is_file() {
+        return Err(format!("找不到这个文件：{}", path.display()));
+    }
+    let meta = std::fs::metadata(&path).map_err(|e| format!("看不了这个文件：{e}"))?;
+    if meta.len() > shangxian_core::import::IMPORT_DOC_MAX_BYTES as u64 {
+        return Err("导入文件太大了（最多 1MB）；用 cli config export 导出的文件才合适".into());
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("读不了这个文件：{e}"))?;
+    let doc: Value = serde_json::from_str(&text).map_err(|_| {
+        "这个文件不是一份 JSON 配置；用 cli config export 导出的文件才能导入。".to_string()
+    })?;
+    check_import_version(&doc)?;
+    // 先干跑拿摘要（也顺便把「会改什么」给用户看）
+    let planned = call(
+        "import_config",
+        json!({"path": path.display().to_string(), "mode": mode.as_str(), "dryRun": true}),
+    )?;
+    if dry_run {
+        if want_json {
+            print_ok(&planned);
+        } else {
+            print_import_summary(&planned, true);
+            println!("（--dry-run：只检查了，什么都没改）");
+        }
+        return Ok(());
+    }
+    if !want_json {
+        print_import_summary(&planned, true);
+    }
+    if import_needs_confirm(false, yes, std::io::stdin().is_terminal())? {
+        if !confirm_destructive("确定要按上面的内容导入吗？导入前会自动留一份备份。", false)? {
+            return cancelled(want_json);
+        }
+    }
+    let v = call(
+        "import_config",
+        json!({"path": path.display().to_string(), "mode": mode.as_str(), "dryRun": false}),
+    )?;
+    if want_json {
+        print_ok(&v);
+    } else {
+        print_import_summary(&v, false);
+        if let Some(b) = opt_str(&v, "backupPath") {
+            println!("✓ 设置已导入（原设置自动备份在 {b}）");
+        } else {
+            println!("✓ 设置已导入");
+        }
+    }
+    Ok(())
+}
+
+/// 从导入文件里读配置版本：带包装（kind / formatVersion / config）的读 configVersion，
+/// 没有就读 config.version；裸配置读顶层 version。读不到返回 None（交给应用报人话）。
+fn import_doc_version(v: &Value) -> Option<u64> {
+    let wrapped =
+        v.get("kind").is_some() || v.get("formatVersion").is_some() || v.get("config").is_some();
+    if wrapped {
+        v.get("configVersion").and_then(Value::as_u64).or_else(|| {
+            v.get("config")
+                .and_then(|c| c.get("version"))
+                .and_then(Value::as_u64)
+        })
+    } else {
+        v.get("version").and_then(Value::as_u64)
+    }
+}
+
+/// 导入版本门槛（D2 §11.2）：只接受 5 / 6。
+/// 4 及更旧的在 CLI 就拦下给大白话；读配置文件的老迁移路径在 config.rs，不受影响。
+fn check_import_version(v: &Value) -> Result<(), String> {
+    let Some(version) = import_doc_version(v) else {
+        return Ok(());
+    };
+    if version < 5 {
+        return Err(format!(
+            "导入失败：这份设置太旧了（版本 {version}）。先用旧版「上线助手」打开并保存一次，再用新保存的文件导入。"
+        ));
+    }
+    Ok(())
+}
+
+fn print_import_summary(v: &Value, dry_run: bool) {
+    let mode_word = if str_of(v, "mode") == "replace" {
+        "整份替换"
+    } else {
+        "按 id 合并"
+    };
+    println!(
+        "{}（{mode_word}）：",
+        if dry_run { "先看看会改什么" } else { "导入结果" }
+    );
+    for (key, label) in [("added", "新增"), ("updated", "更新"), ("unchanged", "没变化")] {
+        println!("  {label}：{}", import_counts_text(&v[key]));
+    }
+    for w in v["warnings"].as_array().cloned().unwrap_or_default() {
+        println!("  ⚠ {}", w.as_str().unwrap_or(""));
+    }
+}
+
+fn import_counts_text(c: &Value) -> String {
+    let mut parts = Vec::new();
+    let servers = num_of(c, "servers");
+    if servers > 0 {
+        parts.push(format!("服务器 {servers} 台"));
+    }
+    let services = num_of(c, "services");
+    if services > 0 {
+        parts.push(format!("本机服务 {services} 台"));
+    }
+    let tunnels = num_of(c, "tunnels");
+    if tunnels > 0 {
+        parts.push(format!("发布隧道 {tunnels} 条"));
+    }
+    if parts.is_empty() {
+        "没有".to_string()
+    } else {
+        parts.join("、")
+    }
+}
+
+/// 秒数 → 人话时长（统计用）。
+fn fmt_duration(secs: u64) -> String {
+    if secs >= 3600 {
+        format!("{} 小时 {} 分钟", secs / 3600, (secs / 60) % 60)
+    } else if secs >= 60 {
+        format!("{} 分钟", secs / 60)
+    } else {
+        format!("{secs} 秒")
+    }
+}
+
+/// 秒数 → 短时长（倒计时用）。
+fn fmt_duration_short(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{} 分 {} 秒", secs / 60, secs % 60)
+    } else {
+        format!("{secs} 秒")
+    }
+}
+
+fn fmt_remaining(expires_at: i64, now: i64) -> String {
+    let secs = ((expires_at - now).max(0) / 1000) as u64;
+    fmt_duration_short(secs)
+}
+
+fn fmt_bytes(n: u64) -> String {
+    if n >= 1024 * 1024 {
+        format!("{:.1} MB", n as f64 / (1024.0 * 1024.0))
+    } else if n >= 1024 {
+        format!("{:.1} KB", n as f64 / 1024.0)
+    } else {
+        format!("{n} 字节")
+    }
+}
+
+fn i64_of(v: &Value, key: &str) -> i64 {
+    v[key].as_i64().unwrap_or(0)
 }
 
 // ---------- 跟应用说话 ----------
@@ -948,12 +1989,13 @@ fn call(method: &str, params: Value) -> Result<Value, String> {
 }
 
 /// 拿三张清单：应用在跑就用应用的实时状态；没在跑就读配置文件（状态标 unknown）。
-fn snapshot() -> Value {
+/// 读配置失败不再静默按空配置：报错退出 1（D2 §13；读坏/降级拦截的人话在错误里）。
+fn snapshot() -> Result<Value, String> {
     if let Ok(v) = call("status", json!({})) {
-        return v;
+        return Ok(v);
     }
     let dir = default_data_dir();
-    let cfg = AppConfig::load(&dir.join("config.json")).unwrap_or_default();
+    let cfg = load_config_offline(&dir)?;
     let service_name = |id: &str| {
         cfg.services
             .iter()
@@ -1019,6 +2061,7 @@ fn snapshot() -> Value {
                 "access": t.access,
                 "accessUser": t.access_user,
                 "hasPassword": t.access_hash.is_some(),
+                "preset": t.preset,
             })
         })
         .collect();
@@ -1032,17 +2075,37 @@ fn snapshot() -> Value {
             })
         })
         .collect();
-    json!({
+    Ok(json!({
         "app": {"pid": null, "appVersion": null, "dataDir": dir.display().to_string(), "running": false},
         "services": services,
         "tunnels": tunnels,
         "servers": servers,
-    })
+    }))
+}
+
+/// 离线读配置（只读命令的兵库）：读不出来就报错，不再默默当空配置。
+fn load_config_offline(dir: &Path) -> Result<AppConfig, String> {
+    let path = dir.join("config.json");
+    if let Some(v) = config::config_version_too_new(&path) {
+        return Err(config::config_unsupported_message(v));
+    }
+    if !path.exists() {
+        let bad = dir.join("config.json.bad");
+        if bad.exists() {
+            return Err(format!(
+                "设置文件读不出来（读坏的那份留底在 {}）；先修好或恢复它，再重试",
+                bad.display()
+            ));
+        }
+        // 第一次运行：还没有设置文件，空配置是正常状态
+        return Ok(AppConfig::default());
+    }
+    AppConfig::load(&path).map_err(|e| format!("读设置失败：{e}"))
 }
 
 /// 从实时/离线快照里找一台本机服务。
 fn find_service(id: &str) -> Result<Value, String> {
-    let snap = snapshot();
+    let snap = snapshot()?;
     snap["services"]
         .as_array()
         .and_then(|a| a.iter().find(|s| s["id"] == id))
@@ -1051,7 +2114,7 @@ fn find_service(id: &str) -> Result<Value, String> {
 }
 
 fn find_tunnel(id: &str) -> Result<Value, String> {
-    let snap = snapshot();
+    let snap = snapshot()?;
     snap["tunnels"]
         .as_array()
         .and_then(|a| a.iter().find(|t| t["id"] == id))
@@ -1060,7 +2123,7 @@ fn find_tunnel(id: &str) -> Result<Value, String> {
 }
 
 fn find_server(id: &str) -> Result<Value, String> {
-    let snap = snapshot();
+    let snap = snapshot()?;
     snap["servers"]
         .as_array()
         .and_then(|a| a.iter().find(|s| s["id"] == id))
@@ -1637,13 +2700,16 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 2. 隧道暂停后别人就访问不了了；不确定要不要停就先问。
 3. 删除本机服务/服务器前，先看它有没有被隧道引用（有引用时应用会拒绝并告诉你）。
 
-## 危险操作（删除 / 暂停）要确认
+## 危险操作（删除 / 暂停 / 重置指纹 / 导入配置）要确认
 - 交互终端（人敲命令）：先打印要动哪个对象，再问你 y/N；回车 = 什么都不做。
 - 非交互（管道 / 脚本 / AI agent）：必须显式加 --yes，否则拒绝执行并报错。
       cli tunnel stop <隧道id> --yes
       cli tunnel remove <隧道id> --yes
       cli service remove <服务id> --yes
       cli server remove <服务器id> --yes
+      cli tunnel forget-key <隧道id> --yes   # 服务器重装过、指纹变了才用
+      cli app stop-all --yes                  # 升级 / 卸载前停全部隧道和服务（安装器调它）
+      cli config import 备份.json --yes       # 导入配置；先看看会改什么就加 --dry-run
 
 ## 最常用的命令
     cli status --json                       # 一次看全：应用 + 服务 + 隧道 + 服务器
@@ -1656,14 +2722,33 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
     cli service start <服务id>              # 拉起本机服务（用它登记的启动方式）
     cli service stop <服务id>               # 停止（不是应用启动的进程会先拦一下；配了启动方式才加 --force 真停，只监控的服务会被拒绝）
     cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志，别的值报错）
+    cli logs --source all --format json --json  # 事件 + 应用日志 + 所有隧道/服务日志（合并读）
+    cli logs <隧道id> --archive 1           # 看上一份轮转备份（0/1/2）
     cli nginx <隧道id>                      # 生成要贴到云端面板的 nginx 配置片段
     cli tunnel check <隧道id>               # 去云端看实际开着的访问保护（只读，不改服务器）
+
+## 体检 / 排查
+    cli doctor                              # 体检：应用、文件夹、SSH、端口、服务器、隧道、云端、公网、域名
+    cli doctor --deep                       # 深度检查（会连服务器和域名，慢一点）
+    cli doctor --strict                     # 有没过就直接退出码 1（这不算命令错误，是「检查没过」）
+    cli stats                               # 运行多久、隧道重连情况、今日重连次数、更新状态
+    cli diag --out 诊断包.zip               # 打一个脱敏诊断包（发给帮你排查的人）
+    cli app stop-all --yes                  # 升级 / 卸载前停全部隧道和服务（安装器调它）
+    cli app update-check                    # 查一下有没有新版本（只查，不下载、不安装）
+
+## 撤销删除
+    cli undo                                # 撤销最近一次删除（= cli undo last）
+    cli undo list                           # 看还能撤销哪些（删除后 10 分钟内、最多 20 条）
+    cli undo und-3f9a1c2d                   # 按令牌撤销指定的一条
+- 隧道撤销后一律是暂停状态，想继续发布再 cli tunnel start <id>。
+- 删除命令成功后，人话输出会提示「（10 分钟内可以撤销：cli undo last）」。
 
 ## 配置类
     cli service add --name 我的网站 --port 8188 --exe C:\path\python.exe --args "main.py" --watch
     cli service edit <服务id> --port 8189 --watch true
     cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开）
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
+    cli tunnel add ... --preset ws          # 发布预设：web（默认）/ ws（WebSocket）/ upload（传大文件）
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
     cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两道门同时开
     cli tunnel edit <隧道id> --access password --access-password 新密码   # 换密码
@@ -1676,11 +2761,24 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 - --access-password 必须配 --access password，--access-ips 必须配 --access ip，配不上会报错。
 - 每次改完都会回显最终保护状态，比如「访问保护：密码 + 白名单（只允许指定 IP），已生效」。
 
+## 配置备份（导出 / 导入）
+    cli config export --out 备份.json     # 导出（默认脱敏：不含密码哈希、不含密钥路径）
+    cli config export --with-paths        # 连密钥路径一起导出（仍然不含密码哈希）
+    cli config import 备份.json --dry-run # 先看会改什么（不写盘、不用确认）
+    cli config import 备份.json --yes     # 合并导入（按 id 合并，没写的字段保持现状）
+    cli config import 备份.json --mode replace --yes   # 整份替换（导入前自动备份）
+- 导入会改设置：交互终端会问你 y/N；管道 / 脚本 / agent 必须加 --yes，否则退出码 1。
+- 用导出的脱敏文件导回来，密码哈希和密钥路径会保留（不会被清空）。
+
 ## 应用没在跑怎么办
     cli app status        # 看它在不在；没在跑时退出码 3，JSON 里 offline: true
     cli app start         # 叫起来（静默进托盘）
-只读命令（status/services/tunnels/servers）在没有应用时也能用——直接读配置文件，
-但状态字段会是 unknown；要改东西必须先有应用在跑。
+    cli app stop-all --yes # 停掉全部发布隧道和应用拉起的本机服务（升级 / 卸载前用）
+- `cli app stop-all` 是特例：应用没在跑时直接打印「没什么要停的」并退出码 0（安装器不会卡）。
+- 离线也能用的：status / services / tunnels / servers（直接读配置文件，状态字段是 unknown）、
+  cli doctor（本地跑能跑的那几步）、cli undo list（读运行记录）、cli config export（读配置文件）。
+- 需要应用才能跑的（离线时退出码 3）：stats / diag / logs / undo（真撤销）/ config import / app update-check。
+- 要改设置、要起停任何东西，都必须先 cli app start。
 
 ## 想调更底层的东西
     cli methods                       # 列出所有能调的方法 + 参数格式
@@ -1688,13 +2786,16 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 
 ## 输出约定
 - 默认中文人话；加 `--json` 输出机器格式（agent 一律加）。读命令、写命令都是同一个信封。
-- 成功（status / services / tunnels / servers / ports / logs / nginx / methods / call / guide / 各种改配置）：
+- 成功（status / services / tunnels / servers / ports / logs / nginx / stats / doctor / diag / methods / call / guide / undo / config / 各种改配置）：
   {"ok": true, "result": ...}
 - 失败：{"ok": false, "error": "人话原因"}
-- 退出码：0 = 成功（确认里选「不」也是 0）；1 = 出错（包括非交互下拒绝执行）；
-  2 = 命令写法不对（参数名拼错、少值）；3 = `cli app status` 发现应用没在跑（JSON 里 offline: true）。
+- 退出码：0 = 成功（确认里选「不」也是 0）；1 = 出错（包括非交互下拒绝执行、undo 令牌过期、doctor --strict 有没过）；
+  2 = 命令写法不对（参数名拼错、少值）；3 = 这个命令需要应用在跑，但它没在跑（JSON 里 offline: true）。
+- `cli logs --format json` 不带 --json 时输出 JSONL（一行一条，无信封，给管道用）；
+  带 --json 时才给上面的信封（`--format lines --json` 保持旧形状，result 里有 text）。
 - `cli call` 不带 --json 时按人话打印返回值，加了才给上面的 JSON 信封。
 - 输密码（cli server setup-key）时屏幕上不回显，管道传也一样安全。
+- `cli doctor --strict` 退出码 1 不是命令跑错，是「检查没过」；人话输出会写「✗ 自检有 N 项没过」。
 "#;
 
 #[cfg(test)]
@@ -1916,5 +3017,330 @@ mod tests {
             access_phrase(&["ip".to_string(), "password".to_string()]),
             "密码 + 白名单（只允许指定 IP）"
         );
+    }
+
+    #[test]
+    fn logs_source_defaults_and_overrides() {
+        // 有 id 不写 --source：按 --kind（默认 tunnel）
+        assert_eq!(
+            resolve_logs_source(None, Some("tun-1"), "tunnel").unwrap(),
+            ("tunnel".to_string(), Some("tun-1".to_string()))
+        );
+        assert_eq!(
+            resolve_logs_source(None, Some("svc-1"), "service").unwrap(),
+            ("service".to_string(), Some("svc-1".to_string()))
+        );
+        // 没 id 不写 --source：all
+        assert_eq!(
+            resolve_logs_source(None, None, "tunnel").unwrap(),
+            ("all".to_string(), None)
+        );
+        // --source 优先于 --kind（--kind 只作旧写法兼容）
+        assert_eq!(
+            resolve_logs_source(Some("service"), Some("svc-1"), "tunnel").unwrap(),
+            ("service".to_string(), Some("svc-1".to_string()))
+        );
+        assert_eq!(
+            resolve_logs_source(Some("all"), Some("tun-1"), "service").unwrap(),
+            ("all".to_string(), None)
+        );
+        // --source tunnel/service 必须带 id
+        assert!(resolve_logs_source(Some("tunnel"), None, "tunnel").is_err());
+        assert!(resolve_logs_source(Some("service"), None, "service").is_err());
+        // 拼错的值直接报错（不静默当隧道）
+        let err = resolve_logs_source(None, Some("tun-1"), "bogus").unwrap_err();
+        assert!(err.contains("bogus"));
+        assert!(resolve_logs_source(Some("bogus"), None, "tunnel").is_err());
+    }
+
+    #[test]
+    fn logs_archive_range_is_checked() {
+        assert_eq!(check_archive(0).unwrap(), 0);
+        assert_eq!(check_archive(2).unwrap(), 2);
+        for bad in [-1i64, 3, 9] {
+            let err = check_archive(bad).unwrap_err();
+            assert_eq!(err, "--archive 只能是 0、1、2；0 = 只看当前文件");
+        }
+    }
+
+    #[test]
+    fn offline_errors_map_to_exit_code_three() {
+        // 应用没在跑（ctl 的原话）→ 3
+        assert_eq!(exit_code_for_error(ctl::APP_NOT_RUNNING), 3);
+        // 自定义的离线错也用内部前缀标出来 → 3
+        assert_eq!(exit_code_for_error(&offline_error("应用没在跑；先 cli app start")), 3);
+        assert_eq!(shown_error(&offline_error("人话")), "人话");
+        // 普通错 → 1
+        assert_eq!(exit_code_for_error("参数不对"), 1);
+        // 前缀不能误伤以「应用没在跑」开头的普通错误？ctl 原话就是完整提示，照旧映射成 3
+        assert_eq!(exit_code_for_error("『上线助手』没在运行（连不上它的控制通道）。先打开应用，或者运行：cli app start（找不到 ctl.json）"), 3);
+    }
+
+    #[test]
+    fn import_confirm_rules() {
+        // --dry-run / --yes 不用确认
+        assert!(!import_needs_confirm(true, false, false).unwrap());
+        assert!(!import_needs_confirm(false, true, false).unwrap());
+        // 交互终端：问 y/N
+        assert!(import_needs_confirm(false, false, true).unwrap());
+        // 非交互又没有 --yes：拒绝（交给 main 映射退出码 1）
+        let err = import_needs_confirm(false, false, false).unwrap_err();
+        assert!(err.contains("--yes"), "要教用户加 --yes：{err}");
+    }
+
+    #[test]
+    fn out_paths_are_made_absolute_for_the_app() {
+        // 绝对路径原样保留（应用的工作目录跟 cli 不一定一样）
+        let abs = abs_out_path(if cfg!(windows) { "C:/tmp/x.json" } else { "/tmp/x.json" });
+        assert!(Path::new(&abs).is_absolute());
+        // 相对路径按命令行当前目录补成绝对路径
+        let rel = abs_out_path("rel.json");
+        assert!(Path::new(&rel).is_absolute(), "{rel}");
+        assert!(rel.ends_with("rel.json"), "{rel}");
+    }
+
+    #[test]
+    fn stop_all_summary_mentions_failures() {
+        let text = stop_all_summary_text(&json!({
+            "tunnelsStopped": 2,
+            "tunnelsFailed": 1,
+            "servicesStopped": 3,
+            "servicesFailed": 1,
+        }));
+        assert!(text.contains("2 条发布隧道"), "{text}");
+        assert!(text.contains("3 个本机服务"), "{text}");
+        assert!(text.contains("没能停"), "{text}");
+        let ok = stop_all_summary_text(&json!({"tunnelsStopped": 0, "servicesStopped": 0}));
+        assert!(!ok.contains("没能停"), "{ok}");
+    }
+
+    #[test]
+    fn new_commands_parse() {
+        let cli = Cli::try_parse_from(["cli", "doctor", "--deep", "--strict"]).unwrap();
+        match cli.cmd {
+            Cmd::Doctor { deep, strict } => assert!(deep && strict),
+            _ => panic!("应该解析成 doctor"),
+        }
+        let cli = Cli::try_parse_from(["cli", "diag", "--out", "d.zip", "--deep"]).unwrap();
+        match cli.cmd {
+            Cmd::Diag { out, deep } => {
+                assert_eq!(out.as_deref(), Some("d.zip"));
+                assert!(deep);
+            }
+            _ => panic!("应该解析成 diag"),
+        }
+        let cli = Cli::try_parse_from(["cli", "stats", "--json"]).unwrap();
+        assert!(cli.json);
+        // undo：不写 / last / list / 令牌
+        let cli = Cli::try_parse_from(["cli", "undo"]).unwrap();
+        match cli.cmd {
+            Cmd::Undo { target } => assert!(target.is_none()),
+            _ => panic!("应该解析成 undo"),
+        }
+        let cli = Cli::try_parse_from(["cli", "undo", "list"]).unwrap();
+        match cli.cmd {
+            Cmd::Undo { target } => assert_eq!(target.as_deref(), Some("list")),
+            _ => panic!("应该解析成 undo list"),
+        }
+        // config export / import
+        let cli =
+            Cli::try_parse_from(["cli", "config", "export", "--with-paths", "--out", "b.json"])
+                .unwrap();
+        match cli.cmd {
+            Cmd::Config {
+                sub: ConfigCmd::Export { out, with_paths },
+            } => {
+                assert!(with_paths);
+                assert_eq!(out.as_deref(), Some("b.json"));
+            }
+            _ => panic!("应该解析成 config export"),
+        }
+        let cli = Cli::try_parse_from([
+            "cli", "config", "import", "b.json", "--mode", "replace", "--dry-run", "--yes",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Config {
+                sub: ConfigCmd::Import {
+                    file,
+                    mode,
+                    dry_run,
+                    yes,
+                },
+            } => {
+                assert_eq!(file, "b.json");
+                assert_eq!(mode, "replace");
+                assert!(dry_run && yes);
+            }
+            _ => panic!("应该解析成 config import"),
+        }
+        // app stop-all
+        let cli = Cli::try_parse_from(["cli", "app", "stop-all", "--yes"]).unwrap();
+        match cli.cmd {
+            Cmd::App {
+                sub: AppCmd::StopAll { yes },
+            } => assert!(yes),
+            _ => panic!("应该解析成 app stop-all"),
+        }
+        let cli = Cli::try_parse_from(["cli", "app", "stop-all"]).unwrap();
+        match cli.cmd {
+            Cmd::App {
+                sub: AppCmd::StopAll { yes },
+            } => assert!(!yes),
+            _ => panic!("应该解析成 app stop-all"),
+        }
+        // app update-check
+        let cli = Cli::try_parse_from(["cli", "app", "update-check"]).unwrap();
+        match cli.cmd {
+            Cmd::App {
+                sub: AppCmd::UpdateCheck,
+            } => {}
+            _ => panic!("应该解析成 app update-check"),
+        }
+        // logs 全参数 + 越界 archive 也能解析（越界在 run 里报错退出 1）
+        let cli = Cli::try_parse_from([
+            "cli", "logs", "tun-1", "--source", "tunnel", "--format", "json", "--archive", "3",
+            "--lines", "50",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Logs {
+                archive, lines, ..
+            } => {
+                assert_eq!(archive, 3);
+                assert_eq!(lines, 50);
+            }
+            _ => panic!("应该解析成 logs"),
+        }
+        // tunnel add / edit 的 --preset
+        let cli = Cli::try_parse_from([
+            "cli", "tunnel", "add", "--service", "svc-1", "--server", "srv-1", "--remote-port",
+            "13000", "--preset", "ws",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Cmd::Tunnel {
+                sub: TunnelCmd::Add { preset, .. },
+            } => assert_eq!(preset.as_deref(), Some("ws")),
+            _ => panic!("应该解析成 tunnel add"),
+        }
+        let cli = Cli::try_parse_from(["cli", "tunnel", "edit", "tun-1"]).unwrap();
+        match cli.cmd {
+            Cmd::Tunnel {
+                sub: TunnelCmd::Edit { preset, .. },
+            } => assert!(preset.is_none(), "不传 = 保持原来的预设"),
+            _ => panic!("应该解析成 tunnel edit"),
+        }
+        // 重置指纹
+        let cli =
+            Cli::try_parse_from(["cli", "tunnel", "forget-key", "tun-1", "--yes"]).unwrap();
+        match cli.cmd {
+            Cmd::Tunnel {
+                sub: TunnelCmd::ForgetKey { id, yes },
+            } => {
+                assert_eq!(id, "tun-1");
+                assert!(yes);
+            }
+            _ => panic!("应该解析成 tunnel forget-key"),
+        }
+    }
+
+    /// 给需要落盘的单测建一个干净临时目录。
+    fn test_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("shangxian-cli-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn offline_doctor_reuses_core_and_persists() {
+        let dir = test_dir("doctor-offline");
+        let quick = offline_doctor_in(&dir, false);
+        assert_eq!(quick["mode"], "quick");
+        assert_eq!(quick["appRunning"], false);
+        assert_eq!(quick["schemaVersion"], json!(1));
+        assert_eq!(quick["steps"].as_array().unwrap().len(), 9);
+        // 第一次运行还没有 config.json：dirs 应该 pass，不是吓人的 fail
+        assert_eq!(quick["steps"][1]["status"], "pass");
+        // core 负责落盘和发事件
+        assert!(dir.join("logs").join("doctor-last.json").is_file());
+        let events = std::fs::read_to_string(dir.join("events.jsonl")).unwrap_or_default();
+        assert!(events.contains("doctorRan"), "events={events}");
+
+        // deep 也是同一套 9 步（cloud / dns 会真跑）
+        let deep = offline_doctor_in(&dir, true);
+        assert_eq!(deep["mode"], "deep");
+        assert_eq!(deep["steps"].as_array().unwrap().len(), 9);
+        assert_eq!(deep["steps"][6]["id"], "cloud");
+        assert_eq!(deep["steps"][8]["id"], "dns");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offline_export_without_config_gives_default_backup() {
+        let dir = test_dir("export-first-run");
+        let v = offline_export_from(&dir, true, None).unwrap();
+        assert_eq!(v["redacted"], true);
+        assert_eq!(v["config"]["version"], json!(6));
+        assert!(v["config"]["servers"].as_array().unwrap().is_empty());
+
+        // 指定 --out 时写出完整备份文件（第一次运行也能备份）
+        let out = dir.join("backup.json");
+        let v2 = offline_export_from(&dir, true, Some(out.to_str().unwrap())).unwrap();
+        assert_eq!(v2["path"], out.display().to_string());
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        assert_eq!(doc["kind"], "shangxian.config-export");
+        assert_eq!(doc["formatVersion"], json!(1));
+        assert_eq!(doc["configVersion"], json!(6));
+        assert_eq!(doc["config"]["version"], json!(6));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_version_gate_only_accepts_5_and_6() {
+        assert!(check_import_version(&json!({"version": 6})).is_ok());
+        assert!(check_import_version(&json!({"version": 5})).is_ok());
+        for old in [3, 4] {
+            let err = check_import_version(&json!({"version": old})).unwrap_err();
+            assert!(err.contains("太旧"), "v{old} 要给「太旧」人话：{err}");
+            assert!(err.contains(&old.to_string()), "报错要写版本号：{err}");
+        }
+        // 带包装的备份：configVersion 优先，其次 config.version
+        assert!(check_import_version(&json!({
+            "kind": "shangxian.config-export",
+            "formatVersion": 1,
+            "configVersion": 5,
+            "config": {"version": 5}
+        }))
+        .is_ok());
+        assert!(check_import_version(&json!({
+            "kind": "shangxian.config-export",
+            "formatVersion": 1,
+            "config": {"version": 4}
+        }))
+        .is_err());
+        // 比程序新的版本不在这里拦：交给应用报「升级后会自动读回」
+        assert!(check_import_version(&json!({"version": 7})).is_ok());
+        // 没有版本号：交给应用报它那句人话
+        assert!(check_import_version(&json!({})).is_ok());
+    }
+
+    #[test]
+    fn import_doc_version_reads_both_shapes() {
+        assert_eq!(import_doc_version(&json!({"version": 5})), Some(5));
+        assert_eq!(
+            import_doc_version(&json!({"configVersion": 6, "config": {"version": 4}})),
+            Some(6)
+        );
+        assert_eq!(
+            import_doc_version(&json!({"config": {"version": 5}})),
+            Some(5)
+        );
+        assert_eq!(
+            import_doc_version(&json!({"kind": "x", "version": 5})),
+            None
+        );
+        assert_eq!(import_doc_version(&json!({})), None);
     }
 }

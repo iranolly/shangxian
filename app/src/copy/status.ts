@@ -87,6 +87,44 @@ export const SERVICE_ORDER: Record<ServiceStatus, number> = {
   running: 4,
 };
 
+/** 体检（doctor）每一步的结果。D0 裁决在三值上追加 warn，状态词 + 图标都不许只靠颜色。 */
+export type DoctorStatus = "pass" | "warn" | "fail" | "skip";
+
+export interface DoctorStatusMeta {
+  /** 状态词（行内和图标一起显示） */
+  word: string;
+  /** 图标（配合状态词，不只靠颜色） */
+  icon: string;
+  /** 颜色语义 */
+  tone: "ok" | "warn" | "error" | "muted";
+}
+
+export const DOCTOR_STATUS_META: Record<DoctorStatus, DoctorStatusMeta> = {
+  pass: { word: "通过", icon: "✓", tone: "ok" },
+  warn: { word: "要留意", icon: "!", tone: "warn" },
+  fail: { word: "没通过", icon: "✕", tone: "error" },
+  skip: { word: "跳过", icon: "–", tone: "muted" },
+};
+
+/** 云端环境识别（D3 §3）：面板 / 网站服务的固定中文说法。 */
+export type ServerPanelKind = "bt" | "xp" | "none" | "unknown";
+export type ServerWebKind = "nginx" | "apache" | "both" | "none" | "unknown";
+
+export const ENV_PANEL_WORD: Record<ServerPanelKind, string> = {
+  bt: "宝塔面板",
+  xp: "小皮面板",
+  none: "没发现面板",
+  unknown: "没认出来面板",
+};
+
+export const ENV_WEB_WORD: Record<ServerWebKind, string> = {
+  nginx: "nginx",
+  apache: "Apache",
+  both: "nginx 和 Apache 都在",
+  none: "没找到网站服务",
+  unknown: "没认出来网站服务",
+};
+
 /** 隧道排序：坏状态排前面（出错 > 掉线 > 连接中 > 正在发布 > 已暂停） */
 export const TUNNEL_ORDER: Record<TunnelStatus, number> = {
   error: 0,

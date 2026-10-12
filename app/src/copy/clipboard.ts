@@ -2,6 +2,8 @@
 // 优先用浏览器自带的新接口；旧环境、或没给权限时，退回"选中 + 复制"的老办法。
 // 返回是否成功：界面要按这个结果给用户提示，不能默默失败。
 
+import { toast } from "../store/toastStore";
+
 export async function copyText(text: string): Promise<boolean> {
   if (navigator.clipboard?.writeText) {
     try {
@@ -30,4 +32,19 @@ export async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * 复制 + 就地反馈：成功给 successText，失败给一条人话错误。
+ * 返回是否复制成功（调用方要按结果决定后续动作时用）。
+ */
+export async function copyWithToast(
+  text: string,
+  successText: string,
+  failText = "复制没成功，手动选中再复制吧",
+): Promise<boolean> {
+  const ok = await copyText(text);
+  if (ok) toast.success(successText);
+  else toast.error(failText);
+  return ok;
 }

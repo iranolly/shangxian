@@ -17,11 +17,13 @@ import {
   inspectProcessLaunchInfo,
   listLocalPorts,
   previewLaunchCommand,
-  saveService,
   type LaunchWarning,
   type LocalPort,
   type ServiceView,
 } from "../api";
+import { actions } from "../store/actions";
+import { useStore } from "../store/useStore";
+import { ConfirmModal } from "./ConfirmModal";
 import { useModalA11y } from "./useModalA11y";
 
 interface Props {
@@ -32,8 +34,8 @@ interface Props {
   /** Services 页「跳到已登记服务的编辑」时置 true：打开后自动读取补全一次 */
   autoRead?: boolean;
   onClose: () => void;
-  /** 保存成功后回调；launchChanged = 编辑时改动了启动程序/参数/工作目录 */
-  onSaved: (launchChanged: boolean) => void;
+  /** 保存成功后回调；launchChanged = 编辑时改动了启动程序/参数/工作目录；serviceId = 保存后的服务 id */
+  onSaved: (launchChanged: boolean, serviceId: string) => void;
   /** 点已登记端口行：切到那台服务的编辑界面（由 Services 页管状态） */
   onSwitchToEdit?: (serviceId: string) => void;
 }
@@ -75,6 +77,7 @@ export function ServiceModal({
 }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   useModalA11y(dialogRef, onClose);
+  const configTrusted = useStore((s) => s.app.configTrusted);
   const [name, setName] = useState(service?.name ?? "");
   const [nameEdited, setNameEdited] = useState(Boolean(service));
   const [localPort, setLocalPort] = useState(
@@ -100,6 +103,12 @@ export function ServiceModal({
   const [warnings, setWarnings] = useState<LaunchWarning[]>([]);
   /** 用户确认「参数里有疑似密钥也照样保存」 */
   const [ackSensitive, setAckSensitive] = useState(false);
+  /** 自动读取要覆盖已有启动字段时的确认框（替代 window.confirm） */
+  const [overwriteAsk, setOverwriteAsk] = useState<{
+    exe?: string | null;
+    args?: string | null;
+    workdir?: string | null;
+  } | null>(null);
   /** 哪些字段是自动填的：显示「自动读取 · 未验证」，用户一编辑就消失 */
   const [autoFilled, setAutoFilled] = useState<AutoFilled>({});
   const [inspecting, setInspecting] = useState(false);
@@ -148,32 +157,12 @@ export function ServiceModal({
     setAutoFilled((f) => (f[field] ? { ...f, [field]: false } : f));
   };
 
-  /**
-   * 把读到的启动方式填进表单。
-   * - 新建：直接填；
-   * - 编辑：三个字段里已有内容且新值不同才确认；取消 = 三个字段都保持原样
-   *   （pick/自动读取都不再提前写字段，确认通过后才统一写入）。
-   */
-  const applyLaunchInfo = (
+  /** 把读到的启动方式真正填进表单（确认覆盖后 / 没有旧内容时走这里）。 */
+  const fillLaunchInfo = (
     exe?: string | null,
     args?: string | null,
     workdir?: string | null,
   ) => {
-    const changed =
-      (exe != null && exe !== launchExeRef.current) ||
-      (args != null && args !== launchArgsRef.current) ||
-      (workdir != null && workdir !== launchWorkdirRef.current);
-    const hasExisting = Boolean(
-      launchExeRef.current.trim() ||
-        launchArgsRef.current.trim() ||
-        launchWorkdirRef.current.trim(),
-    );
-    if (service && hasExisting && changed) {
-      const ok = window.confirm(
-        "启动程序 / 启动参数 / 工作目录里已经有内容了。\n要用自动读取到的内容覆盖吗？（取消 = 保留你现在填的）",
-      );
-      if (!ok) return;
-    }
     const filled: AutoField[] = [];
     if (exe != null) {
       launchExeRef.current = exe;
@@ -193,6 +182,40 @@ export function ServiceModal({
     if (filled.length) mark(...filled);
   };
 
+  /**
+   * 把读到的启动方式填进表单。
+   * - 新建：直接填；
+   * - 编辑：三个字段里已有内容且新值不同才确认（用 ConfirmModal，保留原文案）；
+   *   取消 = 三个字段都保持原样（pick/自动读取都不再提前写字段，确认通过后才统一写入）。
+   */
+  const applyLaunchInfo = (
+    exe?: string | null,
+    args?: string | null,
+    workdir?: string | null,
+  ) => {
+    const changed =
+      (exe != null && exe !== launchExeRef.current) ||
+      (args != null && args !== launchArgsRef.current) ||
+      (workdir != null && workdir !== launchWorkdirRef.current);
+    const hasExisting = Boolean(
+      launchExeRef.current.trim() ||
+        launchArgsRef.current.trim() ||
+        launchWorkdirRef.current.trim(),
+    );
+    if (service && hasExisting && changed) {
+      setOverwriteAsk({ exe, args, workdir });
+      return;
+    }
+    fillLaunchInfo(exe, args, workdir);
+  };
+
+  const confirmOverwrite = () => {
+    const pending = overwriteAsk;
+    setOverwriteAsk(null);
+    if (!pending) return;
+    fillLaunchInfo(pending.exe, pending.args, pending.workdir);
+  };
+
   /** 读某个端口的启动方式；读不可靠就只报警告、不覆盖字段 */
   const inspect = async (port: number, expectedPid: number | null) => {
     const seq = ++inspectSeq.current;
@@ -200,6 +223,8 @@ export function ServiceModal({
     setWarnings([]);
     setAckSensitive(false);
     setRawInfo(null);
+    // 新读一次就把上一轮还没点的「覆盖确认」撤掉，避免对着旧数据确认
+    setOverwriteAsk(null);
     try {
       const info = await inspectProcessLaunchInfo(port, expectedPid);
       if (seq !== inspectSeq.current) return;
@@ -310,7 +335,7 @@ export function ServiceModal({
         normLaunch(launchWorkdir) !== normLaunch(service.launchWorkdir));
     setBusy(true);
     try {
-      await saveService({
+      const savedId = await actions.serviceSave({
         id: service?.id ?? null,
         name: name.trim(),
         localPort: port,
@@ -321,7 +346,11 @@ export function ServiceModal({
         autostart,
         note: note.trim() || null,
       });
-      onSaved(launchChanged);
+      if (!savedId) {
+        setError("没保存成功：等一下再试");
+        return;
+      }
+      onSaved(launchChanged, savedId);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -331,7 +360,8 @@ export function ServiceModal({
   };
 
   return (
-    <div className="modal-backdrop">
+    <>
+      <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 620 }}>
         <div className="modal-head">
           <h2 className="modal-title">
@@ -610,13 +640,25 @@ export function ServiceModal({
           <span className="grow" />
           <button
             className="btn btn-primary"
-            disabled={busy || (sensitive && !ackSensitive)}
+            disabled={busy || (sensitive && !ackSensitive) || !configTrusted}
+            title={!configTrusted ? "配置文件读不出来，先修好再改设置" : undefined}
             onClick={() => void save()}
           >
             {busy ? "保存中…" : "保存"}
           </button>
         </div>
       </div>
-    </div>
+      </div>
+
+      {overwriteAsk ? (
+        <ConfirmModal
+          title="启动程序 / 启动参数 / 工作目录里已经有内容了。"
+          body="要用自动读取到的内容覆盖吗？（取消 = 保留你现在填的）"
+          confirmLabel="覆盖"
+          onConfirm={confirmOverwrite}
+          onClose={() => setOverwriteAsk(null)}
+        />
+      ) : null}
+    </>
   );
 }

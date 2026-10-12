@@ -134,7 +134,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4284,7 +4284,7 @@ dependencies = [
 
 [[package]]
 name = "shangxian-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "clap",
  "rpassword",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "shangxian-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bcrypt",
  "rand 0.8.8",

@@ -1,0 +1,288 @@
+// 克隆隧道弹层（D4 §3.3 CloneTunnelModal）：
+// 名字默认「{源名} 的副本」，服务器/预设/访问保护默认沿用源隧道；
+// 公网网址默认空（原网址不能给两条隧道同时用）；云端端口默认挑一个空闲的。
+//
+// 与 D4 的一点实现差异：密码的加密结果拿不到（界面里只有 hasPassword 布尔值），
+// 所以选了「要密码」时让用户给新隧道设一条新密码（默认随机预填），提交前在本机算哈希。
+
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import {
+  hashPassword,
+  type ServerView,
+  type TunnelPreset,
+  type TunnelView,
+} from "../api";
+import { errorText } from "../store/commands";
+import { getState } from "../store/snapshotStore";
+import { actions, type CloneDraft } from "../store/actions";
+import { useStore } from "../store/useStore";
+import { useModalA11y } from "./useModalA11y";
+
+interface Props {
+  sourceId: string;
+  onClose(): void;
+  /** 克隆成功后 toast 里的「去编辑」 */
+  onOpenEdit(id: string): void;
+}
+
+function generatePassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
+}
+
+/** 在指定服务器上从 start 往上找一个没被别的隧道占用的云端端口 */
+function suggestPort(serverId: string, start: number): number {
+  const used = new Set(
+    getState()
+      .tunnels.filter((t) => t.serverId === serverId)
+      .map((t) => t.remotePort),
+  );
+  let port = Math.max(1, Math.min(65_500, start));
+  while (used.has(port) && port < 65_500) port += 1;
+  return port;
+}
+
+export function CloneTunnelModal({ sourceId, onClose, onOpenEdit }: Props) {
+  const source = useTunnelSource(sourceId);
+  if (!source) return null;
+  return <CloneForm source={source} onClose={onClose} onOpenEdit={onOpenEdit} />;
+}
+
+function useTunnelSource(id: string): TunnelView | undefined {
+  const tunnels = useStore((s) => s.tunnels);
+  return tunnels.find((t) => t.id === id);
+}
+
+function CloneForm({
+  source,
+  onClose,
+  onOpenEdit,
+}: {
+  source: TunnelView;
+  onClose(): void;
+  onOpenEdit(id: string): void;
+}) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  useModalA11y(dialogRef, onClose);
+  const servers = useStore((s) => s.servers);
+
+  const access = source.access ?? [];
+  const [name, setName] = useState(`${source.name} 的副本`);
+  const [serverId, setServerId] = useState(source.serverId);
+  const [portText, setPortText] = useState(() =>
+    String(suggestPort(source.serverId, source.remotePort + 1)),
+  );
+  const [url, setUrl] = useState("");
+  const [preset, setPreset] = useState<TunnelPreset>(source.preset ?? "web");
+  const [wantPassword, setWantPassword] = useState(access.includes("password"));
+  const [wantIp, setWantIp] = useState(access.includes("ip"));
+  const [accessUser, setAccessUser] = useState(source.accessUser ?? "shangxian");
+  const [password, setPassword] = useState(generatePassword);
+  const [ips, setIps] = useState(source.accessDetail ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // 换服务器时重新挑端口（只依赖 serverId；隧道列表现取现用，避免每次快照重置）
+  useEffect(() => {
+    setPortText(String(suggestPort(serverId, source.remotePort + 1)));
+  }, [serverId, source.remotePort]);
+
+  const serverOptions: ServerView[] = servers;
+
+  const submit = async () => {
+    setError("");
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError("隧道名字不能为空");
+      return;
+    }
+    const remotePort = Number(portText);
+    if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
+      setError("云端端口要填 1~65535 的数字");
+      return;
+    }
+    if (wantPassword && !password.trim()) {
+      setError("这条隧道选了「要密码才能进」，请先填一条新密码");
+      return;
+    }
+    if (wantIp && !ips.trim()) {
+      setError("选了「只允许指定 IP」，请先把允许访问的 IP 填上");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const accessHash = wantPassword ? await hashPassword(serverId, password) : null;
+      const flags: string[] = [];
+      if (wantPassword) flags.push("password");
+      if (wantIp) flags.push("ip");
+      const draft: CloneDraft = {
+        name: trimmedName,
+        serverId,
+        remotePort,
+        url: url.trim() || null,
+        preset,
+        access: flags,
+        accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
+        accessHash,
+        accessDetail: wantIp ? ips.trim() : null,
+      };
+      const id = await actions.tunnelClone(source.id, draft, onOpenEdit);
+      if (id) onClose();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const presets = useMemo(
+    () =>
+      [
+        { value: "web" as TunnelPreset, label: "普通网站（默认）" },
+        { value: "ws" as TunnelPreset, label: "WebSocket（实时通信）" },
+        { value: "upload" as TunnelPreset, label: "大文件上传" },
+      ] satisfies { value: TunnelPreset; label: string }[],
+    [],
+  );
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 560 }}>
+        <div className="modal-head">
+          <h2 className="modal-title">克隆隧道 · {source.name}</h2>
+          <p className="modal-sub">
+            复制一条设置差不多的隧道；建好后是暂停状态，检查好再开始发布。
+          </p>
+        </div>
+        <div className="modal-body">
+          {error ? <div className="error-line">{error}</div> : null}
+
+          <div className="field">
+            <label className="field-label">隧道名字</label>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+
+          <div className="field">
+            <label className="field-label">云端服务器</label>
+            <select
+              className="select"
+              value={serverId}
+              onChange={(e) => setServerId(e.target.value)}
+            >
+              {serverOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}（{s.host}）
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <label className="field-label">云端端口</label>
+            <input
+              className="input mono"
+              style={{ maxWidth: 180 }}
+              value={portText}
+              inputMode="numeric"
+              onChange={(e) => setPortText(e.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <label className="field-label">公网网址（可空）</label>
+            <input
+              className="input"
+              value={url}
+              placeholder="例：album2.example.com"
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <p className="warn-line">原网址不能给两条隧道同时用；要填就换一个。</p>
+          </div>
+
+          <div className="field">
+            <label className="field-label">发布预设</label>
+            <select
+              className="select"
+              value={preset}
+              onChange={(e) => setPreset(e.target.value as TunnelPreset)}
+            >
+              {presets.map((p) => (
+                <option key={p.value} value={p.value}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <fieldset className="field">
+            <legend className="field-label">访问保护</legend>
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={wantPassword}
+                onChange={(e) => setWantPassword(e.target.checked)}
+              />
+              要密码
+            </label>
+            <label className="switch" style={{ marginLeft: 16 }}>
+              <input
+                type="checkbox"
+                checked={wantIp}
+                onChange={(e) => setWantIp(e.target.checked)}
+              />
+              IP 白名单
+            </label>
+            {wantPassword ? (
+              <>
+                <p className="field-hint">
+                  原来的密码加密结果不能复制，这里给新隧道设一条新密码（可以和原来一样）。
+                </p>
+                <div className="field-row">
+                  <div className="field">
+                    <label className="field-label">访问用户名</label>
+                    <input
+                      className="input"
+                      value={accessUser}
+                      onChange={(e) => setAccessUser(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="field-label">新密码</label>
+                    <input
+                      className="input mono"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </>
+            ) : null}
+            {wantIp ? (
+              <div className="field">
+                <label className="field-label">允许访问的 IP</label>
+                <input
+                  className="input"
+                  value={ips}
+                  placeholder="例：1.2.3.4, 5.6.7.8"
+                  onChange={(e) => setIps(e.target.value)}
+                />
+              </div>
+            ) : null}
+          </fieldset>
+        </div>
+        <div className="modal-foot">
+          <button className="btn btn-ghost" onClick={onClose}>
+            取消
+          </button>
+          <span className="grow" />
+          <button className="btn btn-primary" disabled={busy} aria-busy={busy} onClick={() => void submit()}>
+            {busy ? "处理中…" : "克隆这条隧道"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -51,8 +51,16 @@ fn main() {
         TunnelSpec::new(name, ssh::default_ssh_exe(), ssh::tunnel_args(&target))
     };
 
-    let mut t_a = Tunnel::new(mk("tunnel-A", 19101, 18081), &log_dir);
-    let mut t_b = Tunnel::new(mk("tunnel-B", 19102, 18082), &log_dir);
+    let mut t_a = Tunnel::new(
+        mk("tunnel-A", 19101, 18081),
+        &log_dir,
+        Arc::new(shangxian_core::log::NullReporter),
+    );
+    let mut t_b = Tunnel::new(
+        mk("tunnel-B", 19102, 18082),
+        &log_dir,
+        Arc::new(shangxian_core::log::NullReporter),
+    );
 
     let start = Instant::now();
     let mut killed_a = false;
@@ -78,6 +86,7 @@ fn main() {
                         uptime,
                         retry_in,
                         reset_backoff,
+                        code: _,
                     } => {
                         println!(
                             "[{:>6.2}s] [{name}] 隧道断开 (第 {attempt} 次退出, code={exit_code:?}, 存活 {:.1}s)，{:.0}s 后重试{}",
@@ -87,13 +96,14 @@ fn main() {
                             if reset_backoff { "（退避已重置）" } else { "" }
                         );
                     }
-                    Event::SpawnFailed { error, retry_in } => {
+                    Event::SpawnFailed { error, retry_in, .. } => {
                         println!(
                             "[{:>6.2}s] [{name}] 启动失败：{error}；{:.0}s 后重试",
                             (now - start).as_secs_f32(),
                             retry_in.as_secs_f32()
                         );
                     }
+                    Event::SystemWake { .. } | Event::CleanupFinished { .. } => {}
                 }
             }
         }

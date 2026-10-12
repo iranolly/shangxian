@@ -1,11 +1,12 @@
 # 上线助手 · 设计方案
 
-版本 v0.5 · 2026-10-12
+版本 v0.6 · 2026-10-12
 由 1 名主导 + 4 名分身（现状盘点 / 功能风暴 / 技术架构 / 界面设计）整合而成。
 v0.2 变更：定名「上线助手」；形态由「本地网页」改为「原生桌面窗口」；新增多电脑支持与导入接管（第 6 节）。
 v0.3 变更：技术栈经「系统可靠性 + 界面还原」双视角独立评估后定稿 Tauri v2（备选 WPF）；删除所有以「本机已装环境」为依据的选型理由。
 v0.4 变更：把「服务」和「隧道」拆成两个对象（第 9 节）；新增「密码登录一次 → 自动配好免密」（第 10 节，已用靶机实测通过）。
 v0.5 变更（2026-10-12 全景修复）：密码哈希改本机 bcrypt（服务器不用装 openssl）；站点目录 `vhostDir` 解析链；配置读坏留底 `config.json.bad`；隧道参数变自动重建；看护/自启门槛与假死处理；日志按 id 命名 + 5MB 轮转；CLI 确认策略/JSON 信封/退出码；托盘/通知/向导/云端核对细节（见 §11.5）。
+v0.6 变更（2026-10-12 可靠性/生命周期改造）：配置文件升到 **v6**（新增 `settings` 与隧道 `preset`）；新增 `state.json`（运行状态）与 `events.jsonl`（结构化事件）；体检 `doctor`、云端完整检查 `cloudcheck`、删除撤销、配置导出/导入、诊断包；TOFU 主机指纹、本机 bcrypt、HTTPS 感知；崩溃自恢复 + 延迟建窗 + 全局单实例。架构与数据模型详见 §12。
 
 ---
 
@@ -115,7 +116,7 @@ v0.5 变更（2026-10-12 全景修复）：密码哈希改本机 bcrypt（服务
 
 - 是独立的 Windows 桌面应用窗口（有自己的图标、托盘、通知，不经过浏览器地址栏），不是浏览器页签。
 - 界面用 Web 技术：第 4 节的设计稿本身就是 Web 语汇写的（动效、深色模式、无障碍实时播报、高对比度），可以近乎 1:1 还原；界面改动 1–3 秒就能看效果，可以先把设计稿在浏览器里做完再套进窗口。
-- 核心用 Rust：启动和看护多个 ssh.exe 子进程、按端口精确清理、退避重连、健康检查、SQLite、DoH 检查；用 Windows 作业对象（Job Object）保证即使程序崩溃也不会留下孤儿 ssh 进程。
+- 核心用 Rust：启动和看护多个 ssh.exe 子进程、按端口精确清理、退避重连、健康检查、状态与事件落盘、DoH 检查；用 Windows 作业对象（Job Object）保证即使程序崩溃也不会留下孤儿 ssh 进程。
 - 轻量：安装包约 3–10MB，内存低于 Electron 一档；目标机器需要系统 WebView2 组件（Win10 新版本 / Win11 自带，缺失时安装包引导补装）。
 - 结构与换壳成本：`core`（Rust 库，不依赖界面：进程看护/配置/健康检查/清理）+ `ui`（Web 前端）+ `shell`（Tauri 窗口/托盘/通知）+ `cli`（脚本与测试入口）。核心可脱离界面单独测试；万一以后要换界面技术，只动 ui/shell。
 
@@ -140,7 +141,7 @@ v0.5 变更（2026-10-12 全景修复）：密码哈希改本机 bcrypt（服务
 │  │ 核心层（Rust，单实例锁；关窗缩托盘后继续看护）             │  │
 │  │  · 服务配置表（唯一事实来源）                             │  │
 │  │  · 每服务隧道状态机 + 退避重连                            │  │
-│  │  · 状态/历史库（SQLite，只存运行时数据）                  │  │
+│  │  · 状态/历史（v0.6 起是 `state.json` + `events.jsonl`，早期设计的 SQLite 未采用）  │  │
 │  │  · nginx 片段生成 + 对账                                  │  │
 │  │  · 域名检查 + 证书到期监控                                │  │
 │  └─┬──────────┬──────────┬──────────────────────────────────┘  │
@@ -176,7 +177,8 @@ v0.5 变更（2026-10-12 全景修复）：密码哈希改本机 bcrypt（服务
 | 界面与窗口 | Tauri v2 原生窗口 + WebView2 界面 + 托盘常驻；标题栏先用系统 overlay 模式（保住 Windows 贴靠布局），内容区按第 4 节还原 | 设计稿是 Web 语汇（动效/深色/无障碍），Web 前端还原度最高、迭代 1–3 秒 | 全自绘标题栏 + 贴靠布局需要窗口子类化，先不做；WebView2 缺失的机器要引导补装 |
 | 实现语言 | Rust（core）+ TypeScript/React（界面） | 核心可靠且与界面故障隔离（界面崩了隧道照跑）；界面迭代快 | 两门语言；core 必须能脱离界面被测试（本地 sshd 靶机驱动） |
 | SSH 实现 | 调用系统 `ssh.exe`，**写死绝对路径** `C:\Windows\System32\OpenSSH\ssh.exe` | 复用现有密钥/config/agent；与现有两条隧道同一条已验证路径 | 本机有两份 ssh（System32 9.5p1 和 Git Bash 10.0p2），行为不同；System32 版开连接复用会报错 → **不依赖连接复用，每服务一条独立连接** |
-| 状态存储 | 配置文件（JSON/YAML）= 唯一事实来源；SQLite 只存事件与健康历史 | 配置能手改、能备份、能进 git；运行库坏了可删掉重建 | 单实例锁；原子写入（临时文件 + 改名）；**密钥绝不放配置文件** |
+| 状态存储 | 配置文件（JSON/YAML）= 唯一事实来源；运行状态/事件只存运行时数据 | 配置能手改、能备份、能进 git；运行数据坏了可删掉重建。v0.6 实际落地：`config.json`（v6）+ `state.json`（运行状态）+ `events.jsonl`（事件流），**不再用 SQLite** | 单实例锁（v0.6 是全局命名互斥量）；原子写入（临时文件 + 改名）；**密钥绝不放配置文件** |
+| nginx 下发 | 生成**面板原生格式**片段 + 备份 + `nginx -t` + reload + 失败回滚 + 漂移对账 | 面板保存会重写站点文件，一次下发不是永久有效 | MVP 只生成+人工应用；永远不碰全局 nginx.conf；改前必备份。v0.6 仍不开自动下发，新增`check_tunnel_cloud`只读核对与漂移告警 |
 | 密钥/密码 | 私钥照旧放 `~/.ssh/`（收紧权限）；其他机密（服务器密码、DNS API Key）进 Windows 凭据管理器/DPAPI | 全用系统原生安全机制，不自研加密 | 自启必须用同一用户跑，否则取不到；ssh-agent 目前是禁用状态，要用得先启用 |
 | nginx 下发 | 生成**面板原生格式**片段 + 备份 + `nginx -t` + reload + 失败回滚 + 漂移对账 | 面板保存会重写站点文件，一次下发不是永久有效 | MVP 只生成+人工应用；永远不碰全局 nginx.conf；改前必备份 |
 | 域名/解析 | `域名来源：手动 / API` 两种模式；默认手动：生成"加什么记录"清单 + DoH（223.5.5.5）检查生效 | 现有工作流就是手动加解析，MVP 不引入任何 DNS 凭据 | API 模式要最小权限 AccessKey + 改前备份；TTL 传播延迟要重试而非一次判死 |
@@ -285,7 +287,7 @@ v0.5 变更（2026-10-12 全景修复）：密码哈希改本机 bcrypt（服务
 
 ### v1（自动化与运维闭环）
 
-- 计划任务自启 + 三层健康检查 + 掉线通知 + SQLite 历史
+- 计划任务自启 + 三层健康检查 + 掉线通知 + 运行状态/事件落盘
 - nginx 半自动下发（备份 + `nginx -t` + reload + 回滚 + 漂移检测）
 - 按服务拆分密钥 + 白名单 diff 应用
 - 阿里云 DNS API（可选）+ 证书到期监控
@@ -428,6 +430,7 @@ pub struct LocalService {
     pub id: String,
     pub name: String,
     pub local_port: u16,
+    pub probe_kind: String,           // v6："tcp"（默认）|"http"
     pub launch: Option<LaunchSpec>,   // 留空 = 只监控
     pub watch: bool,                  // 看护
     pub autostart: bool,              // 开机自启
@@ -453,14 +456,22 @@ pub struct Tunnel {
     pub access_hash: Option<String>,
     pub access_detail: Option<String>,
     pub enabled: bool,
+    pub preset: String,               // v6："web"（默认）|"ws"|"upload"
+}
+
+pub struct Settings {                 // v6 新增（config.settings）
+    pub refresh_interval_ms: u32,     // 500..=10000，默认 800
+    pub quiet_hours: QuietHours,      // { enabled, start, end }
+    pub check_update_on_start: bool,  // 默认 true
 }
 
 pub struct AppConfig {
-    pub version: u32,                 // 5
+    pub version: u32,                 // 6
     pub servers: Vec<ServerConfig>,
     pub services: Vec<LocalService>,
     pub tunnels: Vec<Tunnel>,
     pub notify_enabled: bool,
+    pub settings: Settings,
 }
 ```
 
@@ -622,3 +633,86 @@ pub struct AppConfig {
 - 托盘菜单「退出」改名「退出（会停止发布）」，有隧道在发布时弹原生确认框（默认「否」，写清退出后果）；首次关窗缩托盘发一条一次性通知；托盘 tooltip 显示「X 条发布中 · Y 条掉线」；掉线/恢复通知标题为「发布掉线：名字」「发布恢复：名字」。
 - 新建向导成功屏改成「隧道建好了，还差最后一步」（贴云端配置），下一栈按钮直达云端配置弹层；选「两个保护都不开」要勾确认才能发布；未填网址也能建并提醒。
 - 保护状态绿色只在「检查云端」对得上之后；之前统一带「· 待核对」。云端配置弹层自带「检查云端」按钮与上次检查结果。服务器页新增「测试连接」和「站点目录」字段。空页加三步引导。
+
+---
+
+## 12. v0.6 架构与数据模型（2026-10-12 可靠性/生命周期改造）
+
+本节是当前实现（代码为准）的架构快照；前面章节里与之冲突的早期设想（如 SQLite、自动下发）以本节为准。
+
+### 12.1 模块清单（`core/src` 按职责）
+
+| 模块 | 职责 |
+|---|---|
+| `config` | 配置 v6：`AppConfig`（servers / services / tunnels / notifyEnabled / settings）、原子写、v3→v4→v5→v6 迁移、归一化、降级拦截、数据目录解析（含便携版） |
+| `guardian` | 守护者：内存里的唯一事实来源，服务的增删改启停、隧道的增删改启停、快照（ServiceView / TunnelView / ServerView）、删除撤销、配置提交 |
+| `supervisor` | 单条隧道的状态机：退避重连（2→30 秒）、日志、退出原因识别；参数指纹变了自动重建 |
+| `localservice` | 本机服务运行时：启动 / 停止（只停自己启动的）、看护、假死重启、端口探测接线、启动方式预览 |
+| `probe` | 本机端口探测：TCP 100ms / HTTP 500ms；连续 3 次失败才判 down；每服务一条探测线程、结果写原子量（不占全局锁） |
+| `proc` / `proc_detail` | 进程信息：命令行 / 当前工作目录 / 程序路径（64 位 + WOW64 PEB）；`inspect_process_launch_info` 的底子 |
+| `cleanup` | 按端口**精确**清理残留 sshd 会话（每分钟最多一次）；本机 bcrypt 访问密码哈希 |
+| `ssh` / `job` | 写死 System32 `ssh.exe`；作业对象：隧道 kill-on-close（防孤儿），本机服务保活 |
+| `keyboot` | 密码登录一次 → 生成密钥 → 写 `authorized_keys` → 密钥验证；russh + ring；TOFU 主机指纹 |
+| `nginx` | nginx 片段生成（web/ws/upload 预设）、站点目录解析链、`valid_domain` / `valid_allow_entry` |
+| `protection` | 云端站点配置解析：`auth_basic` / `allow`+`deny` / 跳转 / `.well-known` 豁免 → `AccessCheck` |
+| `cloudcheck` | 云端核对 V2：只读脚本生成 + 文本协议解析；HTTPS/证书、端口回环、环境识别、访问审计、公网 IP、漂移判定（纯函数，可单测） |
+| `doctor` | 体检九步（app→dirs→ssh→ports→servers→tunnels→cloud→web→dns）；quick/deep；单步 20s、整次 60s |
+| `state` | `state.json` v1：运行状态、当日重连、失败记忆、保护核对结果、墓碑（撤销）、环境缓存；去抖落盘 |
+| `reason` | 42 个原因码：ssh 输出 / 服务输出 → 码 + 人话 |
+| `events` | `events.jsonl` v1：结构化事件、去重、限流、2MB×2 轮转 |
+| `log` / `logfile` | 注入式日志接收器（app.log / stderr / 空实现）+ 统一文件轮转 |
+| `notify` | 通知纯逻辑：连续异常 3 分钟才弹、恢复再弹、暂停不弹、免打扰时段 |
+| `wake` | 睡眠唤醒 / 网络恢复 / 时钟跳变检测（tick 漂移 + Win32 回调置位） |
+| `import` | 导入解析与合并（merge/replace、dry-run、原子写、备份）；导出白名单与脱敏 |
+| `local_ports` | `netstat -ano -p tcp` 枚举监听端口 + 进程名/路径 |
+
+外层的写者分工：
+
+| 位置 | 职责 |
+|---|---|
+| `app/src-tauri/src/ctl.rs` | 控制通道方法表（61 条）+ 分发；doctor / diag / 导出导入 / 撤销 / 云端检查的接线；脱敏（配置、状态、日志文本） |
+| `app/src-tauri/src/lib.rs` | Tauri 命令层、启动自检、更新检查、托盘、通知 |
+| `app/src-tauri/src/mainwindow.rs` | 延迟建窗、窗口记忆（`window-state.json`） |
+| `app/src-tauri/src/singleton.rs` | 全局单实例（`Global\Shangxian.App.v1` + `app.lock` 回落） |
+| `app/src-tauri/src/recovery.rs` | 崩溃自动恢复（`RegisterApplicationRestart` + `recovery.json` + 防崩溃循环） |
+| `app/src-tauri/src/power.rs` | 电源 / 网卡变化回调 → `wake::signal_*`（只置原子位） |
+| `cli/src/main.rs` | 命令行层：参数解析、确认策略、JSON 信封、退出码、离线回退、人话输出 |
+
+### 12.2 数据文件（都在数据目录下）
+
+| 文件 | 内容 | 生命周期 / 边界 |
+|---|---|---|
+| `config.json` | **唯一事实来源**，v6：`servers` / `services` / `tunnels` / `notifyEnabled` / `settings`（`refreshIntervalMs` 500..=10000、`quietHours`、`checkUpdateOnStart`）；隧道含 `preset`（web/ws/upload），服务含 `probeKind`（tcp/http） | 原子写（临时文件 + 改名）；读坏留底 `config.json.bad` 并禁止自动保存；版本高于程序「降级拦截」只读不写；迁移 v3→v4→v5→v6 |
+| `state.json` | 运行状态 v1：`dayKey`、`lastSavedAt`、`updateInfo`、`tunnels[id]{lastFailure, protectionCheck, stats}`、`services[id]{lastFailure}`、`trash[≤20]`（10 分钟撤销）、`servers[id]`（云端环境识别缓存） | 只有运行中的应用写；去抖落盘（≥1s、最晚 5s）+ 退出 `flush`；损坏改名 `.bad`、版本过高改名 `.unsupported`，都用默认状态继续 |
+| `events.jsonl` | 结构化事件 v1：`{v,ts,kind,level,code,subject,message,data?}`；`kind` = app/tunnel/service/protection/update/doctor | 一行一个 JSON；2MB 轮转留 2 份；同样事件 10 秒去重、每秒 ≤10 条、超限静默 10 秒；写失败不 panic |
+| `logs/` | 隧道 `<id>-<哈希>.ssh.log`、服务 `service-<id>.log`（均 5MB×2 轮转）、应用 `app.log`（2MB×2）、`doctor-last.json` | 按 id 命名，改名不换文件；旧命名不读 |
+| `ctl.json` | 控制通道：`{port, token, pid, appVersion}` | 应用运行时才有；退出时删除；token 仅本机回环使用 |
+| `keys/` | `<服务器id>_ed25519`（+`.pub`）+ `shangxian_known_hosts`（TOFU 指纹） | 密码不落盘；指纹变更拒连，需人工 `forget-key` |
+| `window-state.json` / `recovery.json` / `crash-recovery.off` | 窗口位置大小 / 崩溃恢复计数 / 用户关掉恢复的标记 | 坏文件按默认值处理，不阻塞启动 |
+| `diag/` | `cli diag` 生成的脱敏诊断包 | 只含脱敏内容，不发往外网 |
+
+### 12.3 安全模型
+
+- **TOFU（首次信任）主机指纹**：隧道 ssh 用 `StrictHostKeyChecking=accept-new`——第一次连某台服务器记下指纹，之后指纹对不上直接拒连（`hostKeyChanged`）；`setup_passwordless` 的 russh 走同一套语义，指纹记录在密钥旁边 `shangxian_known_hosts`。服务器重装/换机器由人确认后 `tunnel forget-key --yes` 重信任。
+- **bcrypt 在本机算**：访问密码哈希 `$2y$12$…`，不往服务器发命令、不需要装 openssl；明文只显示一次、不落盘、不进日志；超过 72 字节拒绝；`setup-key` / `hash-password` 走 stdin 不回显。导出与诊断包**永不含** `accessHash`（只留 `hasPassword`）。
+- **HTTPS 感知**：`cloudcheck` 只读核对云端 443/ssl、证书剩余天数、80 是否跳 https、是否明文可开（`plainOpen`）；`.well-known` 要有 `auth_basic off;` 豁免，否则证书续期会被密码拦住。**basic auth 必须配 HTTPS，只有 80 端口的站点不算发布完成**——发布验收固定包含「用 https:// 打开一次」+ `doctor --deep` + `check_tunnel_cloud`。
+- **限速边界**：残留清理每分钟最多 1 次；事件日志每秒最多 10 条、同事件 10 秒去重；掉线通知连续异常 3 分钟才弹一次（恢复再弹、暂停不弹、免打扰时段不弹）；云端检查手动 full 30 秒 / 其它 25 秒超时、审计只统计最近 1000 行（输入封顶 2MB，计数标注「大概」）。
+- **不替用户加防护**：`limit_req`（防爆破限速）要动全局 `http{}`，默认**不生成**、只给强警告文案；应用不装 fail2ban、不改 sshd、不动服务器防火墙——先推 IP 白名单，其余交给用户自己在面板/服务器上决定。
+- **权限与脱敏**：控制通道只在 127.0.0.1 + token；配置导出按白名单重建；诊断包里 `launch.args` 只留长度、日志行做 key=value / bcrypt / 用户名路径脱敏。
+
+### 12.4 生命周期
+
+- **崩溃自恢复**：用 Windows `RegisterApplicationRestart` 登记「崩溃后重新打开」，命令行固定 `--hidden --recovered`（静默进托盘、知道自己是恢复回来的）。防崩溃循环：10 分钟窗口内第 3 次自动恢复后暂停，由用户决定；设置页可开关（`set_crash_recovery`，关闭用 `<数据目录>\crash-recovery.off` 标记）。不建计划任务、不要管理员权限。
+- **延迟建窗**：`tauri.conf.json` 不再自动建窗；正常启动才建窗，`--hidden` / `--test-notify` / `--recovered` 只进托盘；托盘/第二实例/通知点击才 `show_or_create`；关窗 = 真正销毁窗口（WebView2 进程释放），不是退出应用。窗口位置大小存 `window-state.json`。
+- **单实例（全局）**：互斥量 `Global\Shangxian.App.v1`（跨 Windows 会话，远程桌面另开账号也不能双开，防两边抢云端端口）；系统不让建 Global 对象时回落到 `<数据目录>\app.lock` 文件锁；三层都拿不到也不硬卡用户。`tauri-plugin-single-instance` 保留（同会话内体验是「把已有窗口叫出来」）。
+- **应用退出 / 升级**：应用退出 = 全部隧道停止（ssh 在 kill-on-close 作业里），本机服务保活（作业不设 kill-on-close，下次启动按端口认领）。升级/卸载前用 `cli app stop-all --yes`（或托盘「退出并停止全部本地服务」）：停应用自己拉起的服务整棵树 + 能核对归属的认领进程，核不过的绝不硬杀、计入「没能停」。
+
+### 12.5 明确不做（防范围膨胀）
+
+- **不自动下发 nginx**：只生成片段 + 说明，`nginx -t` / reload / 面板保存都由人来做。
+- **不装服务器软件 / 不改全局配置**：不装 fail2ban、不改 sshd、不动全局 `nginx.conf`，不生成要改 `http{}` 的 `limit_req` 片段（只出强警告文案）。
+- **不做 SSO / 多用户 / 团队 / 审计**：单用户工具；访问保护只有 nginx basic auth + IP 白名单。
+- **不做 DNS API 自动加解析**：只生成记录清单 + DoH 检查（本轮未变）。
+- **不做自动下载/安装更新**：只检查 + 提示（`check_update` / `app update-check`）。
+- **不把管理界面暴露到公网**：控制通道只在本机回环。
+- **不做 VPN / 内网穿透替代品**（WireGuard、frp、Tailscale）。

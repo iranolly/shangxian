@@ -7,7 +7,7 @@
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -141,25 +141,22 @@ fn ensure_key(key_path: &Path) -> Result<String, String> {
     }
 
     let keygen = crate::ssh::default_ssh_exe().with_file_name("ssh-keygen.exe");
-    let out = Command::new(&keygen)
-        .args([
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-f",
-            &key_path.display().to_string(),
-            "-C",
-            "shangxian",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("调用 ssh-keygen 失败：{e}"))?;
+    let mut cmd = Command::new(&keygen);
+    cmd.args([
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-f",
+        &key_path.display().to_string(),
+        "-C",
+        "shangxian",
+    ])
+    .stdin(Stdio::null())
+    .creation_flags(CREATE_NO_WINDOW);
+    let out = run_local_tool(&mut cmd, "调用 ssh-keygen 失败")?;
     if !out.status.success() {
-        return Err(format!(
-            "生成密钥失败：{}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        return Err(format!("生成密钥失败：{}", out.stderr.trim()));
     }
 
     // 刚生成的私钥权限要收紧；收不了就把这对新密钥删掉，不留隐患。
@@ -183,20 +180,20 @@ fn tighten_key_permissions(key_path: &Path) -> Result<(), String> {
         .map(|root| PathBuf::from(root).join("System32").join("icacls.exe"))
         .unwrap_or_else(|| PathBuf::from("icacls.exe"));
 
-    let out = Command::new(&icacls)
-        .arg(key_path)
+    let mut cmd = Command::new(&icacls);
+    cmd.arg(key_path)
         .arg("/inheritance:r")
         .arg("/grant:r")
         .arg(format!("{user}:R"))
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("调用 icacls 失败：{e}"))?;
+        .stdin(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    let out = run_local_tool(&mut cmd, "调用 icacls 失败")?;
 
     if !out.status.success() {
         return Err(format!(
             "新私钥的权限没收紧（icacls 退出码 {:?}）：{}。请手动执行：icacls \"{}\" /inheritance:r /grant:r {user}:R 然后重试",
             out.status.code(),
-            String::from_utf8_lossy(&out.stderr).trim(),
+            out.stderr.trim(),
             key_path.display()
         ));
     }
@@ -300,25 +297,32 @@ async fn write_public_key(
 
 /// 用密钥登录验证一次（走系统 ssh，跟正式隧道同一个程序）。
 fn verify_with_key(host: &str, port: u16, user: &str, key_path: &Path) -> Result<bool, String> {
-    let out = Command::new(crate::ssh::default_ssh_exe())
-        .args([
-            "-i",
-            &key_path.display().to_string(),
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            "ConnectTimeout=10",
-            "-p",
-            &port.to_string(),
-            &format!("{user}@{host}"),
-            "echo shangxian-ok",
-        ])
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .map_err(|e| format!("调用 ssh 验证失败：{e}"))?;
-    Ok(out.status.success() && String::from_utf8_lossy(&out.stdout).contains("shangxian-ok"))
+    let mut cmd = Command::new(crate::ssh::default_ssh_exe());
+    cmd.args([
+        "-i",
+        &key_path.display().to_string(),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ConnectTimeout=10",
+        "-p",
+        &port.to_string(),
+        &format!("{user}@{host}"),
+        "echo shangxian-ok",
+    ])
+    .stdin(Stdio::null())
+    .creation_flags(CREATE_NO_WINDOW);
+    let out = run_local_tool(&mut cmd, "调用 ssh 验证失败")?;
+    Ok(out.status.success() && out.stdout.contains("shangxian-ok"))
+}
+
+/// 本地小工具（ssh-keygen / icacls / ssh 验证）统一走带超时的执行：15 秒就结束，
+/// 起不来或超时都给一句人话（D1 §11/§16-2）。
+fn run_local_tool(cmd: &mut Command, context: &str) -> Result<crate::proc::CapturedOutput, String> {
+    crate::proc::run_capture(cmd, Duration::from_secs(15), crate::proc::DEFAULT_OUTPUT_LIMIT)
+        .map_err(|e| crate::proc::spawn_error_with_context(e, context))
 }
 
 /// 从 russh 的调试输出里抠出「服务器接受哪些登录方式」。

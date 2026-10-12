@@ -31,6 +31,7 @@ fn start_stop_roundtrip() {
             id: "svc-local".into(),
             name: "测试服务".into(),
             local_port: 18084,
+            probe_kind: "tcp".into(),
             launch: None,
             watch: false,
             autostart: false,
@@ -49,13 +50,20 @@ fn start_stop_roundtrip() {
             access_hash: None,
             access_detail: None,
             enabled: false,
+            preset: "web".into(),
         }],
         notify_enabled: true,
+        settings: shangxian_core::config::Settings::default(),
     };
 
     let dir = std::env::temp_dir().join("sx-guardian-test");
     let path = dir.join("config.json");
-    let mut g = Guardian::new(config, path.clone(), dir.join("logs"));
+    let mut g = Guardian::new(
+        config,
+        path.clone(),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     // 开始发布 → 等它变成"正在发布"
     g.set_enabled("svc", true).unwrap();
@@ -147,6 +155,7 @@ fn cleanup_kills_stale_holder() {
             id: "svc-local".into(),
             name: "清理测试".into(),
             local_port: 18085,
+            probe_kind: "tcp".into(),
             launch: None,
             watch: false,
             autostart: false,
@@ -165,11 +174,18 @@ fn cleanup_kills_stale_holder() {
             access_hash: None,
             access_detail: None,
             enabled: false,
+            preset: "web".into(),
         }],
         notify_enabled: true,
+        settings: shangxian_core::config::Settings::default(),
     };
     let dir = std::env::temp_dir().join("sx-cleanup-test");
-    let mut g = Guardian::new(config, dir.join("config.json"), dir.join("logs"));
+    let mut g = Guardian::new(
+        config,
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
     g.set_enabled("svc", true).unwrap();
 
     // 成功标准：状态连续 5 秒保持在跑（刚启动的 ssh 还没暴露端口冲突，不能算数）

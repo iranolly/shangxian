@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.5.0"
+version = "0.6.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
@@ -33,4 +33,13 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging",
   "Win32_Graphics_Dwm",
   "Win32_Graphics_Gdi",
+  # 本轮新增（D1 §14.7）：崩溃自恢复 / 电源回调 / 全局互斥量 / 网卡变化通知
+  "Win32_System_Recovery",
+  "Win32_System_Power",
+  "Win32_System_Threading",
+  # GetLocalTime：免打扰时段判定（D1 §7.3）
+  "Win32_System_SystemInformation",
+  "Win32_NetworkManagement_IpHelper",
+  "Win32_NetworkManagement_Ndis",
+  "Win32_Networking_WinSock",
 ] }

@@ -1,5 +1,8 @@
 // 左侧导航：五个目的地（本机服务 / 发布隧道 / 云端服务器 / 访问保护 / 设置）
 // 文案纪律：说人话，不用"反向隧道、端口转发、节点"等黑话。
+// 计数与状态徽标由侧栏自己订阅 store（D4 §3.8：避免整树重渲染）。
+
+import { useStore } from "../store/useStore";
 
 export type PageKey =
   | "services"
@@ -8,18 +11,21 @@ export type PageKey =
   | "passwords"
   | "settings";
 
+interface Counts {
+  services: number;
+  tunnels: number;
+  servers: number;
+  /** 正在发布的隧道数 */
+  tunnelsRunning?: number;
+  /** 掉线/出错的隧道数 */
+  tunnelsDown?: number;
+}
+
 interface Props {
   current: PageKey;
   onNavigate: (page: PageKey) => void;
-  counts?: {
-    services: number;
-    tunnels: number;
-    servers: number;
-    /** 正在发布的隧道数（页面传了才显示「X 条发布中」） */
-    tunnelsRunning?: number;
-    /** 掉线/出错的隧道数 */
-    tunnelsDown?: number;
-  };
+  /** 兼容旧外壳的 props；现在侧栏自己从 store 订阅计数（D4 §3.8） */
+  counts?: Counts;
 }
 
 const stroke = {
@@ -81,7 +87,17 @@ function IconSettings() {
   );
 }
 
-export function Sidebar({ current, onNavigate, counts }: Props) {
+export function Sidebar({ current, onNavigate }: Props) {
+  const servicesCount = useStore((s) => s.services.length);
+  const serversCount = useStore((s) => s.servers.length);
+  const tunnelsTotal = useStore((s) => s.tunnels.length);
+  const tunnelsRunning = useStore(
+    (s) => s.tunnels.filter((t) => t.status === "running").length,
+  );
+  const tunnelsDown = useStore(
+    (s) => s.tunnels.filter((t) => t.status === "disconnected" || t.status === "error").length,
+  );
+
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -89,46 +105,53 @@ export function Sidebar({ current, onNavigate, counts }: Props) {
         上线助手
       </div>
 
-      <nav className="nav">
+      <nav className="nav" aria-label="主导航">
         <button
           className={`nav-item${current === "services" ? " active" : ""}`}
+          aria-current={current === "services" ? "page" : undefined}
           onClick={() => onNavigate("services")}
         >
           <IconServices />
           本机服务
-          {counts && counts.services > 0 ? (
-            <span className="nav-count">{counts.services}</span>
-          ) : null}
+          {servicesCount > 0 ? <span className="nav-count">{servicesCount}</span> : null}
         </button>
+
         <button
           className={`nav-item${current === "tunnels" ? " active" : ""}`}
+          aria-current={current === "tunnels" ? "page" : undefined}
           onClick={() => onNavigate("tunnels")}
         >
           <IconTunnels />
           <span className="nav-text">
             <span>发布隧道</span>
-            {counts && counts.tunnels > 0 && counts.tunnelsRunning != null ? (
+            {tunnelsTotal > 0 ? (
               <span className="nav-sub">
-                {counts.tunnelsRunning} 条发布中 · {counts.tunnelsDown ?? 0} 条掉线
+                {tunnelsRunning} 条发布中 · {tunnelsDown} 条掉线
               </span>
             ) : null}
           </span>
-          {counts && counts.tunnels > 0 && counts.tunnelsRunning == null ? (
-            <span className="nav-count">{counts.tunnels}</span>
+          {tunnelsDown > 0 ? (
+            <span className="nav-badge" title={`${tunnelsDown} 条掉线`}>
+              {tunnelsDown}
+            </span>
+          ) : tunnelsTotal > 0 ? (
+            <span className="nav-count">{tunnelsTotal}</span>
           ) : null}
         </button>
+
         <button
           className={`nav-item${current === "servers" ? " active" : ""}`}
+          aria-current={current === "servers" ? "page" : undefined}
           onClick={() => onNavigate("servers")}
         >
           <IconServers />
           云端服务器
-          {counts && counts.servers > 0 ? (
-            <span className="nav-count">{counts.servers}</span>
-          ) : null}
+          {serversCount > 0 ? <span className="nav-count">{serversCount}</span> : null}
         </button>
+
         <button
           className={`nav-item${current === "passwords" ? " active" : ""}`}
+          aria-current={current === "passwords" ? "page" : undefined}
           onClick={() => onNavigate("passwords")}
         >
           <IconPasswords />
@@ -139,6 +162,7 @@ export function Sidebar({ current, onNavigate, counts }: Props) {
       <div className="sidebar-bottom">
         <button
           className={`nav-item${current === "settings" ? " active" : ""}`}
+          aria-current={current === "settings" ? "page" : undefined}
           onClick={() => onNavigate("settings")}
         >
           <IconSettings />

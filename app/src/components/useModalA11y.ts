@@ -18,8 +18,23 @@ function focusablesIn(node: HTMLElement): HTMLElement[] {
 /** 当前打开的弹层：最后一个是叠在最上面的那个 */
 const dialogStack: HTMLElement[] = [];
 
+let modalTitleSeq = 0;
+
 /**
- * 弹层通用的无障碍行为：Esc 关闭、Tab 焦点圈定、焦点进出弹层。
+ * 弹层没有 aria-labelledby 时，找到里面的 .modal-title（没有 id 就补一个），
+ * 让 aria-labelledby 指过去。返回这次补上的 id（用于卸载时还原）。
+ */
+function labelModal(node: HTMLElement): string | null {
+  if (node.getAttribute("aria-labelledby")) return null;
+  const title = node.querySelector<HTMLElement>(".modal-title");
+  if (!title) return null;
+  if (!title.id) title.id = `modal-title-${++modalTitleSeq}`;
+  node.setAttribute("aria-labelledby", title.id);
+  return title.id;
+}
+
+/**
+ * 弹层通用的无障碍行为：Esc 关闭、Tab 焦点圈定、焦点进出弹层、aria-labelledby 指向标题。
  * ref 指向弹层根节点（.modal 那个 div）。
  */
 export function useModalA11y<T extends HTMLElement>(
@@ -40,11 +55,17 @@ export function useModalA11y<T extends HTMLElement>(
         ? document.activeElement
         : null;
     dialogStack.push(node);
+    const labelledById = labelModal(node);
 
-    // 焦点先放进弹层：没有能聚焦的控件时聚焦弹层本身
+    // 焦点先放进弹层：没有能聚焦的控件时让弹层自身可聚焦（tabindex=-1）
     if (!node.contains(document.activeElement)) {
       const first = focusablesIn(node)[0];
-      (first ?? node).focus();
+      if (first) {
+        first.focus();
+      } else {
+        if (!node.hasAttribute("tabindex")) node.tabIndex = -1;
+        node.focus();
+      }
     }
 
     const onKeyDown = (e: KeyboardEvent) => {
@@ -80,6 +101,10 @@ export function useModalA11y<T extends HTMLElement>(
       document.removeEventListener("keydown", onKeyDown, true);
       const i = dialogStack.indexOf(node);
       if (i >= 0) dialogStack.splice(i, 1);
+      // 只回收自己加的 aria-labelledby；调用方本来就写好的不动
+      if (labelledById && node.getAttribute("aria-labelledby") === labelledById) {
+        node.removeAttribute("aria-labelledby");
+      }
       if (opener && document.body.contains(opener)) opener.focus();
     };
   }, [ref]);

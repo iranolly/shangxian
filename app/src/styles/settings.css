@@ -1,0 +1,519 @@
+/* 设置页 / 关于卡片 / 体检 / 诊断包 / 环境识别 / 访问审计（E4）。
+   只加新 class，不动 app.css；颜色一律用 tokens.css 里已有的令牌。 */
+
+/* ---------- 设置页 ---------- */
+
+.settings-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.settings-legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.saved-note {
+  font-size: 12.5px;
+  color: var(--st-running-fg);
+  white-space: nowrap;
+}
+
+.input-time {
+  width: 118px;
+  font-variant-numeric: tabular-nums;
+}
+
+.time-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.settings-note {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.settings-error {
+  margin-top: 8px;
+}
+
+/* ---------- 关于卡片 ---------- */
+
+.about-card {
+  padding-top: 14px;
+  padding-bottom: 14px;
+}
+
+.about-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.about-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.about-version {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.about-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.about-row:first-of-type {
+  margin-top: 10px;
+}
+
+.about-label {
+  flex: 0 0 88px;
+  color: var(--text-2);
+}
+
+.about-value {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.about-value.ok {
+  color: var(--st-running-fg);
+}
+
+.about-value.warn {
+  color: var(--st-disconnected-fg);
+}
+
+.about-value.error {
+  color: var(--st-error-fg);
+}
+
+.about-value.muted {
+  color: var(--text-2);
+}
+
+.about-hint {
+  display: block;
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+
+.about-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* ---------- 体检弹层 ---------- */
+
+.doctor-modal {
+  width: 720px;
+  max-width: calc(100vw - 40px);
+}
+
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-control);
+  overflow: hidden;
+}
+
+.seg-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  padding: 6px 14px;
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--border-strong);
+}
+
+.seg-btn:hover {
+  background: var(--row-hover);
+  color: var(--text);
+}
+
+.seg-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.doctor-modes {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.doctor-modes .field-hint {
+  margin: 0;
+}
+
+.doctor-progress-line {
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  border-radius: var(--r-control);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12.5px;
+}
+
+.doctor-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border-radius: var(--r-control);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.doctor-summary.ok {
+  background: var(--st-running-bg);
+  color: var(--st-running-fg);
+}
+
+.doctor-summary.warn {
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+}
+
+.doctor-summary.error {
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.doctor-steps {
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+
+.doctor-step {
+  padding: 10px 14px;
+  background: var(--bg-card);
+}
+
+.doctor-step + .doctor-step {
+  border-top: 1px solid var(--border);
+}
+
+.doctor-step-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.doctor-step.fail .doctor-step-title {
+  font-weight: 600;
+}
+
+.doctor-step-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.doctor-step-icon.ok {
+  background: var(--st-running-bg);
+  color: var(--st-running-fg);
+}
+
+.doctor-step-icon.warn {
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+}
+
+.doctor-step-icon.error {
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.doctor-step-icon.muted {
+  background: var(--st-paused-bg);
+  color: var(--st-paused-fg);
+}
+
+.doctor-step-title {
+  color: var(--text);
+}
+
+.doctor-step-status {
+  margin-left: auto;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+
+.doctor-step-status.ok {
+  color: var(--st-running-fg);
+}
+
+.doctor-step-status.warn {
+  color: var(--st-connecting-fg);
+}
+
+.doctor-step-status.error {
+  color: var(--st-error-fg);
+}
+
+.doctor-step-status.muted {
+  color: var(--text-2);
+}
+
+.doctor-step-time {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.doctor-step-detail {
+  margin: 4px 0 0 26px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.55;
+}
+
+.doctor-step.pending {
+  opacity: 0.72;
+}
+
+.doctor-fix-toggle {
+  margin: 2px 0 0 26px;
+}
+
+.doctor-fix {
+  margin: 8px 0 2px 26px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.doctor-fix-text {
+  margin: 0 0 8px;
+}
+
+.doctor-fix .field-hint {
+  color: inherit;
+  margin: 0 0 8px;
+}
+
+.doctor-fix .btn {
+  border-color: currentColor;
+  color: inherit;
+  background: transparent;
+}
+
+.doctor-empty {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* ---------- 诊断包弹层 ---------- */
+
+.diag-modal {
+  width: 560px;
+  max-width: calc(100vw - 40px);
+}
+
+.diag-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.diag-list li + li {
+  margin-top: 4px;
+}
+
+.diag-list .strong {
+  color: var(--text);
+}
+
+.diag-note {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+/* ---------- 服务器环境识别 ---------- */
+
+.env-line {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.env-line.ok {
+  color: var(--st-running-fg);
+}
+
+.env-line.warn {
+  color: var(--st-connecting-fg);
+}
+
+.env-line.error {
+  color: var(--st-error-fg);
+}
+
+.env-meta {
+  color: var(--text-2);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.env-banner {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-control);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.env-banner p {
+  margin: 0;
+}
+
+.env-banner.warn {
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+}
+
+.env-banner.error {
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.env-banner-actions {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.env-banner .link-btn {
+  color: inherit;
+}
+
+/* ---------- 访问保护：漂移条 / 待核对 ---------- */
+
+.drift-bar {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--st-connecting);
+  border-radius: 0 var(--r-control) var(--r-control) 0;
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.drift-bar.error {
+  border-left-color: var(--st-error);
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.drift-bar p {
+  margin: 0;
+}
+
+.drift-actions {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.drift-bar .link-btn {
+  color: inherit;
+}
+
+/* ---------- 访问审计 ---------- */
+
+.audit-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-control);
+  background: var(--bg-sidebar);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.audit-head {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.audit-summary {
+  margin: 0;
+  color: var(--text);
+}
+
+.audit-note {
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+
+.audit-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+}
+
+.audit-entries {
+  margin-top: 8px;
+  border-top: 1px dashed var(--border-strong);
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-2);
+  word-break: break-all;
+}

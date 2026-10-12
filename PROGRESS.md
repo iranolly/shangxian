@@ -192,3 +192,34 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **应用**：托盘「退出（会停止发布）」带确认；关窗首次提示缩托盘；通知「发布掉线/恢复：名字」；托盘 tooltip「X 条发布中 · Y 条掉线」；向导成功屏「还差一步：贴云端配置」+ 直达按钮；无保护发布要勾选；保护绿色只在「检查云端」通过后；服务器页「测试连接」+「站点目录」；空页三步引导；ctl 新增 `test_server`（共 36 个方法）。
 
 > 文档阶段验证：只改文档，不跑应用、不做 git 操作；所有行为逐条对照现有代码（config.rs / nginx.rs / cleanup.rs / guardian.rs / supervisor.rs / localservice.rs / cli/main.rs / ctl.rs / 前端）。
+
+## v0.6 可靠性 / 生命周期改造 + 文档同步（2026-10-12）
+
+本轮落地约 60 项改造（版本号 `0.6.0`，即 `cli 0.6.0`；设计底稿 `.setup/design-v2/D0-arbitration.md` ~ `D5-lifecycle.md`，D0 裁决优先，行为以代码为准。架构与数据模型定稿见 **DESIGN.md §12**，Agent 文档见 **docs/AI-AGENT.md（本版对应 ctl 61 条方法 / 配置 v6）**，助手技能见 **skills/shangxian/SKILL.md**（并同步到本机 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`）。
+
+### 本轮改造要点（按模块）
+
+- **配置 v6**：`config.json` 新增 `settings`（`refreshIntervalMs` 500..=10000、`quietHours`、`checkUpdateOnStart`）与隧道 `preset`（web/ws/upload）、服务 `probeKind`（tcp/http）；`normalize_config` 读时归一化（越界夹回、非法值换默认、发 `configNormalized` 事件）；版本高于程序「降级拦截」只读不写、不产生 `.bad`。
+- **运行状态与事件**：新增 `state.json` v1（当日重连、失败记忆、`protectionCheck`、墓碑、环境缓存；去抖落盘 + 退出 flush）与 `events.jsonl` v1（结构化事件、10 秒去重、每秒 ≤10 条、2MB×2 轮转）。
+- **原因码与探测**：`core/src/reason.rs` 42 个原因码（`reasonCode` 写进快照/事件）；`core/src/probe.rs` 每服务独立探测线程（TCP 100ms / HTTP 500ms，连续 3 次失败才判 down）；`core/src/wake.rs` 睡眠唤醒 / 网络恢复 / 时钟跳变检测。
+- **体检与云端核对**：`core/src/doctor.rs` 九步体检（quick/deep，单步 20s / 整次 60s，报告落 `logs/doctor-last.json`）；`core/src/cloudcheck.rs` 云端 V2 只读核对（访问保护 + HTTPS/证书 + 端口回环 + 环境识别 + 访问审计 + 公网 IP + 漂移判定）。
+- **删除撤销 / 备份 / 诊断包**：删除（隧道/服务/服务器）返回撤销令牌，`state.json` 墓碑 10 分钟 / 最多 20 条；配置导出（默认脱敏）与导入（merge/replace、dry-run、原子写 + 自动备份）；`cli diag` 生成脱敏诊断包（不含哈希/密钥/token）。
+- **CLI**：新增 `stats` / `doctor` / `diag` / `undo` / `config export|import` / `app stop-all|update-check` / `tunnel forget-key`；`logs` 支持 `--source all|tunnel|service|app` + `--archive 0|1|2` + `--format lines|json`；`tunnel add/edit --preset`；退出码 3 扩展到「所有需要应用但应用没在跑」的命令；`doctor --strict` 的 1 是「检查没过」不是命令错误。
+- **安全**：隧道 SSH `StrictHostKeyChecking=accept-new`（TOFU，指纹变更拒连，`forget-key` 人工重信任）；访问密码继续本机 bcrypt（`$2y$12$…`）；`basic auth 必须配 HTTPS、只有 80 端口不算发布完成`；`limit_req` / fail2ban / 全局 nginx.conf 一律不碰（只出提示与强警告文案）。
+- **生命周期**：崩溃自恢复（`RegisterApplicationRestart` + 10 分钟窗口第 3 次暂停 + 可关）；延迟建窗（`--hidden`/`--recovered` 只进托盘，关窗销毁窗口）；单实例升级为跨会话全局互斥量 `Global\Shangxian.App.v1`（+`app.lock` 回落）。
+- **更新检查**：`check_update` / `app update-check`，GitHub Releases 数据源，启动后约 30 秒静默一次（≥6h 限频、`checkUpdateOnStart` 可关），只提示不自动下载/安装。
+
+### 测试口径（本轮定稿）
+
+- `cargo test -p shangxian-core`：**308 项通过**（lib 单测）。
+- 集成测试：**43 项**（`env_checks` / `guardian_docker` / `keep_alive` / `proc_features` / `proc_probe` / `stop_foreign` 等；部分需靶机的按设计 `#[ignore]`）。
+- `cargo test -p shangxian-cli`：**17 项通过**。
+- `app` 前端：`npx tsc --noEmit` **0 错误**（`npm run build` 通过）。
+- 说明：以上为本轮验收时的口径；本次文档同步（AI-AGENT / SKILL / DESIGN / PROGRESS）只改文档、不跑应用、不跑 git，数字沿用本轮测试记录。
+
+### 文档同步记录（本次）
+
+- `docs/AI-AGENT.md`：方法表补齐到实现里的 61 条；新增 `stats`/`doctor`/`diag`/`undo`/`config export|import`/`app stop-all|update-check`/`tunnel forget-key`/`--preset` 用法；铁律新增「basic auth 必须配 HTTPS」「云端配置由人粘贴、不装软件、不动全局 nginx.conf」「撤销窗口」「体检/诊断包只读」；配方 1/3/5 补验收（https 打开一次、`cli doctor --deep`、`tunnel check`）；配置章节升级为 v6 + `state.json` + `events.jsonl` + 原因码；附录换成 `cli guide` 原文。
+- `skills/shangxian/SKILL.md`：同步铁律、命令表、验收与排查配方，保持自包含；改完原样拷贝到 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`，`diff` 验证一致。
+- `DESIGN.md`：HEADER 增加 v0.6 变更；修正 SQLite 等过时表述；新增 **§12 架构与数据模型**（模块清单、数据文件、安全模型、生命周期、明确不做）。
+- `PROGRESS.md`：本节。

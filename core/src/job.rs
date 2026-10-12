@@ -8,7 +8,9 @@
 //!   服务继续跑，下次启动按端口认领；要停时用 [`Job::terminate`] 显式结束整棵树。
 
 use std::io;
-use std::os::windows::io::RawHandle;
+use std::os::windows::io::{AsRawHandle, RawHandle};
+use std::os::windows::process::CommandExt;
+use std::process::{Command, Stdio};
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::JobObjects::{
@@ -16,6 +18,11 @@ use windows_sys::Win32::System::JobObjects::{
     SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
     JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
+
+use crate::log::{log_warn, TAG_GUARD};
+
+/// 创建进程时不弹控制台窗口。
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 一个作业对象。
 pub struct Job {
@@ -90,11 +97,56 @@ impl Job {
         unsafe {
             let ok = TerminateJobObject(self.handle, 1);
             if ok == 0 {
-                eprintln!(
-                    "[warn] TerminateJobObject 失败：{}",
-                    io::Error::last_os_error()
+                log_warn(
+                    TAG_GUARD,
+                    &format!("结束进程树失败：{}", io::Error::last_os_error()),
                 );
             }
+        }
+    }
+}
+
+/// 启动自检：作业对象能建、子进程能放进去、能整树结束。约 20–80ms（D1 §3.6）。
+///
+/// 注意：绝不把当前进程放进作业（kill-on-close 会把应用自己带走）。
+pub fn self_check() -> bool {
+    let job = match Job::new() {
+        Ok(job) => job,
+        Err(e) => {
+            log_warn(TAG_GUARD, &format!("启动自检没过：作业对象建不出来（{e}）"));
+            return false;
+        }
+    };
+
+    let mut child = match Command::new("cmd.exe")
+        .args(["/C", "exit", "0"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            log_warn(TAG_GUARD, &format!("启动自检没过：试跑的探针进程起不来（{e}）"));
+            return false;
+        }
+    };
+
+    if let Err(e) = job.assign_process(child.as_raw_handle()) {
+        log_warn(TAG_GUARD, &format!("启动自检没过：探针进程放不进作业（{e}）"));
+        let _ = child.kill();
+        let _ = child.wait();
+        return false;
+    }
+
+    // 释放作业句柄 = kill-on-close 结束探针；等它退出，确认系统真的执行了。
+    drop(job);
+    match child.wait() {
+        Ok(_) => true,
+        Err(e) => {
+            log_warn(TAG_GUARD, &format!("启动自检没过：探针进程收不了尾（{e}）"));
+            false
         }
     }
 }
@@ -115,8 +167,6 @@ mod tests {
     use std::path::Path;
     use std::process::{Child, Command, Stdio};
     use std::time::{Duration, Instant};
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     /// 起一个活 60 秒左右的子进程（`ping` 在 Windows 上是同步子进程，到点自己退）。
     fn spawn_sleeper() -> Child {
@@ -143,6 +193,14 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    #[test]
+    fn self_check_passes_on_this_machine() {
+        assert!(
+            self_check(),
+            "本机作业对象自检应该通过（受限 CI 可改成 #[ignore]）"
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@ fn make_guardian_with(tag: &str, port: u16, launch: Option<LaunchSpec>) -> Guard
             id: "svc-1".into(),
             name: "测试服务".into(),
             local_port: port,
+            probe_kind: "tcp".into(),
             launch,
             watch: false,
             autostart: false,
@@ -36,8 +37,14 @@ fn make_guardian_with(tag: &str, port: u16, launch: Option<LaunchSpec>) -> Guard
         }],
         tunnels: Vec::new(),
         notify_enabled: true,
+        settings: shangxian_core::config::Settings::default(),
     };
-    Guardian::new(config, dir.join("config.json"), dir.join("logs"))
+    Guardian::new(
+        config,
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    )
 }
 
 fn make_guardian(tag: &str, port: u16, launch_exe: Option<String>) -> Guardian {

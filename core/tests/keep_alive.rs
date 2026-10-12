@@ -71,6 +71,7 @@ fn make_config(port: u16, launch: Option<LaunchSpec>, watch: bool) -> AppConfig 
             id: "svc-1".into(),
             name: "保活测试服务".into(),
             local_port: port,
+            probe_kind: "tcp".into(),
             launch,
             watch,
             autostart: false,
@@ -78,6 +79,7 @@ fn make_config(port: u16, launch: Option<LaunchSpec>, watch: bool) -> AppConfig 
         }],
         tunnels: Vec::new(),
         notify_enabled: true,
+        settings: shangxian_core::config::Settings::default(),
     }
 }
 
@@ -89,7 +91,12 @@ fn test_dir(tag: &str) -> PathBuf {
 }
 
 fn make_guardian(dir: &Path, config: AppConfig) -> Guardian {
-    Guardian::new(config, dir.join("config.json"), dir.join("logs"))
+    Guardian::new(
+        config,
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    )
 }
 
 /// 写一个 `.cmd` 包装脚本：设置 `SX_LISTEN_PORT` 后拉起测试二进制里的 helper。

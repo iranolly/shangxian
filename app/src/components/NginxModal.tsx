@@ -1,16 +1,31 @@
 // 云端配置弹层：给出要新增的 nginx 几行 + 简短示意，供用户复制到面板。
+//
+// E3 改造（D4 §3.6 + D0 第 3/13 条）：
+// - acmeExempt 升级为多行（auth_basic off; / allow all; + 注释），单独一块可复制；
+// - 「可选附加行」区（noindex 行）：默认不生成，给复制的按钮 + 人话说明；
+// - 预设片段预览：按 tunnel.preset 给一行说明；
+// - 环境 / HTTPS / 端口 / 公网 IP 提示：来自 check_tunnel_cloud 的结果。
 
 import { useEffect, useRef, useState } from "react";
 
 import {
   checkTunnelAccess,
+  checkTunnelCloud,
   getNginxSnippet,
   type AccessCheck,
+  type CloudCheckResult,
   type NginxSnippet,
   type TunnelView,
 } from "../api";
 import { copyText } from "../copy/clipboard";
-import { cloudCheck, cloudLabel } from "./ProtectionStatus";
+import { errorText } from "../store/commands";
+import {
+  cloudCheck,
+  cloudLabel,
+  envText,
+  httpsLight,
+  readExtra,
+} from "./ProtectionStatus";
 import { useModalA11y } from "./useModalA11y";
 
 interface Props {
@@ -18,24 +33,41 @@ interface Props {
   name: string;
   /** 传进来就能把云端实际配置和本机设置对比；不传只报「云端找到没找到」 */
   tunnel?: TunnelView;
-  onClose: () => void;
+  onClose(): void;
 }
 
 /** 弹层里能复制的内容 */
-type CopyTarget = "htpasswd" | `block-${number}`;
+type CopyTarget = "htpasswd" | "acme" | "optional" | `block-${number}`;
+
+const EMPTY_ACCESS: AccessCheck = {
+  confFound: false,
+  passwordOn: false,
+  ipOn: false,
+  allowIps: [],
+  htpasswdExists: false,
+};
 
 /** 同一个隧道上次检查的结果：弹层关了再开还能看到「上次检查」 */
-const lastChecks = new Map<string, { check: AccessCheck; at: number }>();
+const lastChecks = new Map<
+  string,
+  { actual: AccessCheck; cloud: CloudCheckResult | null; at: number }
+>();
 
 type CheckState =
   | { phase: "idle" }
   | { phase: "loading" }
-  | { phase: "done"; check: AccessCheck; at: number }
+  | { phase: "done"; actual: AccessCheck; cloud: CloudCheckResult | null; at: number }
   | { phase: "error"; message: string };
 
 function timeText(at: number): string {
   return new Date(at).toLocaleTimeString("zh-CN", { hour12: false });
 }
+
+const PRESET_NAME: Record<string, string> = {
+  web: "普通网站",
+  ws: "WebSocket（实时通信）",
+  upload: "大文件上传",
+};
 
 export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -47,7 +79,12 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const [checkState, setCheckState] = useState<CheckState>(() => {
     const cached = lastChecks.get(id);
     return cached
-      ? { phase: "done", check: cached.check, at: cached.at }
+      ? {
+          phase: "done",
+          actual: cached.actual,
+          cloud: cached.cloud,
+          at: cached.at,
+        }
       : { phase: "idle" };
   });
   const timer = useRef<number | null>(null);
@@ -55,7 +92,7 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
   useEffect(() => {
     getNginxSnippet(id)
       .then(setData)
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(errorText(e)));
   }, [id]);
 
   // 弹层关掉时清掉计时器：别把"已复制"的提示带到别的地方
@@ -79,40 +116,63 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const runCheck = async () => {
     setCheckState({ phase: "loading" });
     try {
-      const check = await checkTunnelAccess(id);
+      const cloud = await checkTunnelCloud(id, "full");
+      const actual =
+        cloud.actual ?? cloud.check.cloud ?? EMPTY_ACCESS;
       const at = Date.now();
-      lastChecks.set(id, { check, at });
-      setCheckState({ phase: "done", check, at });
-    } catch (e) {
-      setCheckState({ phase: "error", message: String(e) });
+      lastChecks.set(id, { actual, cloud, at });
+      setCheckState({ phase: "done", actual, cloud, at });
+    } catch {
+      // 新命令没上线：退回旧 check_tunnel_access
+      try {
+        const actual = await checkTunnelAccess(id);
+        const at = Date.now();
+        lastChecks.set(id, { actual, cloud: null, at });
+        setCheckState({ phase: "done", actual, cloud: null, at });
+      } catch (e) {
+        setCheckState({ phase: "error", message: errorText(e) });
+      }
     }
   };
 
   // 有本机设置就对比；没有就只报云端状态
   const checkResult =
     checkState.phase === "done" && tunnel
-      ? cloudCheck(tunnel, checkState.check)
+      ? cloudCheck(tunnel, checkState.actual)
       : null;
   const checkTone = (() => {
     if (checkState.phase === "error") return "warn";
     if (checkState.phase !== "done") return "";
     if (checkResult) return checkResult.tone;
-    return checkState.check.confFound ? "ok" : "warn";
+    return checkState.actual.confFound ? "ok" : "warn";
   })();
   const statusText = (() => {
     if (checkState.phase === "idle") {
-      return "还没检查过云端：贴完上面的配置、保存并重载 nginx 后，点右边「检查云端」看生效没有。";
+      return "还没检查过云端：贴完上面的配置、保存并重载 nginx（服务器上的接待员）后，点右边「检查云端」看生效没有。";
     }
     if (checkState.phase === "loading") return "正在连服务器检查…";
     if (checkState.phase === "error") return `检查失败：${checkState.message}`;
-    const { check, at } = checkState;
+    const { actual, at } = checkState;
     const head = `上次检查 ${timeText(at)}：`;
     if (checkResult) return `${head}${checkResult.text}`;
-    if (!check.confFound) {
+    if (!actual.confFound) {
       return `${head}云端还没找到这条隧道的站点配置（可能站点还没建，或者改了没保存、没重载）。`;
     }
-    return `${head}云端已找到站点配置，当前生效：${cloudLabel(check)}。`;
+    return `${head}云端已找到站点配置，当前生效：${cloudLabel(actual)}。`;
   })();
+
+  // 检查结果里的额外提示（D3 §3/§4/§8/§9）
+  const cloud = checkState.phase === "done" ? checkState.cloud : null;
+  const freshCheck = cloud?.check ?? null;
+  const { https } = readExtra(freshCheck);
+  const light = tunnel ? httpsLight(tunnel, https) : null;
+  const portExposed = cloud?.port?.bound === "exposed";
+  const envHint =
+    cloud?.env && cloud.env.web !== "nginx" ? envText(cloud.env.web) : "";
+  const presetNote =
+    tunnel?.preset && tunnel.preset !== "web"
+      ? `这条隧道用了「${PRESET_NAME[tunnel.preset] ?? tunnel.preset}」预设：下面高亮行里包含对应几行；预设行只能放进已有的那段花括号里，别贴到最外层。`
+      : "";
 
   // 复制按钮上的字：复制成功后显示"已复制"，1.6 秒后恢复
   const label = (target: CopyTarget, idle: string) =>
@@ -147,6 +207,13 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
     }
   }
 
+  // 「可选附加行」里的可复制内容：去掉注释行，只复制要加的那一行
+  const optionalLines: string[] =
+    (data as (NginxSnippet & { optional?: string[] }) | null)?.optional ?? [];
+  const optionalCopy = optionalLines
+    .filter((l) => l.trim() !== "" && !l.trimStart().startsWith("#"))
+    .join("\n");
+
   return (
     <div className="modal-backdrop">
       <div
@@ -179,6 +246,27 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
               ⚠ 服务器上还没有密码文件（htpasswd），密码可能进不去。
             </div>
           )}
+          {envHint && <div className="warn-line">{envHint}</div>}
+          {light && (
+            <div className={light.level === "red" ? "error-line" : "warn-line"}>
+              {light.level === "red" ? "红灯： " : "注意： "}
+              {light.text}
+            </div>
+          )}
+          {portExposed && (
+            <div className="warn-line">
+              云端端口对所有网卡开放了。发布只绑 127.0.0.1（只有服务器自己能连的地址），
+              说明有别的程序占着它，请检查或关防火墙。
+            </div>
+          )}
+          {cloud?.clientIp && (
+            <div className="field-hint">
+              服务器看到的你的上网 IP 是 {cloud.clientIp}。换网络可能就变了；
+              运营商共享 IP 时加白名单可能不生效。
+            </div>
+          )}
+          {presetNote && <div className="field-hint">{presetNote}</div>}
+
           {data && (
             <>
               <ol className="steps-list">
@@ -234,6 +322,54 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
                     })
                   : data.snippet}
               </pre>
+
+              {data.acmeExempt && (
+                <div className="field" style={{ marginTop: 12 }}>
+                  <div className="optional-head">
+                    <span className="field-label" style={{ marginBottom: 0 }}>
+                      证书续期要加的行（放进已有的那段花括号里）
+                    </span>
+                    <button
+                      className="link-btn"
+                      onClick={() => copy("acme", data.acmeExempt!)}
+                    >
+                      {label("acme", "复制")}
+                    </button>
+                  </div>
+                  <div className="optional-block">
+                    <pre>{data.acmeExempt}</pre>
+                  </div>
+                  <p className="field-hint">
+                    这几行是给证书续期开的小门：只放开 /.well-known/ 这个地址，别的地址照样要密码 / 白名单。
+                    漏了证书到期续不上。
+                  </p>
+                </div>
+              )}
+
+              {optionalLines.length > 0 && (
+                <div className="field" style={{ marginTop: 12 }}>
+                  <div className="optional-head">
+                    <span className="field-label" style={{ marginBottom: 0 }}>
+                      可选附加行（默认不加）
+                    </span>
+                    <button
+                      className="link-btn"
+                      disabled={optionalCopy === ""}
+                      onClick={() => copy("optional", optionalCopy)}
+                    >
+                      {label("optional", "复制")}
+                    </button>
+                  </div>
+                  <div className="optional-block">
+                    <pre>{optionalLines.join("\n")}</pre>
+                  </div>
+                  <p className="field-hint">
+                    这行是告诉搜索引擎「别收录这个网站」。它只是礼貌提醒，不是门锁；
+                    门锁还是密码或白名单。网站就是给所有人看的话不用加。
+                  </p>
+                </div>
+              )}
+
               {copyFailed && (
                 <div className="error-line" style={{ marginTop: 8 }}>
                   没复制成功：请用鼠标选中上面的内容，按 Ctrl+C 复制。

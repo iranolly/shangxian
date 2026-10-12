@@ -24,3 +24,15 @@ pub mod proc_detail;
 pub mod protection;
 pub mod ssh;
 pub mod supervisor;
+
+// 本轮改造新增模块（占位文件先行声明，实现见 .setup/design-v2/D0-arbitration.md 与 D1/D2/D3 笔记）。
+pub mod cloudcheck;
+pub mod doctor;
+pub mod events;
+pub mod log;
+pub mod logfile;
+pub mod probe;
+pub mod proc;
+pub mod reason;
+pub mod state;
+pub mod wake;

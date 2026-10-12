@@ -1207,3 +1207,222 @@ body {
   margin-left: auto;
   color: inherit;
 }
+
+/* ========== v0.6 基础设施（D4 §1 / §3） ========== */
+
+/* 只给屏幕阅读器看的文字（全局播报区、图标说明） */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 侧栏外层：顶部可以放「刷新失败」细条，下面还是原来的 Sidebar */
+.sidebar-wrap {
+  flex: 0 0 220px;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-wrap > .sidebar {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+}
+
+/* 快照连续失败 ≥ 3 次：侧栏顶部细条（不弹 toast） */
+.poll-warn {
+  flex: none;
+  padding: 7px 12px;
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* 顶部固定横幅（不自动消失；点「知道了」才收） */
+.banner-hold {
+  position: fixed;
+  top: 44px;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.banner-hold .banner-error {
+  width: 100%;
+  max-width: 696px;
+  pointer-events: auto;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28);
+}
+
+/* 写操作进行中：卡片变淡（pending 局部订阅后由卡片自己打 data-pending） */
+.card[data-pending="true"] {
+  opacity: 0.72;
+}
+
+/* ---------- toast（右下角，最多 3 条） ---------- */
+
+.toaster {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 2000;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-modal);
+  animation: toast-in 200ms ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.toast.success .toast-icon {
+  background: var(--st-running-bg);
+  color: var(--st-running-fg);
+}
+
+.toast.info .toast-icon {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.toast.warn .toast-icon {
+  background: var(--st-connecting-bg);
+  color: var(--st-connecting-fg);
+}
+
+.toast.error .toast-icon {
+  background: var(--st-error-bg);
+  color: var(--st-error-fg);
+}
+
+.toast-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.toast-count {
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.toast-detail {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-2);
+  line-height: 1.45;
+}
+
+.toast-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.toast-close {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* ---------- 确认弹窗 ---------- */
+
+.confirm-modal {
+  width: 440px;
+}
+
+.modal-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.modal-bullets {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.modal-bullets li {
+  margin: 3px 0;
+}
+
+.modal-ack {
+  margin-top: 14px;
+}
+
+/* 危险主按钮：沿用错误色的浅底 + 深字，两种主题下对比度都够 */
+.btn-danger {
+  background: var(--st-error-bg);
+  border-color: var(--st-error);
+  color: var(--st-error-fg);
+}
+
+.btn-danger:hover {
+  border-color: var(--st-error-fg);
+  color: var(--st-error-fg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

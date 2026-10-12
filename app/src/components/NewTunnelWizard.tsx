@@ -1,16 +1,35 @@
 // 发布新隧道向导：3 步 + 成功屏。
-// 第 1 步选本机服务，第 2 步选云端服务器和端口，第 3 步定访问保护。
+// 第 1 步选本机服务，第 2 步选云端服务器和端口（含发布预设），第 3 步定访问保护。
+//
+// E3 改造（D4 §3.8）：
+// - 死胡同修复：0 服务 / 0 服务器给直达按钮，并留「回来继续」的入口；
+// - 发布预设下拉（普通网站 / WebSocket / 大文件上传）；
+// - 成功屏二维码按钮（离线生成）；
+// - 表单改过再按 Esc / 取消要确认（dirty）。
+//
+// 旧页面传 services / tunnels / servers 数组；新页面按 D4 只传 presetServiceId 等，
+// 不传数组时自动从 store 取。
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  addTunnel,
   hashPassword,
+  setupPasswordless,
+  testServer,
   type ServerView,
   type ServiceView,
+  type TunnelPreset,
   type TunnelView,
 } from "../api";
+import { copyText } from "../copy/clipboard";
+import { T } from "../copy/toasts";
+import { actions } from "../store/actions";
+import { errorText } from "../store/commands";
+import { toast } from "../store/toastStore";
+import { useStore } from "../store/useStore";
+import { ConfirmModal } from "./ConfirmModal";
 import { NginxModal } from "./NginxModal";
+import { QrModal } from "./QRModal";
 import { useModalA11y } from "./useModalA11y";
 
 function generatePassword(): string {
@@ -27,25 +46,50 @@ function suggestRemotePort(used: Set<number>): number {
 }
 
 interface Props {
-  services: ServiceView[];
-  tunnels: TunnelView[];
-  servers: ServerView[];
-  onClose: () => void;
-  onDone: () => void;
+  services?: ServiceView[];
+  tunnels?: TunnelView[];
+  servers?: ServerView[];
+  /** 从「添加本机服务」回来时预选这条服务 */
+  presetServiceId?: string;
+  /** 从「添加云端服务器」回来时预选这台服务器 */
+  presetServerId?: string;
+  /** 点「+ 添加本机服务」：页面负责关向导、跳页、开添加弹层并让保存后回到向导 */
+  onAddService?: () => void;
+  /** 点「+ 添加云端服务器」，同上 */
+  onAddServer?: () => void;
+  onClose(): void;
+  onDone(): void;
 }
 
 export function NewTunnelWizard({
-  services,
-  tunnels,
-  servers,
+  services: servicesProp,
+  tunnels: tunnelsProp,
+  servers: serversProp,
+  presetServiceId,
+  presetServerId,
+  onAddService,
+  onAddServer,
   onClose,
   onDone,
 }: Props) {
+  const storeServices = useStore((s) => s.services);
+  const storeTunnels = useStore((s) => s.tunnels);
+  const storeServers = useStore((s) => s.servers);
+  const configTrusted = useStore((s) => s.app.configTrusted);
+  const services = servicesProp ?? storeServices;
+  const tunnels = tunnelsProp ?? storeTunnels;
+  const servers = serversProp ?? storeServers;
+
   const [step, setStep] = useState(1);
-  const [serviceId, setServiceId] = useState(services[0]?.id ?? "");
-  const [serverId, setServerId] = useState(servers[0]?.id ?? "");
+  const [serviceId, setServiceId] = useState(
+    presetServiceId ?? services[0]?.id ?? "",
+  );
+  const [serverId, setServerId] = useState(
+    presetServerId ?? servers[0]?.id ?? "",
+  );
   const [remotePort, setRemotePort] = useState(0);
   const [url, setUrl] = useState("");
+  const [preset, setPreset] = useState<TunnelPreset>("web");
   const [wantPassword, setWantPassword] = useState(true);
   const [wantIp, setWantIp] = useState(false);
   const [accessUser, setAccessUser] = useState("shangxian");
@@ -57,6 +101,16 @@ export function NewTunnelWizard({
   /** 选了「无保护」发布时的确认勾选：不勾不让发布 */
   const [ackNoProtect, setAckNoProtect] = useState(false);
   const [nginxOpen, setNginxOpen] = useState(false);
+  const [qrOpen, setQrOpen] = useState(false);
+  /** 表单改过：Esc / 取消时要确认 */
+  const [dirty, setDirty] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  /** 没有密钥时的「密码登录一次配免密」小流程 */
+  const [keyOpen, setKeyOpen] = useState(false);
+  const [keyPassword, setKeyPassword] = useState("");
+  const [keyBusy, setKeyBusy] = useState(false);
+  const [keyMsg, setKeyMsg] = useState("");
+  const [testMsg, setTestMsg] = useState("");
   const [done, setDone] = useState<{
     id: string;
     name: string;
@@ -66,7 +120,11 @@ export function NewTunnelWizard({
 
   // 弹层无障碍：Esc 关闭 + 焦点圈定；成功屏再开「云端配置」时由内层接管
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  useModalA11y(dialogRef, onClose);
+  const requestClose = () => {
+    if (dirty && !done) setConfirmClose(true);
+    else onClose();
+  };
+  useModalA11y(dialogRef, requestClose);
 
   const service = services.find((s) => s.id === serviceId) ?? null;
   const server = servers.find((s) => s.id === serverId) ?? null;
@@ -74,6 +132,27 @@ export function NewTunnelWizard({
   useEffect(() => {
     if (!serverId && servers.length > 0) setServerId(servers[0].id);
   }, [servers, serverId]);
+
+  // 从「添加本机服务 / 服务器」回来时预选新加的那条（同一个 preset 只处理一次）
+  const appliedPresetService = useRef<string | null>(null);
+  const appliedPresetServer = useRef<string | null>(null);
+  useEffect(() => {
+    if (!presetServiceId || appliedPresetService.current === presetServiceId) return;
+    if (services.some((s) => s.id === presetServiceId)) {
+      appliedPresetService.current = presetServiceId;
+      setServiceId(presetServiceId);
+      setStep(1);
+    }
+  }, [presetServiceId, services]);
+
+  useEffect(() => {
+    if (!presetServerId || appliedPresetServer.current === presetServerId) return;
+    if (servers.some((s) => s.id === presetServerId)) {
+      appliedPresetServer.current = presetServerId;
+      setServerId(presetServerId);
+      setStep(2);
+    }
+  }, [presetServerId, servers]);
 
   // 同一台服务器上已经被占用的云端端口
   const usedRemote = useMemo(() => {
@@ -96,6 +175,47 @@ export function NewTunnelWizard({
 
   const remoteOk =
     remotePort > 0 && remotePort < 65536 && !usedRemote.has(remotePort);
+
+  // 死胡同：没有服务 / 服务器时，关掉向导并记下「回来继续」的意图
+  const goAdd = (kind: "service" | "server") => {
+    const handler = kind === "service" ? onAddService : onAddServer;
+    if (handler) handler();
+    else {
+      window.dispatchEvent(
+        new CustomEvent("shangxian:nav-intent", {
+          detail: { action: kind === "service" ? "add-service" : "add-server", returnTo: "wizard" },
+        }),
+      );
+    }
+    onClose();
+  };
+
+  const doTest = async () => {
+    if (!server) return;
+    setTestMsg("正在连服务器…");
+    try {
+      const msg = await testServer(server.id);
+      setTestMsg(msg || `连上「${server.name}」了`);
+    } catch (e) {
+      setTestMsg(`连不上：${errorText(e)}`);
+    }
+  };
+
+  const doSetupKey = async () => {
+    if (!server || !keyPassword.trim()) return;
+    setKeyBusy(true);
+    setKeyMsg("");
+    try {
+      await setupPasswordless(server.id, keyPassword);
+      toast.success(T.keyReady(server.name));
+      setKeyOpen(false);
+      setKeyPassword("");
+    } catch (e) {
+      setKeyMsg(errorText(e));
+    } finally {
+      setKeyBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!service || !server) {
@@ -127,9 +247,6 @@ export function NewTunnelWizard({
         try {
           accessHash = await hashPassword(server.id, password);
         } catch (e) {
-          // 这一步只在本机算 bcrypt 哈希，不连服务器；失败基本是密码本身不合格
-          // （bcrypt 只认前 72 个字节）或者这台服务器在配置里找不到了。
-          // 这里直接拦住，不能让用户以为「稍后能补」。
           setError(
             `本机算密码哈希没成功，密码没有保存。常见原因：密码超过 72 字节（bcrypt 装不下），或这台服务器已经不在配置里了。换成短一点的密码，或重新选服务器，再回来发布。${e ? `（${String(e)}）` : ""}`,
           );
@@ -137,7 +254,7 @@ export function NewTunnelWizard({
         }
       }
       const tunnelName = name.trim() || `${service.name} 发布`;
-      const id = await addTunnel({
+      const id = await actions.tunnelAdd({
         name: tunnelName,
         serviceId: service.id,
         serverId: server.id,
@@ -147,13 +264,20 @@ export function NewTunnelWizard({
         accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
         accessHash,
         accessDetail: wantIp ? ips.trim() || null : null,
+        preset,
       });
+      if (!id) {
+        setError("没发布成功：等一下再试");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("shangxian:notif-refresh"));
       setDone({
         id,
         name: tunnelName,
         url: url.trim() || null,
         password: wantPassword ? password : null,
       });
+      setDirty(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -161,8 +285,15 @@ export function NewTunnelWizard({
     }
   };
 
-  const copy = (text: string) => {
-    void navigator.clipboard.writeText(text);
+  const copy = async (text: string) => {
+    const ok = await copyText(text);
+    if (!ok) toast.error("没复制成功：请用鼠标选中后按 Ctrl+C 复制");
+  };
+
+  const presetHint: Record<TunnelPreset, string> = {
+    web: "普通网站：大多数情况用这个。",
+    ws: "WebSocket：AI 聊天、实时进度这类网页长连接不断线。",
+    upload: "大文件上传：上传上限放到 2GB，边传边转发；记得密码或白名单开着。",
   };
 
   return (
@@ -208,15 +339,25 @@ export function NewTunnelWizard({
                 把云端 nginx 配置贴到服务器面板里并重载，网址才会正式生效，别人才能打开。
               </p>
               {done.url ? (
-                <div className="success-line">
-                  <span className="success-url">https://{done.url}</span>
-                  <button
-                    className="link-btn"
-                    onClick={() => copy(`https://${done.url}`)}
-                  >
-                    复制
-                  </button>
-                </div>
+                <>
+                  <div className="success-line">
+                    <span className="success-url">https://{done.url}</span>
+                    <button
+                      className="link-btn"
+                      onClick={() => void copy(`https://${done.url}`)}
+                    >
+                      复制
+                    </button>
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setQrOpen(true)}
+                    >
+                      显示二维码
+                    </button>
+                  </div>
+                </>
               ) : (
                 <p className="field-hint">
                   没填公网网址：这条隧道现在还没有对外地址，别人暂时打不开。
@@ -228,7 +369,7 @@ export function NewTunnelWizard({
                   <span className="secret">{done.password}</span>
                   <button
                     className="link-btn"
-                    onClick={() => copy(done.password!)}
+                    onClick={() => void copy(done.password!)}
                   >
                     复制密码
                   </button>
@@ -244,9 +385,14 @@ export function NewTunnelWizard({
             services.length === 0 ? (
               <>
                 <p className="field-hint">
-                  还没有登记本机服务。先到左边「本机服务」页，把要发布的程序添加上（端口 +
-                  启动程序），再回来发布。
+                  还没有登记本机服务。先加一台，回来就能发布。
                 </p>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => goAdd("service")}
+                >
+                  + 添加本机服务
+                </button>
               </>
             ) : (
               <div className="option-list">
@@ -259,14 +405,17 @@ export function NewTunnelWizard({
                       type="radio"
                       name="wizard-service"
                       checked={serviceId === s.id}
-                      onChange={() => setServiceId(s.id)}
+                      onChange={() => {
+                        setServiceId(s.id);
+                        setDirty(true);
+                      }}
                     />
                     <span className="option-text">{s.name}</span>
                     <span className="mono">本机 {s.localPort}</span>
                   </label>
                 ))}
                 <p className="field-hint">
-                  只会发布你选中的这台服务；它没在跑的时候，别人访问会失败。
+                  只会发布你选中的这台服务；它没在跑的时候，别人访问会失败；建好后到「本机服务」页点一下「启动」。
                 </p>
               </div>
             )
@@ -275,14 +424,23 @@ export function NewTunnelWizard({
               <div className="field">
                 <label className="field-label">云端服务器</label>
                 {servers.length === 0 ? (
-                  <p className="field-hint">
-                    还没有云端服务器，先去「云端服务器」页添加一台（地址、账号、密钥）。
-                  </p>
+                  <>
+                    <p className="field-hint">还没有云端服务器。先加一台，回来继续。</p>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => goAdd("server")}
+                    >
+                      + 添加云端服务器
+                    </button>
+                  </>
                 ) : (
                   <select
                     className="select"
                     value={serverId}
-                    onChange={(e) => setServerId(e.target.value)}
+                    onChange={(e) => {
+                      setServerId(e.target.value);
+                      setDirty(true);
+                    }}
                   >
                     {servers.map((s) => (
                       <option key={s.id} value={s.id}>
@@ -291,6 +449,45 @@ export function NewTunnelWizard({
                     ))}
                   </select>
                 )}
+                {server && !server.keyPath && (
+                  <div className="warn-line" style={{ marginTop: 8 }}>
+                    这台服务器还没配免密登录。
+                    <div className="field-row" style={{ marginTop: 6 }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => void doTest()}
+                      >
+                        测试连接
+                      </button>
+                      <button
+                        className="link-btn"
+                        onClick={() => setKeyOpen((v) => !v)}
+                      >
+                        没有密钥？用密码登录一次，帮我配好免密
+                      </button>
+                    </div>
+                    {testMsg && <div className="field-hint">{testMsg}</div>}
+                    {keyOpen && (
+                      <div className="field-row" style={{ marginTop: 6 }}>
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder="服务器登录密码（只用一次）"
+                          value={keyPassword}
+                          onChange={(e) => setKeyPassword(e.target.value)}
+                        />
+                        <button
+                          className="btn btn-primary btn-sm"
+                          disabled={keyBusy || !keyPassword.trim()}
+                          onClick={() => void doSetupKey()}
+                        >
+                          {keyBusy ? "配置中…" : "配好免密"}
+                        </button>
+                      </div>
+                    )}
+                    {keyMsg && <div className="error-line">{keyMsg}</div>}
+                  </div>
+                )}
               </div>
               <div className="field">
                 <label className="field-label">云端端口</label>
@@ -298,9 +495,10 @@ export function NewTunnelWizard({
                   className="input mono"
                   type="number"
                   value={remotePort || ""}
-                  onChange={(e) =>
-                    setRemotePort(parseInt(e.target.value, 10) || 0)
-                  }
+                  onChange={(e) => {
+                    setRemotePort(parseInt(e.target.value, 10) || 0);
+                    setDirty(true);
+                  }}
                 />
                 <p className="field-hint">
                   {usedRemote.has(remotePort)
@@ -316,10 +514,32 @@ export function NewTunnelWizard({
                   className="input"
                   placeholder="例如 album.你的域名.com"
                   value={url}
-                  onChange={(e) => setUrl(e.target.value)}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    setDirty(true);
+                  }}
                 />
                 <p className="field-hint">
                   留空也能发布；填了记得在买域名的地方加一条解析记录。
+                </p>
+              </div>
+              <div className="field">
+                <label className="field-label">发布预设</label>
+                <select
+                  className="select"
+                  value={preset}
+                  onChange={(e) => {
+                    setPreset(e.target.value as TunnelPreset);
+                    setDirty(true);
+                  }}
+                >
+                  <option value="web">普通网站（默认）</option>
+                  <option value="ws">WebSocket（实时通信）</option>
+                  <option value="upload">大文件上传</option>
+                </select>
+                <p className="field-hint">
+                  不确定就保持默认；贴云端配置时会把对应几行一起给你。
+                  {presetHint[preset] ? ` ${presetHint[preset]}` : ""}
                 </p>
               </div>
             </>
@@ -331,6 +551,7 @@ export function NewTunnelWizard({
                   onClick={() => {
                     setWantPassword(!wantPassword);
                     setAckNoProtect(false);
+                    setDirty(true);
                   }}
                 >
                   <input
@@ -367,7 +588,10 @@ export function NewTunnelWizard({
                         <button
                           className="link-btn"
                           style={{ alignSelf: "flex-end" }}
-                          onClick={() => setPassword(generatePassword())}
+                          onClick={() => {
+                            setPassword(generatePassword());
+                            setDirty(true);
+                          }}
                         >
                           换一个
                         </button>
@@ -380,6 +604,7 @@ export function NewTunnelWizard({
                   onClick={() => {
                     setWantIp(!wantIp);
                     setAckNoProtect(false);
+                    setDirty(true);
                   }}
                 >
                   <input
@@ -429,7 +654,10 @@ export function NewTunnelWizard({
                 <input
                   className="input"
                   value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    setDirty(true);
+                  }}
                 />
                 <p className="field-hint">这个名字只有你自己看得到。</p>
               </div>
@@ -438,6 +666,9 @@ export function NewTunnelWizard({
                 确认一下：{service?.name}（本机 {service?.localPort}）→{" "}
                 {server?.name} · 云端 {remotePort}
                 {url.trim() ? ` · ${url.trim()}` : ""}
+                {preset !== "web"
+                  ? ` · 预设：${preset === "ws" ? "WebSocket" : "大文件上传"}`
+                  : ""}
               </p>
             </>
           )}
@@ -461,7 +692,7 @@ export function NewTunnelWizard({
             </>
           ) : (
             <>
-              <button className="btn btn-ghost" onClick={onClose}>
+              <button className="btn btn-ghost" onClick={requestClose}>
                 取消
               </button>
               <span className="grow" />
@@ -476,9 +707,7 @@ export function NewTunnelWizard({
               {step < 3 ? (
                 <button
                   className="btn btn-primary"
-                  disabled={
-                    step === 1 ? !service : !server || !remoteOk
-                  }
+                  disabled={step === 1 ? !service : !server || !remoteOk}
                   onClick={() => setStep(step + 1)}
                 >
                   下一步
@@ -486,7 +715,10 @@ export function NewTunnelWizard({
               ) : (
                 <button
                   className="btn btn-primary"
-                  disabled={busy || (!wantPassword && !wantIp && !ackNoProtect)}
+                  disabled={
+                    busy || !configTrusted || (!wantPassword && !wantIp && !ackNoProtect)
+                  }
+                  title={!configTrusted ? "配置文件读不出来，先修好再改设置" : undefined}
                   onClick={() => void submit()}
                 >
                   {busy ? "发布中…" : "开始发布"}
@@ -502,6 +734,27 @@ export function NewTunnelWizard({
           id={done.id}
           name={done.name}
           onClose={() => setNginxOpen(false)}
+        />
+      )}
+      {qrOpen && done?.url && (
+        <QrModal
+          url={`https://${done.url}`}
+          name={done.name}
+          onClose={() => setQrOpen(false)}
+        />
+      )}
+
+      {confirmClose && (
+        <ConfirmModal
+          title="要关掉发布向导吗？"
+          body="填的内容不会保存。"
+          confirmLabel="关掉"
+          cancelLabel="继续填写"
+          onConfirm={() => {
+            setConfirmClose(false);
+            onClose();
+          }}
+          onClose={() => setConfirmClose(false)}
         />
       )}
     </div>

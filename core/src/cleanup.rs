@@ -6,11 +6,10 @@
 //! - 绝不按用户名全杀、绝不清理端口段、绝不碰其他服务的端口；
 //! - 遇到非 sshd 的占用者，只报告不动手。
 
-use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -49,49 +48,26 @@ impl SshExec {
 }
 
 /// 执行一段远端脚本，返回 stdout。超时/失败返回 Err。
+///
+/// 走 [`crate::proc::run_capture`]：stdout/stderr 并发读，避免远端命令输出超过管道
+/// 缓冲时假超时（D1 §11）。
 pub fn run(exec: &SshExec, script: &str, timeout: Duration) -> Result<String, String> {
-    let mut child = Command::new(&exec.ssh_exe)
-        .args(exec.args_for(script))
+    let mut cmd = Command::new(&exec.ssh_exe);
+    cmd.args(exec.args_for(script))
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| format!("无法启动 ssh：{e}"))?;
+        .creation_flags(CREATE_NO_WINDOW);
 
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err("远端命令超时".into());
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(e) => return Err(format!("等待 ssh 失败：{e}")),
-        }
-    }
+    let captured = crate::proc::run_capture(&mut cmd, timeout, crate::proc::DEFAULT_OUTPUT_LIMIT)
+        .map_err(|e| crate::proc::spawn_error_with_context(e, "无法启动 ssh"))?;
 
-    let mut out = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut out);
-    }
-    let status = child.wait().map_err(|e| e.to_string())?;
-    if !status.success() && out.trim().is_empty() {
-        let mut err = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            let _ = stderr.read_to_string(&mut err);
-        }
+    if !captured.status.success() && captured.stdout.trim().is_empty() {
         return Err(format!(
             "ssh 退出码 {:?}：{}",
-            status.code(),
-            err.trim()
+            captured.status.code(),
+            captured.stderr.trim()
         ));
     }
-    Ok(out)
+    Ok(captured.stdout)
 }
 
 /// 残留清理请求。
@@ -262,6 +238,18 @@ mod tests {
     fn hash_password_rejects_empty_and_too_long() {
         assert!(hash_password(&fake_exec(), "").is_err());
         assert!(hash_password(&fake_exec(), &"a".repeat(73)).is_err());
+    }
+
+    #[test]
+    fn run_reports_missing_ssh_in_plain_words() {
+        let exec = SshExec {
+            ssh_exe: PathBuf::from("definitely-missing-shangxian-ssh.exe"),
+            target: "u@h".into(),
+            ssh_port: 22,
+            identity_file: None,
+        };
+        let err = run(&exec, "echo hi", Duration::from_secs(1)).unwrap_err();
+        assert!(err.starts_with("无法启动 ssh："), "错误文案：{err}");
     }
 
     #[test]

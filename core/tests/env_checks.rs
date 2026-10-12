@@ -23,41 +23,54 @@ fn scan_imports_runs() {
 
 #[test]
 fn notify_tracker_rules() {
-    use shangxian_core::notify::{Notice, NotifyTracker};
+    use std::time::{Duration, Instant};
 
-    let mut t = NotifyTracker::new(60_000);
-    let svc = |healthy: bool| vec![("a".to_string(), "相册".to_string(), healthy)];
+    use shangxian_core::notify::{HealthItem, HealthKind, Notice, NotifyTracker};
+
+    // 新接口：NotifyTracker::new(down_after, renotify_after) + update(Instant, &[HealthItem])
+    let mut t = NotifyTracker::new(Duration::from_secs(60), Duration::from_secs(600));
+    let t0 = Instant::now();
+    let svc = |healthy: bool| {
+        vec![HealthItem {
+            kind: HealthKind::Service,
+            id: "a".to_string(),
+            name: "相册".to_string(),
+            healthy,
+            should_notify: true,
+        }]
+    };
+    let is_down = |notices: &[Notice]| {
+        notices
+            .iter()
+            .any(|n| matches!(n, Notice::Down { name, .. } if name == "相册"))
+    };
+    let is_recovered = |notices: &[Notice]| {
+        notices
+            .iter()
+            .any(|n| matches!(n, Notice::Recovered { name, .. } if name == "相册"))
+    };
 
     // 刚掉线不提醒；未到阈值也不提醒
-    assert!(t.update(0, &svc(false)).is_empty());
-    assert!(t.update(30_000, &svc(false)).is_empty());
+    assert!(t.update(t0, &svc(false)).is_empty());
+    assert!(t
+        .update(t0 + Duration::from_secs(30), &svc(false))
+        .is_empty());
     // 到阈值提醒一次
-    assert_eq!(
-        t.update(60_001, &svc(false)),
-        vec![Notice::Down {
-            name: "相册".into()
-        }]
-    );
-    // 继续掉线不重复提醒
-    assert!(t.update(120_000, &svc(false)).is_empty());
+    assert!(is_down(&t.update(t0 + Duration::from_secs(61), &svc(false))));
+    // 继续掉线不重复提醒（再次提醒间隔 10 分钟）
+    assert!(t
+        .update(t0 + Duration::from_secs(120), &svc(false))
+        .is_empty());
     // 恢复时补一条
-    assert_eq!(
-        t.update(130_000, &svc(true)),
-        vec![Notice::Recovered {
-            name: "相册".into()
-        }]
-    );
+    assert!(is_recovered(&t.update(t0 + Duration::from_secs(130), &svc(true))));
     // 再次掉线：重新计时
-    assert!(t.update(140_000, &svc(false)).is_empty());
-    assert_eq!(
-        t.update(200_001, &svc(false)),
-        vec![Notice::Down {
-            name: "相册".into()
-        }]
-    );
+    assert!(t
+        .update(t0 + Duration::from_secs(140), &svc(false))
+        .is_empty());
+    assert!(is_down(&t.update(t0 + Duration::from_secs(201), &svc(false))));
     // 服务从列表消失（被暂停/删除）：不报恢复，状态清掉
-    assert!(t.update(210_000, &[]).is_empty());
-    assert!(t.update(220_000, &svc(true)).is_empty());
+    assert!(t.update(t0 + Duration::from_secs(210), &[]).is_empty());
+    assert!(t.update(t0 + Duration::from_secs(220), &svc(true)).is_empty());
 }
 
 #[test]
@@ -86,6 +99,7 @@ fn nginx_snippet_generation() {
         access_hash: Some("$2y$12$abc".into()),
         access_detail: None,
         enabled: true,
+        preset: "web".into(),
     };
 
     let snip = shangxian_core::nginx::generate(&svc, 8080, &server);
@@ -93,7 +107,11 @@ fn nginx_snippet_generation() {
     let add = snip.snippet.as_deref().unwrap();
     assert!(add.contains("auth_basic \"需要密码\";"));
     assert!(add.contains("auth_basic_user_file /xp/panel/vhost/album.example.com.htpasswd;"));
-    assert_eq!(snip.acme_exempt.as_deref(), Some("auth_basic off;"));
+    // D0 第 13 条：续期豁免升级为多行（注释 + 要加的行）
+    let acme = snip.acme_exempt.as_deref().unwrap();
+    assert!(acme.contains("auth_basic off;"), "acme={acme}");
+    assert!(acme.contains("# 证书续期专用"), "acme={acme}");
+    assert!(!acme.contains("allow all;"), "只开密码时不该有 allow all：{acme}");
     // 简短示意里要看得到域名和新增位置
     assert!(
         snip.preview
@@ -135,8 +153,10 @@ fn nginx_snippet_generation() {
     assert!(add3.contains("allow 1.2.3.4;"));
     assert!(add3.contains("allow 5.6.7.8;"));
     assert!(add3.contains("deny all;"));
-    // 只有 IP 白名单时不用给证书续期目录开口子
-    assert!(snip3.acme_exempt.is_none());
+    // D0 第 13 条：白名单模式也必须生成 .well-known 的 allow all;（不再假设面板自带）
+    let acme3 = snip3.acme_exempt.as_deref().unwrap();
+    assert!(acme3.contains("allow all;"), "acme3={acme3}");
+    assert!(!acme3.contains("auth_basic off;"), "没开密码时不该有 auth_basic off：{acme3}");
 }
 
 #[test]
@@ -166,6 +186,7 @@ fn nginx_snippet_password_and_ip_together() {
         access_hash: Some("$2y$12$abc".into()),
         access_detail: Some("1.2.3.4, 5.6.7.8".into()),
         enabled: true,
+        preset: "web".into(),
     };
 
     let snip = shangxian_core::nginx::generate(&tun, 8080, &server);
@@ -179,8 +200,9 @@ fn nginx_snippet_password_and_ip_together() {
     let password_at = add.find("auth_basic").unwrap();
     let ip_at = add.find("allow 1.2.3.4;").unwrap();
     assert!(password_at < ip_at, "密码块应该在 IP 块前面：\n{add}");
-    // 密码开着时，证书续期目录里要保留 auth_basic off;
-    assert_eq!(snip.acme_exempt.as_deref(), Some("auth_basic off;"));
+    // 密码开着时，证书续期目录里要保留 auth_basic off;；两道门都开时两行都有
+    let acme = snip.acme_exempt.as_deref().unwrap();
+    assert!(acme.contains("auth_basic off;") && acme.contains("allow all;"), "acme={acme}");
     assert!(
         snip.preview
             .iter()
@@ -203,7 +225,12 @@ fn service_and_tunnel_validations() {
     let dir = std::env::temp_dir().join("sx-config-test");
     let _ = std::fs::remove_dir_all(&dir);
     let path = dir.join("config.json");
-    let mut g = Guardian::new(AppConfig::default(), path.clone(), dir.join("logs"));
+    let mut g = Guardian::new(
+        AppConfig::default(),
+        path.clone(),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     let sid = g
         .save_server(ServerInput {
@@ -262,6 +289,7 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
+            preset: None,
         })
         .unwrap();
     assert_eq!(g.tunnel_snapshot().len(), 1);
@@ -278,6 +306,7 @@ fn service_and_tunnel_validations() {
             access_user: Some("u".into()),
             access_hash: None,
             access_detail: None,
+            preset: None,
         })
         .unwrap_err();
     assert!(err.contains("密码"), "err={err}");
@@ -294,6 +323,7 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
+            preset: None,
         })
         .unwrap_err();
     assert!(err.contains("IP"), "err={err}");
@@ -313,6 +343,7 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
+            preset: None,
         })
         .is_err(),
         "重复云端端口应该被拒绝"
@@ -355,7 +386,12 @@ fn local_service_start_stop_and_watch() {
     let dir = std::env::temp_dir().join("sx-localsvc-test");
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::create_dir_all(&dir);
-    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+    let mut g = Guardian::new(
+        AppConfig::default(),
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     let port = 18091;
     let id = g
@@ -405,9 +441,13 @@ fn local_service_start_stop_and_watch() {
 
     // 用户点停止 → 停掉且不再自动拉起
     g.stop_service(&id, false, None).unwrap();
-    for _ in 0..10 {
+    // 探测有防抖（3 次失败约 6 秒）：等它彻底静下来再断言
+    for _ in 0..40 {
         g.poll();
-        sleep(Duration::from_millis(100));
+        if g.snapshot()[0].status == "stopped" {
+            break;
+        }
+        sleep(Duration::from_millis(200));
     }
     assert_eq!(g.snapshot()[0].status, "stopped");
     assert!(g.service_pid(&id).is_none(), "用户停了就不该有进程");
@@ -428,7 +468,12 @@ fn monitor_only_service_reports_port_state() {
 
     let dir = std::env::temp_dir().join("sx-monitor-test");
     let _ = std::fs::remove_dir_all(&dir);
-    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+    let mut g = Guardian::new(
+        AppConfig::default(),
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     // 占一个端口当"用户自己开的服务"（没配启动方式，只监控）
     let listener = TcpListener::bind("127.0.0.1:18093").unwrap();
@@ -463,9 +508,10 @@ fn monitor_only_service_reports_port_state() {
     assert!(err.contains("启动方式"), "错误提示要说清没配启动方式：{err}");
 
     // 端口关掉 → 状态回到"没启动"
+    // （探测有防抖：连续 3 次失败才判 down，2 秒一轮 → 最多约 6 秒）
     drop(listener);
     let mut stopped = false;
-    for _ in 0..20 {
+    for _ in 0..60 {
         g.poll();
         if g.snapshot()[0].status == "stopped" {
             stopped = true;
@@ -487,7 +533,12 @@ fn update_tunnel_merges_access_detail() {
 
     let dir = std::env::temp_dir().join("sx-update-tunnel-test");
     let _ = std::fs::remove_dir_all(&dir);
-    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+    let mut g = Guardian::new(
+        AppConfig::default(),
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     let sid = g
         .save_server(ServerInput {
@@ -525,6 +576,7 @@ fn update_tunnel_merges_access_detail() {
             access_user: Some("u".into()),
             access_hash: Some("$2y$12$old".into()),
             access_detail: Some("1.2.3.4".into()),
+            preset: None,
         })
         .unwrap();
 
@@ -542,6 +594,7 @@ fn update_tunnel_merges_access_detail() {
             access_user: Some("u".into()),
             access_hash: hash,
             access_detail: detail,
+            preset: None,
         })
     };
 
@@ -609,7 +662,12 @@ fn update_tunnel_password_toggle_semantics() {
 
     let dir = std::env::temp_dir().join("sx-update-tunnel-password-test");
     let _ = std::fs::remove_dir_all(&dir);
-    let mut g = Guardian::new(AppConfig::default(), dir.join("config.json"), dir.join("logs"));
+    let mut g = Guardian::new(
+        AppConfig::default(),
+        dir.join("config.json"),
+        dir.join("logs"),
+        std::sync::Arc::new(shangxian_core::log::NullReporter),
+    );
 
     let sid = g
         .save_server(ServerInput {
@@ -647,6 +705,7 @@ fn update_tunnel_password_toggle_semantics() {
             access_user: Some("u".into()),
             access_hash: Some("$2y$12$old".into()),
             access_detail: None,
+            preset: None,
         })
         .unwrap();
 
@@ -666,6 +725,7 @@ fn update_tunnel_password_toggle_semantics() {
             access_user: user,
             access_hash: hash,
             access_detail: None,
+            preset: None,
         })
     };
 
