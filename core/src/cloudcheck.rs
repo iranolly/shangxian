@@ -300,13 +300,14 @@ ip=$(printf '%s' "${SSH_CONNECTION:-}" | awk '{print $1}')
 const AUDIT_TMPL: &str = r#"echo "===SECTION:AUDIT==="
 d=@DOMAIN@; dir=@DIR@; f="$dir/nginx/$d.conf"; log=@LOG@
 if [ -z "$log" ] && [ -f "$f" ]; then
-  log=$(sed -n 's/^[[:space:]]*access_log[[:space:]]*//p' "$f" | head -1 | cut -d';' -f1)
-  log=$(printf '%s' "$log" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')
-  [ "$log" = off ] && log=''
+  # 站点配置里常常有多条 access_log（不少 location 里是 /dev/null）：跳过 dev/null 和 off，取第一条真日志。
+  log=$(sed -n 's/^[[:space:]]*access_log[[:space:]]*//p' "$f" | cut -d';' -f1 \
+    | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//' \
+    | grep -v '^/dev/null$' | grep -v '^off$' | head -1)
 fi
 if [ -z "$log" ] || [ ! -f "$log" ]; then
   log=''
-  for c in "$dir/logs/$d.log" "/www/wwwlogs/$d.log" "/xp/panel/vhost/logs/$d.log"; do
+  for c in "$dir/logs/$d.log" "/www/wwwlogs/$d.log" "/xp/panel/vhost/logs/$d.log" "/xp/wwwlogs/$d.log"; do
     [ -f "$c" ] && { log="$c"; break; }
   done
 fi
@@ -401,7 +402,9 @@ impl CloudEnv {
         let panel_evidence = key_str(keys, "PANEL_EVIDENCE");
         let web_evidence = key_str(keys, "WEB_EVIDENCE");
         let nginx_bin = key_str(keys, "NGINX_BIN");
-        let vhost_dir = key_str(keys, "VHOST_DIR");
+        // 脚本回显 VHOST_DIR 用的是 shell 转义（外层带单引号），这里剥掉再存：
+        // 否则界面会显示 '/xp/panel/vhost' 这种带引号的怪值，用户抄进配置还会真的带上引号。
+        let vhost_dir = key_str(keys, "VHOST_DIR").map(|d| d.trim_matches('\'').to_string());
         let vhost_dir_exists = key_bool(keys, "VHOST_DIR_EXISTS");
         let ws_map = key_bool(keys, "WS_MAP");
         let conf_dir_exists = key_bool(keys, "WEB_CONF_EXISTS").unwrap_or(false);
@@ -2279,6 +2282,13 @@ HTPASSWD_YES
         assert_eq!(unknown.panel_confidence, "unknown");
         assert_eq!(unknown.web_confidence, "unknown");
         assert_eq!(unknown.ws_map, None);
+    }
+
+    #[test]
+    fn env_vhost_dir_quotes_stripped() {
+        // 脚本里 VHOST_DIR 是 shell 转义回显（带上外层单引号），解析要剥掉。
+        let e = CloudEnv::from_keys(&keys(&[("VHOST_DIR", "'/xp/panel/vhost'")]));
+        assert_eq!(e.vhost_dir.as_deref(), Some("/xp/panel/vhost"));
     }
 
     #[test]

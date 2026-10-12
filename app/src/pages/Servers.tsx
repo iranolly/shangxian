@@ -97,13 +97,13 @@ function envNote(env: CloudEnv): EnvNote {
     return {
       tone: "ok",
       banner: false,
-      text: `云服务器认出来了：宝塔面板 + nginx。站点目录自动填成 ${env.vhostDir ?? "/www/server/panel/vhost"}，不对可以改。`,
+      text: `云服务器认出来了：宝塔面板 + nginx。识别到的站点目录：${env.vhostDir ?? "/www/server/panel/vhost"}。点「编辑」把它填进去，不对可以改。`,
     };
   }
   return {
     tone: "ok",
     banner: false,
-    text: `云服务器认出来了：小皮面板 + nginx。站点目录自动填成 ${env.vhostDir ?? "/xp/panel/vhost"}。`,
+    text: `云服务器认出来了：小皮面板 + nginx。识别到的站点目录：${env.vhostDir ?? "/xp/panel/vhost"}。点「编辑」把它填进去。`,
   };
 }
 

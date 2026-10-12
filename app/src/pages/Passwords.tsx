@@ -62,7 +62,11 @@ function protectionPending(t: TunnelView): boolean {
 
 function AuditView({ data }: { data: AccessAudit }) {
   const blocked = data.count401 + data.count403;
-  const top = data.topIps[0];
+  // 防弹：后端任何一段缺字段都不能把整个界面带崩（曾因此黑屏）。
+  const topIps = data.topIps ?? [];
+  const warnings = data.warnings ?? [];
+  const entries = data.entries ?? [];
+  const top = topIps[0];
   return (
     <>
       {!data.available ? (
@@ -80,10 +84,10 @@ function AuditView({ data }: { data: AccessAudit }) {
           {top ? `次数最多的是 ${top.ip}（${top.count} 次）。` : ""}
         </p>
       )}
-      {data.topIps.length > 1 && (
+      {topIps.length > 1 && (
         <p className="audit-note">
           被挡最多的几个：
-          {data.topIps
+          {topIps
             .slice(0, 5)
             .map((item) => `${item.ip}（${item.count} 次）`)
             .join("、")}
@@ -94,14 +98,14 @@ function AuditView({ data }: { data: AccessAudit }) {
       )}
       {data.truncated && <p className="audit-note">记录太多，只看了最近的一部分。</p>}
       {data.path && <p className="audit-note mono">日志文件：{data.path}</p>}
-      {data.warnings.map((w, index) => (
+      {warnings.map((w, index) => (
         <p className="audit-note" key={index}>
           ⚠ {w}
         </p>
       ))}
-      {data.entries.length > 0 && (
+      {entries.length > 0 && (
         <div className="audit-entries">
-          {data.entries.slice(-10).map((e, index) => (
+          {entries.slice(-10).map((e, index) => (
             <span key={index}>
               {e.raw ??
                 [e.time, e.ip, e.method, e.path, e.status].filter(Boolean).join(" ")}

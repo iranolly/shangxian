@@ -1074,7 +1074,21 @@ export async function runAccessAudit(id: string): Promise<AccessAudit> {
       warnings: ["浏览器预览模式：不会真的去读服务器日志。"],
     };
   }
-  return await invoke<AccessAudit>("run_access_audit", { id });
+  // ctl 的 run_access_audit 返回的是整包（check/actual/audit…），这里只取 audit 那一段。
+  // 注意：曾直接把整包当 AccessAudit 用，data.topIps 为 undefined，界面会直接崩成空白。
+  const result = await invoke<CloudCheckResult>("run_access_audit", { id });
+  return (
+    result.audit ?? {
+      available: false,
+      window: 1000,
+      count401: 0,
+      count403: 0,
+      topIps: [],
+      entries: [],
+      truncated: false,
+      warnings: [],
+    }
+  );
 }
 
 /** 查本机公网 IP（Wave 3；未上线前从检查结果的 clientIp 取）。 */
