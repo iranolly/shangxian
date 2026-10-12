@@ -3,8 +3,6 @@
 
 import { useEffect, useState } from "react";
 
-import { actions } from "../../store/actions";
-import { usePending } from "../../store/pendingStore";
 import { useTunnel } from "../../store/useStore";
 import { formatRetryIn } from "./time";
 
@@ -14,7 +12,6 @@ interface Props {
 
 export function RetryLine({ tunnelId }: Props) {
   const tunnel = useTunnel(tunnelId);
-  const pending = usePending(`tunnel:${tunnelId}`);
   const retryInSecs = tunnel?.retryInSecs ?? null;
   const [baseline, setBaseline] = useState<{ secs: number; at: number } | null>(null);
   const [, setTick] = useState(0);
@@ -48,7 +45,7 @@ export function RetryLine({ tunnelId }: Props) {
       <span className="retry-line">
         {remaining > 0
           ? `第 ${(tunnel.attempt ?? 0) + 1} 次重试，${formatRetryIn(remaining)}`
-          : "正在重试…"}
+          : "重试中…"}
       </span>
     );
   }
@@ -56,15 +53,9 @@ export function RetryLine({ tunnelId }: Props) {
   if (tunnel.status === "disconnected") {
     return (
       <span className="retry-line">
-        {retryState === "stopped" ? "重试停了，点「立刻重连」再试" : "掉线了，正在自动重试"}
-        <button
-          className="link-btn"
-          disabled={pending}
-          aria-busy={pending}
-          onClick={() => actions.tunnelRestart(tunnelId)}
-        >
-          立刻重连
-        </button>
+        {retryState === "stopped"
+          ? "重试已停止：请先点击「暂停」，再点击「开始发布」即可重新尝试"
+          : "已断开，将自动重试"}
       </span>
     );
   }

@@ -96,13 +96,13 @@ impl CleanupOutcome {
     pub fn human(&self) -> String {
         match self {
             Self::Killed { pid, comm } => {
-                format!("已清理占着端口的残留会话（pid {pid} {comm}）")
+                format!("已清理占用端口的残留会话（pid {pid} {comm}）")
             }
             Self::NotSshd { pid, comm } => {
-                format!("端口被非 ssh 进程占着（pid {pid} {comm}），没有动它")
+                format!("端口被非 ssh 进程占用（pid {pid} {comm}），未做处理")
             }
             Self::OwnerUnverified { pid, comm, owner } => format!(
-                "端口被 sshd 占着（pid {pid} {comm}，账号 {owner}），但不是当前登录账号的会话，归属核不上，没有动它"
+                "端口被 sshd 占用（pid {pid} {comm}，账号 {owner}），但不属于当前登录账号的会话，无法确认归属，未做处理"
             ),
             Self::PortFree => "远端端口本来就是空闲的".into(),
             Self::NoOwner => "远端端口有监听但找不到持有进程".into(),
@@ -197,10 +197,10 @@ echo NO_OWNER"#
 /// `exec` 参数保留是为了兼容现有调用方（guardian / app / cli），现在不再使用。
 pub fn hash_password(_exec: &SshExec, password: &str) -> Result<String, String> {
     if password.is_empty() {
-        return Err("访问密码不能是空的".into());
+        return Err("访问密码不能为空".into());
     }
     if password.len() > 72 {
-        return Err("访问密码太长了：bcrypt 只认前 72 个字节，请换短一点的密码".into());
+        return Err("访问密码过长：bcrypt 只识别前 72 个字节，请更换更短的密码".into());
     }
     let hash = bcrypt::hash(password, bcrypt::DEFAULT_COST)
         .map_err(|e| format!("本地生成密码哈希失败：{e}"))?;

@@ -57,7 +57,7 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
     stopRef.current = false;
     setLastAction(action);
     setProgress({ done: 0, total: ids.length, hidden });
-    const hiddenNote = hidden > 0 ? `另有 ${hidden} 条被筛选隐藏，这次没动` : "";
+    const hiddenNote = hidden > 0 ? `另有 ${hidden} 条被筛选隐藏，本次未处理` : "";
 
     const opts = {
       onProgress: (done: number, total: number) => setProgress({ done, total, hidden }),
@@ -75,7 +75,7 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
     const fail = outcome.failures.length;
     const remaining = total - outcome.succeeded.length - fail;
     if (outcome.stopped && remaining > 0) {
-      toast.info(`已停止，剩下 ${remaining} 条没处理${hiddenNote ? `；${hiddenNote}` : ""}`);
+      toast.info(`已停止，剩余 ${remaining} 条未处理${hiddenNote ? `；${hiddenNote}` : ""}`);
     }
 
     if (fail === 0) {
@@ -115,7 +115,7 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
     toast.warn(T.bulkPartial(total, fail), {
       key: `bulk-partial:${page}`,
       detail: hiddenNote || undefined,
-      action: { label: "看详情", run: () => setResult(next) },
+      action: { label: "查看详情", run: () => setResult(next) },
     });
   };
 
@@ -134,11 +134,11 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
               className="bulk-count"
               title={
                 progress.hidden > 0
-                  ? `另有 ${progress.hidden} 条被筛选隐藏，这次不动`
+                  ? `另有 ${progress.hidden} 条被筛选隐藏，本次不处理`
                   : undefined
               }
             >
-              正在处理 {progress.done}/{progress.total}…
+              处理中 {progress.done}/{progress.total}…
               {progress.hidden > 0 ? `（隐藏 ${progress.hidden} 条）` : ""}
             </span>
             <span className="bulk-progress" aria-hidden="true">

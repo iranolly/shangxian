@@ -419,23 +419,6 @@
 
 /* ---------- 访问审计 ---------- */
 
-.audit-box {
-  margin-top: 10px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--r-control);
-  background: var(--bg-sidebar);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-
-.audit-head {
-  margin: 0 0 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-
 .audit-summary {
   margin: 0;
   color: var(--text);

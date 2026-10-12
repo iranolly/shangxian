@@ -113,7 +113,7 @@ pub fn self_check() -> bool {
     let job = match Job::new() {
         Ok(job) => job,
         Err(e) => {
-            log_warn(TAG_GUARD, &format!("启动自检没过：作业对象建不出来（{e}）"));
+            log_warn(TAG_GUARD, &format!("启动自检未通过：无法创建作业对象（{e}）"));
             return false;
         }
     };
@@ -128,13 +128,13 @@ pub fn self_check() -> bool {
     {
         Ok(child) => child,
         Err(e) => {
-            log_warn(TAG_GUARD, &format!("启动自检没过：试跑的探针进程起不来（{e}）"));
+            log_warn(TAG_GUARD, &format!("启动自检未通过：试运行的探针进程启动失败（{e}）"));
             return false;
         }
     };
 
     if let Err(e) = job.assign_process(child.as_raw_handle()) {
-        log_warn(TAG_GUARD, &format!("启动自检没过：探针进程放不进作业（{e}）"));
+        log_warn(TAG_GUARD, &format!("启动自检未通过：探针进程无法加入作业（{e}）"));
         let _ = child.kill();
         let _ = child.wait();
         return false;
@@ -145,7 +145,7 @@ pub fn self_check() -> bool {
     match child.wait() {
         Ok(_) => true,
         Err(e) => {
-            log_warn(TAG_GUARD, &format!("启动自检没过：探针进程收不了尾（{e}）"));
+            log_warn(TAG_GUARD, &format!("启动自检未通过：探针进程无法正常结束（{e}）"));
             false
         }
     }

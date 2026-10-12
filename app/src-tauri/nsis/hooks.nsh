@@ -12,8 +12,8 @@
 ; 编码：UTF-8（带 BOM）。
 
 ; ---------- 结束页 / 卸载确认页文案（必须在对应页面宏插入前、也就是本文件被 include 时定义） ----------
-!define MUI_FINISHPAGE_RUN_TEXT "现在就打开 上线助手"
-!define MUI_UNCONFIRMPAGE_TEXT_TOP "要卸载 上线助手 吗？$\r$\n$\r$\n• 正在发布的隧道先停掉；应用拉起的本机服务也会停$\r$\n• 配置和密钥默认保留；要一起删就勾上下面的「同时删除配置和密钥」$\r$\n$\r$\n点「卸载」开始。"
+!define MUI_FINISHPAGE_RUN_TEXT "立即打开 上线助手"
+!define MUI_UNCONFIRMPAGE_TEXT_TOP "确定要卸载 上线助手 吗？$\r$\n$\r$\n• 发布中的隧道将先停止；应用启动的本机服务也会停止$\r$\n• 配置和密钥默认保留，如需一并删除请勾选下方「同时删除配置和密钥」$\r$\n$\r$\n点击「卸载」开始。"
 
 ; ---------- 公共动作 ----------
 
@@ -21,7 +21,7 @@
 ; nsExec 会隐藏控制台窗口并等它退出；cli 侧有 15 秒硬上限（D5 S5.3），不会把安装器卡死。
 !macro SX_STOP_ALL
   ${If} ${FileExists} "$INSTDIR\cli.exe"
-    DetailPrint "正在停止正在发布的隧道和本机服务…"
+    DetailPrint "正在停止发布中的隧道和本机服务…"
     nsExec::ExecToLog '"$INSTDIR\cli.exe" app stop-all --yes'
     Pop $0
   ${EndIf}
@@ -99,10 +99,10 @@
 
     ; 删不干净时说清楚，别假装成功
     ${If} ${FileExists} "$APPDATA\Shangxian\*.*"
-      MessageBox MB_ICONEXCLAMATION "配置文件夹没能全删掉（可能有文件被占用）。请手动删：$APPDATA\Shangxian"
+      MessageBox MB_ICONEXCLAMATION "配置文件夹未能完全删除（可能有文件被占用）。请手动删除：$APPDATA\Shangxian"
     ${EndIf}
     ${If} ${FileExists} "$LOCALAPPDATA\Shangxian\*.*"
-      MessageBox MB_ICONEXCLAMATION "配置文件夹没能全删掉（可能有文件被占用）。请手动删：$LOCALAPPDATA\Shangxian"
+      MessageBox MB_ICONEXCLAMATION "配置文件夹未能完全删除（可能有文件被占用）。请手动删除：$LOCALAPPDATA\Shangxian"
     ${EndIf}
   ${EndIf}
 !macroend

@@ -108,7 +108,7 @@ fn kill_foreign_refuses_monitor_only_service_even_with_pid() {
     let err = guardian
         .stop_service("svc-1", true, Some(std::process::id()))
         .unwrap_err();
-    assert!(err.contains("没配启动方式"), "err={err}");
+    assert!(err.contains("未配置启动方式"), "err={err}");
     assert!(err.contains("补全"), "err={err}");
     assert!(listener.local_addr().is_ok(), "测试进程当然还活着");
 }
@@ -122,8 +122,8 @@ fn monitor_only_service_refuses_stop_without_kill_foreign() {
     let mut guardian = make_guardian("monitor-no-kill", port, None);
 
     let err = guardian.stop_service("svc-1", false, None).unwrap_err();
-    assert!(err.contains("没配启动方式"), "err={err}");
-    assert!(err.contains("端口上现在是"), "err={err}");
+    assert!(err.contains("未配置启动方式"), "err={err}");
+    assert!(err.contains("端口当前由"), "err={err}");
     assert!(err.contains("补全"), "err={err}");
     assert!(listener.local_addr().is_ok(), "外部进程不能被动");
 }

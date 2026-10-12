@@ -263,7 +263,7 @@ impl EventLog {
                     LEVEL_WARN,
                     None,
                     Some(EventSubject::app()),
-                    "事件太密集，后面 10 秒不记了",
+                    "事件过于密集，10 秒内不再记录",
                 );
                 let _ = self.write_line(&mut inner, &warn);
             }
@@ -363,7 +363,7 @@ impl EventLog {
                 inner.last_error = None;
             }
             Err(e) => {
-                inner.last_error = Some(format!("事件日志写不进去：{e}"));
+                inner.last_error = Some(format!("事件日志无法写入：{e}"));
             }
         }
         result
@@ -526,7 +526,7 @@ mod tests {
         }
         let lines = log.read(100, 0);
         assert_eq!(lines.len(), 11, "10 条正常 + 1 条「太密集」警告");
-        assert_eq!(lines[10].message, "事件太密集，后面 10 秒不记了");
+        assert_eq!(lines[10].message, "事件过于密集，10 秒内不再记录");
         assert_eq!(lines[10].level, LEVEL_WARN);
 
         // 静默期内新消息不写
@@ -652,7 +652,7 @@ mod tests {
         assert_eq!(lines[1].code.as_deref(), Some("configNormalized"));
         assert_eq!(
             lines[1].message,
-            "设置里有不认识的取值，已经按默认值处理：tunnels[].preset"
+            "设置中存在无法识别的取值，已按默认值处理：tunnels[].preset"
         );
 
         let dir2 = temp_dir("emit-unsupported");

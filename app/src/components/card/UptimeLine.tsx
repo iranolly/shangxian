@@ -30,8 +30,8 @@ export function UptimeLine({ tunnelId }: Props) {
   const reconnects = tunnel.reconnectsToday ?? 0;
   const text =
     reconnects > 0
-      ? `已连 ${formatUptime(uptime)} · 今日重连 ${reconnects} 次`
-      : `已连 ${formatUptime(uptime)}`;
+      ? `已连接 ${formatUptime(uptime)} · 今日重连 ${reconnects} 次`
+      : `已连接 ${formatUptime(uptime)}`;
 
   return <span className="uptime-line">{text}</span>;
 }

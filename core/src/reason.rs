@@ -160,72 +160,72 @@ impl ReasonCode {
     pub fn text(self) -> &'static str {
         match self {
             ReasonCode::SshMissing => {
-                "这台电脑上找不到 ssh 命令：去「设置 → 应用 → 可选功能」里装上「OpenSSH 客户端」再试"
+                "本机未找到 ssh 命令：请在「设置 → 应用 → 可选功能」中安装「OpenSSH 客户端」后重试"
             }
             ReasonCode::NetTimeout => {
-                "连服务器超时或不通：先检查网络，再看服务器地址和 SSH 端口填得对不对"
+                "连接服务器超时或不通：请先检查网络，再核对服务器地址和 SSH 端口是否填写正确"
             }
             ReasonCode::AuthDenied => {
-                "登录被服务器拒绝了：账号或密钥不对，也可能服务器关掉了这种登录方式"
+                "登录被服务器拒绝了：账号或密钥不正确，也可能服务器已禁用这种登录方式"
             }
             ReasonCode::HostKeyChanged => {
-                "服务器指纹变了：可能换了机器，也可能有人在冒名顶替；核对清楚再连"
+                "服务器指纹已变更：可能是更换了机器，也可能存在冒名顶替；请核对清楚后再连接"
             }
             ReasonCode::ConnRefused => {
-                "服务器拒绝连接：SSH 端口可能不对，或者服务器上没开 SSH 服务"
+                "服务器拒绝连接：SSH 端口可能不正确，或者服务器未开启 SSH 服务"
             }
-            ReasonCode::DnsFail => "服务器地址解析不了：域名写错了，或者本机网络/DNS 有问题",
-            ReasonCode::KeyUnusable => "密钥文件用不了：重新用密码配一次免密，或者核对密钥路径",
-            ReasonCode::RemotePortBusy => "云端端口被别的东西占了：换一个云端端口再试",
+            ReasonCode::DnsFail => "服务器地址无法解析：域名可能写错，或本机网络/DNS 异常",
+            ReasonCode::KeyUnusable => "密钥文件不可用：请重新用密码配置一次免密登录，或核对密钥路径",
+            ReasonCode::RemotePortBusy => "云端端口已被其他程序占用：请更换一个云端端口后重试",
             ReasonCode::ConnReset => {
-                "服务器把连接掐断了：可能是网络抖动或服务器限流，稍后会自动重连"
+                "服务器断开了连接：可能是网络抖动或服务器限流，稍后将自动重连"
             }
-            ReasonCode::SpawnFail => "连接程序启动失败：详情看这条隧道的日志",
+            ReasonCode::SpawnFail => "连接程序启动失败：详情请查看这条隧道的日志",
             ReasonCode::ExitUnknown => {
-                "这一轮没连上：网络、服务器地址或账号密钥都可能；详情看这条隧道的日志"
+                "本轮未连接成功：可能是网络、服务器地址或账号密钥问题；详情请查看这条隧道的日志"
             }
             ReasonCode::RetryStopped => {
-                "试了很多次还是没连上，已经停止自动重试；点「再试一次」重新开始"
+                "多次尝试仍无法连接，已停止自动重试；请先点击「暂停」，再点击「开始发布」重新尝试"
             }
-            ReasonCode::SignalExit => "连接程序意外退出了（退出码 {code}）：稍后会按计划重连",
+            ReasonCode::SignalExit => "连接程序意外退出（退出码 {code}）：稍后将按计划重连",
             ReasonCode::ServerMissing => {
-                "这条隧道挂的云端服务器不在了：去「云端服务器」页重新选一台"
+                "这条隧道关联的云端服务器已不存在：请在「云端服务器」页重新选择一台"
             }
             ReasonCode::ServiceMissing => {
-                "这条隧道对应的本机服务不在了：先把服务补回来，或者删掉这条隧道"
+                "这条隧道对应的本机服务已不存在：请先恢复服务，或删除这条隧道"
             }
             ReasonCode::ConfigUntrusted => {
-                "配置文件上次没读成功（已留底成 config.json.bad），新设置暂时不能保存；请先修好配置文件再重开应用"
+                "配置文件上次读取失败（已备份为 config.json.bad），新设置暂时无法保存；请先修复配置文件再重开应用"
             }
             ReasonCode::ConfigUnsupported => {
-                "这份设置是新版「上线助手」存的（版本 {found}），当前版本只认到 {supported}。请先升级到最新版再打开；你的设置文件没有被改过"
+                "这份设置由新版「上线助手」保存（版本 {found}），当前版本仅支持到 {supported}。请先升级到最新版再打开；设置文件未被修改"
             }
             ReasonCode::CleanupFail => {
-                "云端残留连接没清干净：下次会自动再试；反复出现就手动检查一下"
+                "云端残留连接未清理干净：下次将自动重试；若反复出现，请手动检查"
             }
             ReasonCode::StartFail => "本机服务启动失败：{原因}",
-            ReasonCode::CrashLoop => "连续启动失败，已经停止自动重试；点「启动」可以再试一次",
-            ReasonCode::Hung => "程序在跑但端口不通：可能卡住了；看护开着的话会自动重启",
-            ReasonCode::Exited => "程序退出了（退出码 {code}）：看护开着的话会自动拉起",
-            ReasonCode::AutostartFail => "开机自启没拉起来：{原因}",
+            ReasonCode::CrashLoop => "连续启动失败，已停止自动重试；点击「启动」可再试一次",
+            ReasonCode::Hung => "程序运行中但端口不通：可能已卡住；看护开启时会自动重启",
+            ReasonCode::Exited => "程序已退出（退出码 {code}）：看护开启时会自动启动",
+            ReasonCode::AutostartFail => "开机自启未启动：{原因}",
             ReasonCode::AppStarted => "应用已启动",
             ReasonCode::AppExited => "应用已退出",
             ReasonCode::ConfigSaved => "设置已保存",
             ReasonCode::ConfigMigrated => {
                 "旧版设置已升级到新版格式（原文件备份成 config.json.v5.bak）"
             }
-            ReasonCode::ConfigNormalized => "设置里有不认识的取值，已经按默认值处理：{字段}",
-            ReasonCode::ConfigCorrupt => "配置文件读不出来，原文件已留底；先用空白设置运行",
-            ReasonCode::StateReset => "运行记录重新开始了（不影响你的设置）",
+            ReasonCode::ConfigNormalized => "设置中存在无法识别的取值，已按默认值处理：{字段}",
+            ReasonCode::ConfigCorrupt => "配置文件无法读取，原文件已备份；将先用空白设置运行",
+            ReasonCode::StateReset => "运行记录已重新开始（不影响现有设置）",
             ReasonCode::Deleted => "已删除「{name}」（10 分钟内可以撤销）",
-            ReasonCode::Restored => "已恢复「{name}」；隧道会保持暂停，想连上再点开始",
+            ReasonCode::Restored => "已恢复「{name}」；隧道将保持暂停，需要连接时请点击开始",
             ReasonCode::UpdateChecked => "更新检查完成：{结果}",
-            ReasonCode::UpdateAvailable => "发现新版本 {latest}，可以去发布页下载",
-            ReasonCode::ProtectionChecked => "云端设置核对过了，对得上",
-            ReasonCode::ProtectionDrift => "云端设置和你的设置对不上：{差异}",
-            ReasonCode::ProtectionError => "云端核不上了：{原因}",
-            ReasonCode::DoctorRan => "自检完成：{pass} 项通过、{fail} 项有问题、{skip} 项跳过",
-            ReasonCode::TunnelConnected => "发布已连上",
+            ReasonCode::UpdateAvailable => "发现新版本 {latest}，可前往发布页下载",
+            ReasonCode::ProtectionChecked => "云端设置已核对，结果一致",
+            ReasonCode::ProtectionDrift => "云端设置与本地设置不一致：{差异}",
+            ReasonCode::ProtectionError => "云端无法核对：{原因}",
+            ReasonCode::DoctorRan => "体检完成：{pass} 项通过、{fail} 项未通过、{skip} 项跳过",
+            ReasonCode::TunnelConnected => "发布已连接",
             ReasonCode::TunnelDown => "{reason}",
             ReasonCode::ServiceUp => "本机服务已就绪",
             ReasonCode::ServiceDown => "{reason}",
@@ -236,34 +236,34 @@ impl ReasonCode {
     pub fn advice(self) -> Option<&'static str> {
         match self {
             ReasonCode::SshMissing => Some("安装 OpenSSH 客户端后重试"),
-            ReasonCode::NetTimeout => Some("检查网络与服务器地址、SSH 端口"),
-            ReasonCode::AuthDenied => Some("用密码重配一次免密，或核对账号密钥"),
-            ReasonCode::HostKeyChanged => Some("先核对服务器身份，别直接连"),
-            ReasonCode::ConnRefused => Some("核对 SSH 端口与服务器 sshd"),
+            ReasonCode::NetTimeout => Some("检查网络、服务器地址与 SSH 端口"),
+            ReasonCode::AuthDenied => Some("用密码重新配置一次免密，或核对账号密钥"),
+            ReasonCode::HostKeyChanged => Some("请先核对服务器身份，不要直接连接"),
+            ReasonCode::ConnRefused => Some("核对 SSH 端口与服务器 sshd 服务"),
             ReasonCode::DnsFail => Some("检查主机名与 DNS"),
-            ReasonCode::KeyUnusable => Some("重新配免密或改密钥路径"),
-            ReasonCode::RemotePortBusy => Some("换一个云端端口"),
-            ReasonCode::ConnReset => Some("等自动重连；持续出现查服务器"),
-            ReasonCode::SpawnFail => Some("看日志；多为 ssh 路径或权限问题"),
-            ReasonCode::ExitUnknown => Some("看日志定位"),
-            ReasonCode::RetryStopped => Some("修好地址、网络或密钥后点「再试一次」"),
-            ReasonCode::SignalExit => Some("等自动重连；连续出现看日志"),
-            ReasonCode::ServerMissing => Some("重新选服务器"),
-            ReasonCode::ServiceMissing => Some("补回服务或删隧道"),
-            ReasonCode::ConfigUntrusted => Some("修好配置或恢复备份"),
+            ReasonCode::KeyUnusable => Some("重新配置免密或修改密钥路径"),
+            ReasonCode::RemotePortBusy => Some("更换一个云端端口"),
+            ReasonCode::ConnReset => Some("等待自动重连；若持续出现，请检查服务器"),
+            ReasonCode::SpawnFail => Some("查看日志；通常是 ssh 路径或权限问题"),
+            ReasonCode::ExitUnknown => Some("查看日志定位"),
+            ReasonCode::RetryStopped => Some("修复地址、网络或密钥后重新开始发布"),
+            ReasonCode::SignalExit => Some("等待自动重连；若连续出现，请查看日志"),
+            ReasonCode::ServerMissing => Some("重新选择服务器"),
+            ReasonCode::ServiceMissing => Some("恢复服务或删除隧道"),
+            ReasonCode::ConfigUntrusted => Some("修复配置或恢复备份"),
             ReasonCode::ConfigUnsupported => Some("升级应用"),
             ReasonCode::CleanupFail => Some("稍后重试"),
-            ReasonCode::StartFail => Some("看程序日志/路径"),
-            ReasonCode::CrashLoop => Some("修好程序再点启动"),
-            ReasonCode::Hung => Some("看护开着就等它重启"),
-            ReasonCode::Exited => Some("看护开着就等自动拉起"),
+            ReasonCode::StartFail => Some("查看程序日志/路径"),
+            ReasonCode::CrashLoop => Some("修复程序后点击启动"),
+            ReasonCode::Hung => Some("看护开启时会自动重启"),
+            ReasonCode::Exited => Some("看护开启时会自动启动"),
             ReasonCode::AutostartFail => Some("手动启动一次"),
-            ReasonCode::ConfigCorrupt => Some("修好或恢复 .bad 文件"),
+            ReasonCode::ConfigCorrupt => Some("修复或恢复 .bad 文件"),
             ReasonCode::Deleted => Some("撤销用 `cli undo last`"),
-            ReasonCode::DoctorRan => Some("有问题看每条的 advice"),
-            ReasonCode::ProtectionDrift => Some("重新贴云端配置"),
+            ReasonCode::DoctorRan => Some("有问题的条目请查看各自建议"),
+            ReasonCode::ProtectionDrift => Some("重新粘贴云端配置"),
             ReasonCode::ProtectionError => Some("检查服务器连接后重试"),
-            ReasonCode::TunnelDown | ReasonCode::ServiceDown => Some("见原因"),
+            ReasonCode::TunnelDown | ReasonCode::ServiceDown => Some("查看原因"),
             _ => None,
         }
     }
@@ -333,7 +333,7 @@ impl ReasonCode {
     /// 本机服务侧的人话原因 → 原因码（服务失败记录用）。
     /// 认不出来按 [`ReasonCode::ExitUnknown`] 兜底。
     pub fn from_service_text(text: &str) -> ReasonCode {
-        if text.contains("假死") {
+        if text.contains("无响应") {
             if text.contains("停止自动重试") {
                 return ReasonCode::CrashLoop;
             }
@@ -456,11 +456,11 @@ mod tests {
             ReasonCode::StartFail
         );
         assert_eq!(
-            ReasonCode::from_service_text("进程活着但端口不通（假死）；看护没开，可以点启动重试"),
+            ReasonCode::from_service_text("进程活着但端口不通（无响应）；看护没开，可以点启动重试"),
             ReasonCode::Hung
         );
         assert_eq!(
-            ReasonCode::from_service_text("连续假死，已经停止自动重试"),
+            ReasonCode::from_service_text("连续无响应，已经停止自动重试"),
             ReasonCode::CrashLoop
         );
         assert_eq!(
@@ -482,11 +482,11 @@ mod tests {
         assert_eq!(ReasonCode::RetryStopped.as_str(), "retryStopped");
         assert_eq!(
             ReasonCode::RetryStopped.text(),
-            "试了很多次还是没连上，已经停止自动重试；点「再试一次」重新开始"
+            "多次尝试仍无法连接，已停止自动重试；请先点击「暂停」，再点击「开始发布」重新尝试"
         );
         assert_eq!(
             ReasonCode::RetryStopped.advice(),
-            Some("修好地址、网络或密钥后点「再试一次」")
+            Some("修复地址、网络或密钥后重新开始发布")
         );
         assert_eq!(
             ReasonCode::from_code("retryStopped"),
@@ -498,11 +498,11 @@ mod tests {
     fn render_fills_placeholders() {
         assert_eq!(
             ReasonCode::SignalExit.render(&[("code", "1")]),
-            "连接程序意外退出了（退出码 1）：稍后会按计划重连"
+            "连接程序意外退出（退出码 1）：稍后将按计划重连"
         );
         assert_eq!(
             ReasonCode::DoctorRan.render(&[("pass", "7"), ("fail", "1"), ("skip", "2")]),
-            "自检完成：7 项通过、1 项有问题、2 项跳过"
+            "体检完成：7 项通过、1 项未通过、2 项跳过"
         );
         assert_eq!(
             ReasonCode::Deleted.render(&[("name", "旧站")]),
@@ -510,7 +510,7 @@ mod tests {
         );
         assert_eq!(
             ReasonCode::ProtectionDrift.render(&[("差异", "云端没开密码")]),
-            "云端设置和你的设置对不上：云端没开密码"
+            "云端设置与本地设置不一致：云端没开密码"
         );
         // 没给的占位符保持原样
         assert!(ReasonCode::StartFail.render(&[]).contains("{原因}"));

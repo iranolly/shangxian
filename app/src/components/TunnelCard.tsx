@@ -1,5 +1,5 @@
 // 一张发布隧道卡片（D4 §3.3 TunnelCard）：
-// 状态三件套 + 保护/预设徽标 + 运行时长/重试倒计时 + 网格信息 + 修复带 + 批量勾选。
+// 状态三件套 + 预设徽标 + 访问保护状态（点小牌就改）+ 运行时长/重试倒计时 + 网格信息 + 修复带 + 批量勾选。
 // 纪律：卡片只收稳定 props（id / 回调），实体字段自己从 store 订阅（React.memo 才有效）。
 
 import { memo } from "react";
@@ -9,10 +9,9 @@ import { actions } from "../store/actions";
 import { usePending } from "../store/pendingStore";
 import { useServer, useTunnel } from "../store/useStore";
 import { CardMenu } from "./card/CardMenu";
-import { CloudDriftBar } from "./card/CloudDriftBar";
 import { FixRibbon } from "./card/FixRibbon";
 import { PresetBadge } from "./card/PresetBadge";
-import { ProtectionBadge } from "./card/ProtectionBadge";
+import { ProtectionStatus } from "./ProtectionStatus";
 import { RetryLine } from "./card/RetryLine";
 import { UptimeLine } from "./card/UptimeLine";
 import { toggleSelect, useIsSelected } from "./list/listPrefs";
@@ -27,6 +26,7 @@ interface Props {
   onClone(id: string): void;
   onRemove(id: string): void;
   onOpenProtection?(id: string): void;
+  onAudit?(id: string): void;
   onGoToServices?(): void;
 }
 
@@ -39,6 +39,7 @@ function TunnelCardInner({
   onClone,
   onRemove,
   onOpenProtection,
+  onAudit,
   onGoToServices,
 }: Props) {
   const tunnel = useTunnel(tunnelId);
@@ -71,7 +72,6 @@ function TunnelCardInner({
         <span className={`status-word ${tunnel.status}`}>{meta.word}</span>
         <span className="service-name">{tunnel.name}</span>
         <span className="card-badges">
-          <ProtectionBadge tunnelId={tunnelId} onOpenProtection={onOpenProtection} />
           <PresetBadge preset={tunnel.preset} />
         </span>
         <span className="card-actions">
@@ -82,7 +82,7 @@ function TunnelCardInner({
               aria-busy={pending}
               onClick={() => actions.tunnelPause(tunnelId)}
             >
-              {pending ? "正在暂停…" : "暂停"}
+              {pending ? "暂停中…" : "暂停"}
             </button>
           ) : (
             <button
@@ -102,6 +102,7 @@ function TunnelCardInner({
             onLogs={onLogs}
             onClone={onClone}
             onOpenProtection={onOpenProtection ?? (() => undefined)}
+            onAudit={onAudit ?? (() => undefined)}
             onRemove={onRemove}
           />
         </span>
@@ -134,19 +135,23 @@ function TunnelCardInner({
         <div className="card-note">
           <span
             className="chip warn"
-            title="本机服务没在跑，外面访问会失败；点「去启动」把它开起来"
+            title="本机服务未运行，外部（访客）访问会失败；点击「前往启动」将其启动"
           >
-            ⚠ 本机服务没在跑
+            ⚠ 本机服务未运行
           </span>
           {onGoToServices ? (
             <button className="link-btn" onClick={onGoToServices}>
-              去启动
+              前往启动
             </button>
           ) : null}
         </div>
       ) : null}
 
-      <CloudDriftBar tunnelId={tunnelId} onOpenNginx={onNginx} />
+      <ProtectionStatus
+        tunnel={tunnel}
+        onOpenNginx={(t) => onNginx(t.id)}
+        onEdit={onOpenProtection ? (t) => onOpenProtection(t.id) : undefined}
+      />
 
       <FixRibbon tunnelId={tunnelId} onLogs={onLogs} onEditPort={onEdit} />
     </article>

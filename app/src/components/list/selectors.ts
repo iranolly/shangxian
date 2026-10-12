@@ -2,7 +2,7 @@
 // 纯计算都在这里；页面只订阅结果（结构共享保证不必要不重渲染）。
 
 import type { ServiceView, TunnelView } from "../../api";
-import { SERVICE_ORDER, TUNNEL_ORDER } from "../../copy/status";
+import { TUNNEL_ORDER } from "../../copy/status";
 import type { AppState } from "../../store/snapshotStore";
 import {
   getServicePrefs,
@@ -10,8 +10,10 @@ import {
   SERVICE_FILTERS,
   TUNNEL_FILTERS,
   type ServiceListPrefs,
+  type TunnelFilterKey,
   type TunnelListPrefs,
 } from "./listPrefs";
+import { accessFlags, protectionPending } from "../ProtectionStatus";
 
 interface TunnelGroup {
   serverId: string;
@@ -112,17 +114,30 @@ function sortServices(list: ServiceView[], prefs: ServiceListPrefs): ServiceView
         return d !== 0 ? d : a.id < b.id ? -1 : 1;
       }
       default: {
-        const d = SERVICE_ORDER[a.status] - SERVICE_ORDER[b.status];
-        return d !== 0 ? d : a.id < b.id ? -1 : 1;
+        // 起不来（failed）的排前面；其余保持列表原顺序。
+        // 不按运行状态排：端口探测每 2 秒一次、状态一直在变，排序跟着变会让卡片跳来跳去。
+        const af = a.status === "failed" ? 0 : 1;
+        const bf = b.status === "failed" ? 0 : 1;
+        return af - bf;
       }
     }
   });
   return out;
 }
 
+/** 一个筛选键对一条隧道算不算命中：状态直接比；另两个看访问保护。 */
+function tunnelFilterKeyMatches(tunnel: TunnelView, key: TunnelFilterKey): boolean {
+  if (key === "unprotected") {
+    const { password, ip } = accessFlags(tunnel.access);
+    return !password && !ip;
+  }
+  if (key === "protectionPending") return protectionPending(tunnel);
+  return tunnel.status === key;
+}
+
 function tunnelStatusMatches(tunnel: TunnelView, prefs: TunnelListPrefs): boolean {
   if (prefs.status === "all") return true;
-  return prefs.status.includes(tunnel.status);
+  return prefs.status.some((key) => tunnelFilterKeyMatches(tunnel, key));
 }
 
 function serviceStatusMatches(service: ServiceView, prefs: ServiceListPrefs): boolean {
@@ -186,16 +201,19 @@ export function selectTunnelGroups(state: AppState): TunnelGroup[] {
 }
 
 /**
- * 筛选 chips 上的计数：只受搜索词影响，不受状态筛选影响
+ * 筛选 chips 上的计数：只受搜索词影响，不受筛选本身影响
  * （否则选中一个 chip 后其它 chip 会全部变 0，没法切换）。
  * 顺序与 TUNNEL_FILTERS 一致。
  */
 export function selectTunnelStatusCounts(state: AppState): number[] {
   const prefs = getTunnelPrefs();
   const base = state.tunnels.filter((t) => matchesTunnel(state, t, prefs.query));
-  return TUNNEL_FILTERS.map((f) =>
-    f.value === "all" ? base.length : base.filter((t) => t.status === f.value).length,
-  );
+  return TUNNEL_FILTERS.map((f) => {
+    const value = f.value;
+    return value === "all"
+      ? base.length
+      : base.filter((t) => tunnelFilterKeyMatches(t, value)).length;
+  });
 }
 
 export function selectServiceIds(state: AppState): string[] {

@@ -539,16 +539,15 @@ cli tunnel edit <隧道id> [--name X] [--remote-port N] [--url X]
 
 > 字段含义：`confFound` = 云端站点配置找到了；`passwordOn` = 站点顶层有 `auth_basic` 且值不是 `off`（要密码）；`ipOn` = 站点顶层有 `deny all;`（IP 白名单开着）；`allowIps` = 实际读到的白名单 IP；`htpasswdExists` = 密码文件在。**读的是云端实际状态，不是应用里的设置**——不一致就按「重新贴云端配置」处理。
 
-#### `cli tunnel start / stop / restart / remove`
+#### `cli tunnel start / stop / remove`
 
 | 命令 | 作用 | 人话输出 |
 |---|---|---|
 | `tunnel start <id>` | 开始发布 | `✓ 已开始发布「tun-4d5e6f」` |
 | `tunnel stop <id>` | 暂停发布（别人立刻访问不了；**要确认**） | `✓ 已暂停「comfyui 发布」（tun-4d5e6f）`；非交互必须加 `--yes`，否则拒绝（退出码 1） |
-| `tunnel restart <id>` | 立刻重连（顺带恢复发布） | `✓ 已让「tun-4d5e6f」重连` |
 | `tunnel remove <id>` | 删除隧道（配置一起删；**要确认**） | `✓ 已删除隧道「comfyui 发布」（tun-4d5e6f）`；非交互必须加 `--yes` |
 
-四个命令的 `--json` 都是：`{ "ok": true, "result": { "ok": true } }`（暂停/删除在交互终端里选「不」时是 `{ "ok": true, "result": { "cancelled": true } }`、退出码 0）。
+三个命令的 `--json` 都是：`{ "ok": true, "result": { "ok": true } }`（暂停/删除在交互终端里选「不」时是 `{ "ok": true, "result": { "cancelled": true } }`、退出码 0）。
 
 ### 4.4 云端服务器：`cli server ...`
 
@@ -915,7 +914,6 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 | `remove_tunnel` | 删除发布隧道（返回撤销令牌） | `{id}` |
 | `tunnel_start` | 开始发布 | `{id}` |
 | `tunnel_stop` | 暂停发布 | `{id}` |
-| `tunnel_restart` | 立刻重连 | `{id}` |
 | `forget_host_key` | 清掉这台服务器的 SSH 指纹记录（服务器重装过时用） | `{id}`（隧道 id） |
 | `get_logs` | 读隧道的日志尾部 | `{id, lines?}`（默认 200） |
 
@@ -1456,7 +1454,7 @@ cli doctor                     # 一步到位看九项；--deep 才连云端和�
 | `remote port forwarding failed` | 云端端口被占；应用会尝试精确清理残留 sshd 会话后重连 |
 | `serviceOk: false` | 问题在本机：服务没在跑（先解决它，隧道没错） |
 | `reason` 有值 | 直接读这句人话；旁边 `reasonCode` 是机器码（见 8.7） |
-| `retryInSecs` 有值 | 正在退避重试，别干扰；等它自己连或点 `tunnel restart` |
+| `retryInSecs` 有值 | 正在退避重试，别干扰；等它自己连，实在不想等就先停后启（`tunnel stop <id> --yes` → `tunnel start <id>`） |
 
 ### 配方 3：给隧道加 / 换访问密码（也可以加 IP 白名单，两个能一起开）
 
@@ -1506,7 +1504,7 @@ cli servers --json        # keyPath 应变成 ...\keys\<服务器id>_ed25519
 
 - 密码从 stdin 进，**不要**写成参数。
 - 服务器不允许密码登录时会返回人话原因；不要重复硬试，让用户手动配密钥。
-- 配好后，新密钥对**之后启动**的隧道生效；已经在跑的隧道不会自动换密钥，需要 `cli tunnel restart <隧道id>`（界面：隧道卡片 ⋯ → 立刻重连）才会用上新密钥。
+- 配好后，新密钥对**之后启动**的隧道生效；已经在跑的隧道不会自动换密钥，需要先停再开才会用上新密钥（界面：点卡片上的「暂停」，再点「开始发布」；命令行：`cli tunnel stop <隧道id> --yes`，再 `cli tunnel start <隧道id>`）。
 
 ### 配方 5：换服务器
 

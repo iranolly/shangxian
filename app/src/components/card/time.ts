@@ -38,7 +38,7 @@ function startOfDay(at: number): number {
 
 /** "今天 15:30" / "昨天 15:30" / "10 月 12 日 15:30" */
 export function formatDay(at: number): string {
-  if (!Number.isFinite(at) || at <= 0) return "还没记录";
+  if (!Number.isFinite(at) || at <= 0) return "尚无记录";
   const today = startOfDay(Date.now());
   const day = startOfDay(at);
   if (day === today) return `今天 ${clock(at)}`;

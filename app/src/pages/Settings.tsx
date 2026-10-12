@@ -55,7 +55,7 @@ const DATA_DIR_KIND_WORD: Record<string, string> = {
   preview: "浏览器预览",
 };
 
-const UNTRUSTED_HINT = "配置文件读不出来，先修好再改设置";
+const UNTRUSTED_HINT = "配置文件无法读取，请先修复后再修改设置";
 
 const TRASH_TYPE_WORD: Record<TrashItem["type"], string> = {
   tunnel: "隧道",
@@ -69,7 +69,7 @@ function countdownText(expiresAt: number): string {
   if (left <= 0) return "已过期";
   const mins = Math.floor(left / 60000);
   const secs = Math.floor((left % 60000) / 1000);
-  return mins > 0 ? `剩 ${mins} 分 ${secs} 秒` : `剩 ${secs} 秒`;
+  return mins > 0 ? `剩余 ${mins} 分 ${secs} 秒` : `剩余 ${secs} 秒`;
 }
 
 /** 两份 settings 是否完全一样（快照每次都会新建对象，得比值再决定要不要刷草稿） */
@@ -188,7 +188,7 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
       setTrash(result.items ?? []);
       setTrashError("");
     } catch {
-      setTrashError("读不到「最近删除」列表；删掉的东西不受影响。");
+      setTrashError("无法读取「最近删除」列表；已删除的内容不受影响。");
     }
   }, []);
 
@@ -301,7 +301,7 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
       <header className="page-head">
         <div>
           <h1 className="page-title">设置</h1>
-          <p className="page-sub">刷新频率、免打扰、数据目录都在这儿。</p>
+          <p className="page-sub">刷新频率、免打扰时段、数据目录都在这里。</p>
         </div>
       </header>
       <div className="service-list">
@@ -333,7 +333,7 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
           <div className="server-card">
             <div className="server-main">
               <div className="server-name">开机自动启动</div>
-              <div className="server-meta hint">登录后在托盘里悄悄运行。</div>
+              <div className="server-meta hint">登录后在托盘后台运行。</div>
             </div>
             <button
               className={autostart ? "btn btn-ghost btn-sm" : "btn btn-primary btn-sm"}
@@ -347,8 +347,8 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
         <article className="card">
           <div className="server-card">
             <div className="server-main">
-              <div className="server-name">掉线提醒</div>
-              <div className="server-meta hint">掉线超过 3 分钟或恢复时弹通知。</div>
+              <div className="server-name">断开提醒</div>
+              <div className="server-meta hint">断开超过 3 分钟或恢复连接时发送通知。</div>
             </div>
             <span className="row-actions">
               {notify && (
@@ -376,9 +376,9 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
             <div className="server-main">
               <div className="server-name">
                 刷新频率
-                <InfoTip text="只影响界面多久看一次状态，不影响后台看护。切到别的窗口会暂停刷新，回来立刻刷新。" />
+                <InfoTip text="只影响界面的状态查看频率，不影响后台看护。切换到其他窗口会暂停刷新，返回后立即刷新。" />
               </div>
-              <div className="server-meta hint">多久看一次状态，不影响后台看护。</div>
+              <div className="server-meta hint">界面查看状态的频率，不影响后台看护。</div>
             </div>
             <span className="row-actions">
               {savedNote("refresh")}
@@ -408,8 +408,8 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
         <article className="card">
           <div className="server-card">
             <div className="server-main">
-              <div className="server-name">启动时查更新</div>
-              <div className="server-meta hint">启动 30 秒后看有没有新版本。</div>
+              <div className="server-name">启动时检查更新</div>
+              <div className="server-meta hint">启动 30 秒后检查是否有新版本。</div>
             </div>
             <span className="row-actions">
               {savedNote("updateCheck")}
@@ -435,12 +435,12 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
           <div className="server-card">
             <div className="server-main">
               <div className="server-name">免打扰时段</div>
-              <div className="server-meta hint" title="这段时间里通知照记，但不弹系统提醒；回到应用里还能看到。">
-                这段时间不弹系统提醒，通知照记。
+              <div className="server-meta hint" title="这段时间内通知仍会记录，但不发送系统提醒；返回应用后仍可查看。">
+                这段时间内不发送系统提醒，通知仍会记录。
               </div>
               <p className="settings-note hint">
-                {draft.quietHours.enabled ? "到点自动安静，次日恢复。" : "现在全天都能弹通知。"}
-                {quietSame ? "开始和结束一样，等于没设。" : ""}
+                {draft.quietHours.enabled ? "到点自动进入免打扰，次日恢复。" : "当前全天都会发送通知。"}
+                {quietSame ? "开始与结束时间相同，等于未设置。" : ""}
               </p>
             </div>
             <span className="row-actions">
@@ -508,19 +508,19 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
                 数据目录 <span className="env-meta">（{dirKindWord}）</span>
               </div>
               <div className="server-meta mono hint">
-                {dirInfo?.path || app.dataDir || "还不确定"}
+                {dirInfo?.path || app.dataDir || "尚未确定"}
               </div>
-              <div className="server-meta hint" title="搬家时整个文件夹拷走就行">
+              <div className="server-meta hint" title="搬家时整个文件夹拷走即可">
                 配置、日志、密钥都在这里。
               </div>
               {dirKind === "portable" && (
-                <p className="settings-note hint">便携模式：数据在程序旁边。</p>
+                <p className="settings-note hint">便携模式：数据保存在程序目录旁。</p>
               )}
             </div>
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => {
-                void openDataDir().catch(() => toast.error("打不开数据目录，手动去文件夹里看看吧"));
+                void openDataDir().catch(() => toast.error("无法打开数据目录，请手动到数据文件夹中查看。"));
               }}
             >
               打开
@@ -535,12 +535,12 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
               <div className="server-meta hint">删除后的 10 分钟内可以在这里恢复。</div>
               {trashError ? <p className="settings-note hint">{trashError}</p> : null}
               {trash === null ? (
-                <p className="settings-note hint">正在读…</p>
+                <p className="settings-note hint">读取中…</p>
               ) : trash.length === 0 ? (
                 <p className="settings-note hint">没有可撤销的删除</p>
               ) : (
                 <>
-                  <p className="settings-note hint">点「恢复」就能找回来。</p>
+                  <p className="settings-note hint">点击「恢复」即可找回。</p>
                   {trash.map((item) => {
                     const expired = item.expiresAt <= Date.now();
                     return (
@@ -586,9 +586,9 @@ export function SettingsPage({ intent, onIntentDone }: Props = {}) {
               <div className="server-name">体检</div>
               <div
                 className="server-meta hint"
-                title="检查应用、网络、服务器、隧道、证书，哪里不对告诉你怎么办。"
+                title="检查应用、网络、服务器、隧道、证书，发现问题会给出处理建议。"
               >
-                一键检查，哪里不对告诉你怎么办。
+                一键检查，发现问题会给出处理建议。
               </div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => setDoctorOpen(true)}>

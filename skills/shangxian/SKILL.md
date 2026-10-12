@@ -69,7 +69,7 @@ echo "$CLI"
 "$CLI" logs <id> --archive 1        # 看上一份轮转备份（0/1/2）
 "$CLI" nginx <隧道id>               # 生成 nginx 片段 + 密码文件内容（给人贴到云端面板）
 "$CLI" tunnel check <隧道id> --json  # 读云端实际生效的访问保护（和「检查云端」同路，最长约 30 秒；对照 tunnels --json 里的 access 看齐不齐）
-"$CLI" tunnel start|stop|restart <隧道id>    # 开始发布 / 暂停 / 立刻重连
+"$CLI" tunnel start|stop <隧道id>            # 开始发布 / 暂停
 "$CLI" tunnel stop|remove <隧道id> --yes     # 非交互环境必须带 --yes（删除还有 service/server remove）
 "$CLI" tunnel forget-key <隧道id> --yes      # 服务器重装过、指纹变了才用（TOFU 重信任）
 "$CLI" service start|stop|restart <服务id>   # 停止默认只停应用自己启动的；配了启动方式的服务，不是它启动的才加 --force（只监控的服务会被直接拒绝）
@@ -184,7 +184,7 @@ echo '新密码' | "$CLI" server hash-password <服务器id>     # → $2y$12$xx
 echo '服务器登录密码' | "$CLI" server setup-key <服务器id>
 ```
 
-配好后，**已经在跑**的隧道要 `tunnel restart <隧道id>` 才会用上新密钥。
+配好后，**已经在跑**的隧道要停一下再开（`tunnel stop <隧道id> --yes` → `tunnel start <隧道id>`）才会用上新密钥。
 
 ### 7. 换服务器
 

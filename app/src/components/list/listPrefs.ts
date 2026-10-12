@@ -9,13 +9,16 @@ import type { ServiceStatus, TunnelStatus } from "../../copy/status";
 
 export type ListPage = "tunnels" | "services";
 
+/** 隧道筛选键：状态之外，再加两个跟访问保护有关的（列表工具条用） */
+export type TunnelFilterKey = TunnelStatus | "unprotected" | "protectionPending";
+
 type TunnelSort = "default" | "name" | "changed" | "port" | "server";
 type ServiceSort = "default" | "name" | "port";
 
 export interface TunnelListPrefs {
   query: string;
   /** 多选 chips，OR 语义；"all" = 全选 */
-  status: TunnelStatus[] | "all";
+  status: TunnelFilterKey[] | "all";
   sort: TunnelSort;
   groupByServer: boolean;
   collapsedServers: string[];
@@ -28,35 +31,37 @@ export interface ServiceListPrefs {
 }
 
 /** 筛选 chips 的顺序与文案（D4 §4.4 按钮 / 筛选 chips） */
-export const TUNNEL_FILTERS: { value: TunnelStatus | "all"; label: string }[] = [
+export const TUNNEL_FILTERS: { value: TunnelFilterKey | "all"; label: string }[] = [
   { value: "all", label: "全部" },
-  { value: "running", label: "正在发布" },
-  { value: "disconnected", label: "掉线重连中" },
-  { value: "error", label: "出错" },
+  { value: "running", label: "发布中" },
+  { value: "disconnected", label: "重连中" },
+  { value: "error", label: "发布失败" },
   { value: "paused", label: "已暂停" },
   { value: "connecting", label: "连接中" },
+  { value: "unprotected", label: "无访问保护" },
+  { value: "protectionPending", label: "待核对" },
 ];
 
 export const SERVICE_FILTERS: { value: ServiceStatus | "all"; label: string }[] = [
   { value: "all", label: "全部" },
-  { value: "running", label: "在跑" },
-  { value: "stopped", label: "没启动" },
-  { value: "starting", label: "正在启动" },
-  { value: "not_listening", label: "端口不通" },
-  { value: "failed", label: "起不来" },
+  { value: "running", label: "运行中" },
+  { value: "stopped", label: "未启动" },
+  { value: "starting", label: "启动中" },
+  { value: "not_listening", label: "端口未监听" },
+  { value: "failed", label: "启动失败" },
 ];
 
 export const TUNNEL_SORTS: { value: TunnelSort; label: string }[] = [
-  { value: "default", label: "默认排序（有问题的排前面）" },
-  { value: "name", label: "按名字" },
+  { value: "default", label: "默认排序（异常项优先）" },
+  { value: "name", label: "按名称" },
   { value: "port", label: "按云端端口" },
   { value: "server", label: "按服务器" },
   { value: "changed", label: "最近有变化" },
 ];
 
 export const SERVICE_SORTS: { value: ServiceSort; label: string }[] = [
-  { value: "default", label: "默认排序（有问题的排前面）" },
-  { value: "name", label: "按名字" },
+  { value: "default", label: "默认排序（启动失败项优先）" },
+  { value: "name", label: "按名称" },
   { value: "port", label: "按本机端口" },
 ];
 
@@ -70,6 +75,7 @@ const TUNNEL_STATUS_VALUES: TunnelStatus[] = [
   "error",
   "paused",
 ];
+const TUNNEL_EXTRA_FILTER_VALUES = ["unprotected", "protectionPending"] as const;
 const SERVICE_STATUS_VALUES: ServiceStatus[] = [
   "stopped",
   "starting",
@@ -94,6 +100,14 @@ const DEFAULT_SERVICE_PREFS: ServiceListPrefs = {
 
 function isTunnelStatus(value: unknown): value is TunnelStatus {
   return typeof value === "string" && (TUNNEL_STATUS_VALUES as string[]).includes(value);
+}
+
+function isTunnelFilterKey(value: unknown): value is TunnelFilterKey {
+  return (
+    isTunnelStatus(value) ||
+    (typeof value === "string" &&
+      (TUNNEL_EXTRA_FILTER_VALUES as readonly string[]).includes(value))
+  );
 }
 
 function isServiceStatus(value: unknown): value is ServiceStatus {
@@ -132,7 +146,7 @@ function loadTunnelPrefs(): TunnelListPrefs {
     raw.status === "all"
       ? "all"
       : Array.isArray(raw.status)
-        ? raw.status.filter(isTunnelStatus)
+        ? raw.status.filter(isTunnelFilterKey)
         : "all";
   return {
     query: typeof raw.query === "string" ? raw.query : "",

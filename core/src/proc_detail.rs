@@ -237,43 +237,43 @@ fn resolve_owner(owners: &[u32], expected_pid: Option<u32>) -> (Option<u32>, boo
 fn warning_text(code: &str) -> &'static str {
     match code {
         "sensitiveArgs" => {
-            "启动参数里疑似有密码或密钥，请确认要不要填进配置（配置是明文保存的）"
+            "启动参数中疑似包含密码或密钥，请确认是否需要填入配置（配置以明文保存）"
         }
         "permissionDenied" => {
-            "读不到这个进程的信息（可能是受保护的系统进程，或用管理员身份启动的进程）"
+            "无法读取该进程的信息（可能是受保护的系统进程，或以管理员身份启动的进程）"
         }
         "systemOrElevated" => {
-            "这是 Windows 系统目录里的程序，权限不够，读不到它的命令行"
+            "这是 Windows 系统目录中的程序，权限不足，无法读取其命令行"
         }
-        "processGone" => "这个端口上已经看不到监听进程了（它可能刚退出）",
+        "processGone" => "该端口上已无法看到监听进程（可能刚退出）",
         "portOwnerChanged" => {
-            "这个端口现在的主人不是你点选的那个进程，我没有覆盖你填的内容，请核对后再用"
+            "该端口当前的占用进程不是所选进程，未覆盖已填写的内容，请核对后再使用"
         }
-        "multipleOwners" => "这个端口同时被多个进程监听，分不清该读哪个，已跳过自动填充",
-        "workdirDenied" => "读不到这个进程的工作目录（权限不够）",
+        "multipleOwners" => "该端口同时被多个进程监听，无法确定应读取哪一个，已跳过自动填充",
+        "workdirDenied" => "无法读取该进程的工作目录（权限不足）",
         "workdirUnread" => {
-            "没读到这个进程的工作目录（可能它刚启动、刚退出，或系统没按常规返回），没有帮你填"
+            "未能读取该进程的工作目录（可能刚启动、刚退出，或系统未按常规返回），未自动填充"
         }
-        "workdirNotExist" => "读到的工作目录在本机已经不存在了，没有帮你填",
+        "workdirNotExist" => "读取到的工作目录在本机已不存在，未自动填充",
         "readTimeout" => {
-            "没能及时读到这个进程的信息（它可能卡住了，或系统太忙），这次没有读到参数和工作目录"
+            "未能及时读取该进程的信息（可能已卡住，或系统繁忙），本次未读取到参数和工作目录"
         }
-        "unsupported" => "系统没按常规返回这个进程的命令行，已改用兼容方式读取",
+        "unsupported" => "系统未按常规返回该进程的命令行，已改用兼容方式读取",
         "controlChars" => {
-            "参数里含换行/制表符，填进一行配置会变形，没有帮你填；原始命令行可以在下面查看"
+            "参数包含换行/制表符，填入一行配置会变形，未自动填充；可在下方查看原始命令行"
         }
-        "tooLong" => "参数太长了（超过 8192 个字符），没有帮你填；原始命令行可以在下面查看",
+        "tooLong" => "参数过长（超过 8192 个字符），未自动填充；可在下方查看原始命令行",
         "parentShell" => {
-            "这个进程是命令行窗口（cmd/PowerShell/bash）拉起来的，环境变量可能带不过来；建议把启动程序填成脚本本身"
+            "该进程由命令行窗口（cmd/PowerShell/bash）启动，环境变量可能无法传递；建议将启动程序填写为脚本本身"
         }
         "wrapperHint" => {
-            "这看起来是容器/代理类进程（docker/wsl/cloudflared 等），接管它的参数没有意义，已跳过自动填充"
+            "这似乎是容器/代理类进程（docker/wsl/cloudflared 等），接管其参数没有意义，已跳过自动填充"
         }
-        "exeNotFound" => "程序路径在本机找不到（可能已经被删掉或移动了）",
+        "exeNotFound" => "程序路径在本机无法找到（可能已被删除或移动）",
         "relativeArgNoWorkdir" => {
-            "参数里有看起来像相对路径的内容，但没读到工作目录，直接照填可能启动不起来"
+            "参数中似乎包含相对路径，但未读取到工作目录，直接填入可能导致启动失败"
         }
-        _ => "读取进程信息时出了问题",
+        _ => "读取进程信息时出错",
     }
 }
 
@@ -983,13 +983,13 @@ mod tests {
         assert_eq!(workdir_warning_code(true), "workdirDenied");
         assert_eq!(
             warning_text(workdir_warning_code(true)),
-            "读不到这个进程的工作目录（权限不够）"
+            "无法读取该进程的工作目录（权限不足）"
         );
         assert_eq!(workdir_warning_code(false), "workdirUnread");
         let neutral = warning_text(workdir_warning_code(false));
         assert!(
-            !neutral.contains("权限不够"),
-            "非权限原因不能用「权限不够」：{neutral}"
+            !neutral.contains("权限不足"),
+            "非权限原因不能用「权限不足」：{neutral}"
         );
     }
 
@@ -1015,7 +1015,7 @@ mod tests {
             "relativeArgNoWorkdir",
         ] {
             let text = warning_text(code);
-            assert!(!text.is_empty() && text != "读取进程信息时出了问题", "{code}");
+            assert!(!text.is_empty() && text != "读取进程信息时出错", "{code}");
         }
     }
 

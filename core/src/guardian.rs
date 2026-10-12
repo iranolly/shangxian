@@ -415,7 +415,7 @@ impl Guardian {
                             self.reporter.report(
                                 LogLevel::Warn,
                                 TAG_TUNNEL,
-                                &format!("隧道 {id} 的远端清理没成功：{message}"),
+                                &format!("隧道 {id} 的远端清理失败：{message}"),
                             );
                         }
                     }
@@ -696,7 +696,7 @@ impl Guardian {
                     let reason = check
                         .error
                         .clone()
-                        .unwrap_or_else(|| "（没写原因）".to_string());
+                        .unwrap_or_else(|| "（未写明原因）".to_string());
                     let message = ReasonCode::ProtectionError.render(&[("原因", &reason)]);
                     self.append_protection_event(
                         &id,
@@ -1248,11 +1248,11 @@ impl Guardian {
     /// 免打扰时段（设置页写；时间格式错 / 起止相同给一句人话）。
     pub fn set_notify_quiet(&mut self, quiet: QuietHours) -> Result<(), String> {
         if config::parse_hhmm(&quiet.start).is_none() || config::parse_hhmm(&quiet.end).is_none() {
-            return Err("静音时段要写 24 小时制的时间，例如 22:00".to_string());
+            return Err("免打扰时段须填写 24 小时制时间，例如 22:00".to_string());
         }
         if quiet.start == quiet.end {
             return Err(
-                "静音时段的开始和结束不能是同一个时间；不想静音就把开关关掉".to_string(),
+                "免打扰时段的开始和结束不能相同；如不需要免打扰，请关闭该开关".to_string(),
             );
         }
         let mut next = self.config.clone();
@@ -1319,7 +1319,7 @@ impl Guardian {
             .any(|s| s.local_port == input.local_port && Some(s.id.as_str()) != input.id.as_deref())
         {
             return Err(format!(
-                "本机端口 {} 已经被另一台服务用了",
+                "本机端口 {} 已被另一台服务占用",
                 input.local_port
             ));
         }
@@ -1328,7 +1328,7 @@ impl Guardian {
         // 没有启动程序就没有「看护」和「开机自启」可言（前端也会同步禁用这两个开关）
         if launch.is_none() && (input.watch || input.autostart) {
             return Err(
-                "这台服务没填启动程序（只能看状态），开不了看护或开机自启；先到编辑界面把启动程序填上"
+                "这台服务未填写启动程序（只能查看状态），无法开启看护或开机自启；请先在编辑界面填写启动程序"
                     .into(),
             );
         }
@@ -1377,7 +1377,7 @@ impl Guardian {
         if !used.is_empty() {
             let names: Vec<String> = used.iter().map(|t| format!("「{}」", t.name)).collect();
             return Err(format!(
-                "还有 {} 条隧道在用它（{}），先把这些隧道删掉",
+                "仍有 {} 条隧道在使用它（{}），请先删除这些隧道",
                 used.len(),
                 names.join("、")
             ));
@@ -1422,7 +1422,7 @@ impl Guardian {
             .service(id)
             .ok_or_else(|| format!("找不到服务：{id}"))?;
         if svc.launch.is_none() {
-            return Err("这台服务没有配置启动方式（只能看状态，不能帮你启动）".into());
+            return Err("这台服务未配置启动方式（只能查看状态，无法启动）".into());
         }
         self.sync_local();
         if let Some(runner) = self.local.get_mut(id) {
@@ -1471,11 +1471,8 @@ impl Guardian {
         let own_pid = self.local.get(id).and_then(|r| r.pid());
         let own_tree = own_pid.map(process_tree).unwrap_or_default();
         if let Some(runner) = self.local.get_mut(id) {
+            // stop_now 里已经立即把探测定论成 down（不等防抖）
             runner.stop_now();
-            // 用户明确停了：立刻把探测结果清成 down，界面不能因为探测防抖还显示「在跑」
-            runner.probe().feed(crate::probe::ProbeOutcome::Down {
-                error: "你刚点了停止".to_string(),
-            });
         }
 
         // 2) 有自家进程时轮询等端口清空；仍在监听、又不在自家树里的，才是外部进程。
@@ -1494,7 +1491,7 @@ impl Guardian {
             .collect();
         if !own_left.is_empty() {
             return Err(format!(
-                "没能停干净：端口 {port} 还被这台服务自己的进程占着（PID {}），可能子进程还没退掉；请稍等几秒再点停止，或到任务管理器里结束这些进程",
+                "未能完全停止：端口 {port} 仍被这台服务自己的进程占用（PID {}），可能子进程尚未退出；请稍候再点击停止，或在任务管理器中结束这些进程",
                 join_pids(&own_left)
             ));
         }
@@ -1521,7 +1518,7 @@ impl Guardian {
                 })
                 .unwrap_or_else(|| join_pids(&owners));
             return Err(format!(
-                "这台服务没配启动方式，是你自己开的程序，我不会去动它（端口上现在是 {who}）；想接管它，先在编辑界面点端口把启动方式补全，再来停止"
+                "这台服务未配置启动方式，该程序不是本应用启动的，不会停止它（端口当前由 {who} 占用）；如需接管，请先在编辑界面点击端口并补全启动方式，再执行停止"
             ));
         };
 
@@ -1530,7 +1527,7 @@ impl Guardian {
             Some(pid) if owners.contains(&pid) => pid,
             Some(pid) => {
                 return Err(format!(
-                    "这台服务的端口 {port} 现在的主人已经不是 PID {pid} 了（可能刚退出或被换了），我没有结束任何进程，请重新确认"
+                    "这台服务的端口 {port} 当前占用进程已不是 PID {pid}（可能刚退出或被替换），未结束任何进程，请重新确认"
                 ));
             }
             None => pick_unique_owner(&owners, Some(configured))?,
@@ -1545,11 +1542,11 @@ impl Guardian {
 
         // 程序路径必须和配置一致（看护在上面第 1 步已经松手，不会被拉起来）
         let fresh_exe = crate::local_ports::process_path(target).ok_or_else(|| {
-            format!("读不到 PID {target} 的程序路径（它可能刚退出），没有结束它")
+            format!("无法读取 PID {target} 的程序路径（可能刚退出），未结束该进程")
         })?;
         if !same_exe(configured, &fresh_exe) {
             return Err(format!(
-                "为了安全没有结束 PID {target}：它现在运行的是「{fresh_exe}」，不是这台服务配置的「{configured}」"
+                "为避免误操作，未结束 PID {target}：其当前运行的程序是「{fresh_exe}」，不是这台服务配置的「{configured}」"
             ));
         }
 
@@ -1567,7 +1564,7 @@ impl Guardian {
             .ok_or_else(|| format!("找不到服务：{id}"))?;
         if watch && svc.launch.is_none() {
             return Err(
-                "这台服务没填启动程序（只能看状态），开不了看护；先到编辑界面把启动程序填上"
+                "这台服务未填写启动程序（只能查看状态），无法开启看护；请先在编辑界面填写启动程序"
                     .into(),
             );
         }
@@ -1587,7 +1584,7 @@ impl Guardian {
             .ok_or_else(|| format!("找不到服务：{id}"))?;
         if autostart && svc.launch.is_none() {
             return Err(
-                "这台服务没填启动程序（只能看状态），开不了开机自启；先到编辑界面把启动程序填上"
+                "这台服务未填写启动程序（只能查看状态），无法开启开机自启；请先在编辑界面填写启动程序"
                     .into(),
             );
         }
@@ -1639,7 +1636,7 @@ impl Guardian {
             if let Some(runner) = self.local.get_mut(&id) {
                 runner.stop_now();
                 runner.probe().feed(crate::probe::ProbeOutcome::Down {
-                    error: "退出时按你的要求停了".to_string(),
+                    error: "退出时已按要求停止".to_string(),
                 });
             }
 
@@ -1760,7 +1757,7 @@ impl Guardian {
             .contains(&input.remote_port)
         {
             return Err(format!(
-                "云端端口 {} 已经被这个服务器上的其他隧道用了",
+                "云端端口 {} 已被这个服务器上的其他隧道占用",
                 input.remote_port
             ));
         }
@@ -1770,12 +1767,12 @@ impl Guardian {
         if input.access.iter().any(|a| a == "password")
             && clean_optional(input.access_hash.clone()).is_none()
         {
-            return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
+            return Err("该隧道已启用密码保护，请先设置访问密码".into());
         }
         if input.access.iter().any(|a| a == "ip")
             && clean_optional(input.access_detail.clone()).is_none()
         {
-            return Err("这条隧道选了「只允许指定 IP」，请先把允许访问的 IP 填上".into());
+            return Err("该隧道已启用「只允许指定 IP」，请先填写允许访问的 IP".into());
         }
 
         let id = config::new_id("tun");
@@ -1835,7 +1832,7 @@ impl Guardian {
             .contains(&input.remote_port)
         {
             return Err(format!(
-                "云端端口 {} 已经被这个服务器上的其他隧道用了",
+                "云端端口 {} 已被这个服务器上的其他隧道占用",
                 input.remote_port
             ));
         }
@@ -1855,10 +1852,10 @@ impl Guardian {
             None
         };
         if wants_password && new_hash.is_none() && old_hash.is_none() {
-            return Err("这条隧道选了「要密码才能进」，请先设置访问密码".into());
+            return Err("该隧道已启用密码保护，请先设置访问密码".into());
         }
         if wants_ip && final_detail.is_none() {
-            return Err("这条隧道选了「只允许指定 IP」，请先把允许访问的 IP 填上".into());
+            return Err("该隧道已启用「只允许指定 IP」，请先填写允许访问的 IP".into());
         }
 
         // 保护内容跟着「最终 access」走：
@@ -1917,7 +1914,7 @@ impl Guardian {
         self.commit_config(next)
     }
 
-    /// 立刻重连：停掉当前隧道并重新开始（配置里顺带恢复发布）。
+    /// 重启这条隧道：停掉当前隧道并重新开始（配置里顺带恢复发布）。forget_host_key 内部用。
     pub fn restart(&mut self, id: &str) -> Result<(), String> {
         let mut next = self.config.clone();
         {
@@ -2132,7 +2129,7 @@ impl Guardian {
     /// 删除一台服务器（还有隧道挂着就拦住；返回可撤销令牌）。
     pub fn delete_server(&mut self, id: &str) -> Result<DeleteResult, String> {
         if self.config.tunnels.iter().any(|t| t.server_id == id) {
-            return Err("还有隧道挂在这台服务器上，先处理它们".into());
+            return Err("仍有隧道使用这台服务器，请先处理这些隧道".into());
         }
         let (name, item) = {
             let server = self
@@ -2186,7 +2183,7 @@ impl Guardian {
             .servers
             .iter()
             .find(|s| s.id == tun.server_id)
-            .ok_or_else(|| "找不到这条隧道挂的云端服务器".to_string())?;
+            .ok_or_else(|| "找不到这条隧道关联的云端服务器".to_string())?;
         let local_port = self
             .config
             .service(&tun.service_id)
@@ -2242,14 +2239,14 @@ impl Guardian {
             .filter(|u| !u.is_empty())
             .ok_or_else(|| {
                 format!(
-                    "隧道「{}」还没填公网网址，没法核对云端保护；先回应用里把网址填上",
+                    "隧道「{}」尚未填写公网网址，无法核对云端保护；请先在应用中填写网址",
                     tun.name
                 )
             })?;
         let domain = normalize_domain(raw_url);
         if domain.is_empty() {
             return Err(format!(
-                "隧道「{}」还没填公网网址，没法核对云端保护；先回应用里把网址填上",
+                "隧道「{}」尚未填写公网网址，无法核对云端保护；请先在应用中填写网址",
                 tun.name
             ));
         }
@@ -2258,7 +2255,7 @@ impl Guardian {
             .servers
             .iter()
             .find(|s| s.id == tun.server_id)
-            .ok_or_else(|| "找不到这条隧道挂的云端服务器".to_string())?;
+            .ok_or_else(|| "找不到这条隧道关联的云端服务器".to_string())?;
         Ok(AccessCheckRequest {
             target: format!("{}@{}", server.user, server.host),
             ssh_port: server.ssh_port,
@@ -2295,7 +2292,7 @@ impl Guardian {
     pub fn commit_config(&mut self, next: AppConfig) -> Result<(), String> {
         if !self.config_trusted {
             return Err(
-                "配置文件上次没读成功（已经留底成 config.json.bad），这次没有把新配置写回磁盘；请先修好配置文件再重开应用"
+                "配置文件上次读取失败（已备份为 config.json.bad），本次未将新配置写回磁盘；请先修复配置文件再重新打开应用"
                     .into(),
             );
         }
@@ -2352,10 +2349,10 @@ impl Guardian {
     /// 撤销删除（D2 §10）：把墓碑插回配置；隧道一律恢复为暂停。
     pub fn restore_deleted(&mut self, token: &str) -> Result<RestoreResult, String> {
         let Some(state) = self.state.clone() else {
-            return Err("撤销需要在应用里进行（当前没有运行记录）".to_string());
+            return Err("撤销需要在应用中进行（当前没有运行记录）".to_string());
         };
         let record = state.peek_trash(token).ok_or_else(|| {
-            "这条撤销已经过期了（删除超过 10 分钟）；要恢复只能重新建一个".to_string()
+            "该撤销已过期（删除超过 10 分钟）；如需恢复请重新创建".to_string()
         })?;
         // 服务器 id 会拼进密钥路径（config::key_path_for）：撤销手工改过的墓碑前先挡住路径穿越
         if record.kind == "server" {
@@ -2439,7 +2436,7 @@ impl Guardian {
                 .servers
                 .iter()
                 .find(|s| s.id == tun.server_id)
-                .ok_or_else(|| "找不到这条隧道挂的云端服务器".to_string())?;
+                .ok_or_else(|| "找不到这条隧道关联的云端服务器".to_string())?;
             (server.host.clone(), server.ssh_port)
         };
         let message = crate::ssh::forget_host_key(&host, port)?;
@@ -2454,7 +2451,7 @@ impl Guardian {
             .service(id)
             .ok_or_else(|| format!("找不到服务：{id}"))?;
         if svc.launch.is_none() {
-            return Err("这台服务没配启动方式，不能重启（只能看状态）".to_string());
+            return Err("这台服务未配置启动方式，无法重启（只能查看状态）".to_string());
         }
         self.sync_local();
         if let Some(runner) = self.local.get_mut(id) {
@@ -2556,7 +2553,7 @@ fn validate_server_id(id: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "服务器编号「{id}」不合法：只能用字母、数字、下划线、横杠（1~64 位）；请删掉重新添加这台服务器"
+            "服务器编号「{id}」不合法：只能使用字母、数字、下划线、横杠（1~64 位）；请删除后重新添加这台服务器"
         ))
     }
 }
@@ -2664,16 +2661,16 @@ fn read_tail(path: &Path, lines: usize) -> String {
     const MAX_TAIL_LINES: usize = 2000;
 
     let Ok(mut file) = std::fs::File::open(path) else {
-        return format!("（还没有日志：{}）", path.display());
+        return format!("（暂无日志：{}）", path.display());
     };
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
     let from = len.saturating_sub(MAX_TAIL_BYTES);
     if file.seek(SeekFrom::Start(from)).is_err() {
-        return format!("（读不到日志：{}）", path.display());
+        return format!("（无法读取日志：{}）", path.display());
     }
     let mut buf = Vec::new();
     if file.take(MAX_TAIL_BYTES).read_to_end(&mut buf).is_err() {
-        return format!("（读不到日志：{}）", path.display());
+        return format!("（无法读取日志：{}）", path.display());
     }
     let mut text = String::from_utf8_lossy(&buf).into_owned();
     // 从中间截出来时，第一行可能是半截：只保留第一个换行之后的内容
@@ -2722,16 +2719,16 @@ fn drift_fields_text(fields: &[String]) -> String {
     let names: Vec<&str> = fields
         .iter()
         .map(|field| match field.as_str() {
-            "conf" => "云端没找到站点配置",
-            "password" => "密码开关对不上",
-            "ip" => "IP 白名单开关对不上",
+            "conf" => "云端未找到站点配置",
+            "password" => "密码开关不一致",
+            "ip" => "IP 白名单开关不一致",
             "allowIps" => "允许的 IP 不一致",
-            "htpasswd" => "密码文件不在",
-            _ => "有一项对不上",
+            "htpasswd" => "密码文件不存在",
+            _ => "有一项不一致",
         })
         .collect();
     if names.is_empty() {
-        "具体差异没记下来".to_string()
+        "具体差异未记录".to_string()
     } else {
         names.join("、")
     }
@@ -2841,18 +2838,18 @@ fn pick_owner_by_matches(
     }
     if !has_configured_exe {
         return Err(format!(
-            "这个端口同时被多个进程监听（PID {}），分不清该停哪一个；为避免误杀，我没有动它们",
+            "该端口同时被多个进程监听（PID {}），无法确定应停止哪一个；为避免误停，未执行任何操作",
             join_pids(owners)
         ));
     }
     match matched.len() {
         0 => Err(format!(
-            "这个端口同时被多个进程监听（PID {}），其中没有能确认是这台服务配置的程序；为避免误杀，我没有动它们",
+            "该端口同时被多个进程监听（PID {}），其中没有能确认是这台服务配置的程序；为避免误停，未执行任何操作",
             join_pids(owners)
         )),
         1 => Ok(matched[0]),
         _ => Err(format!(
-            "这个端口有多个监听进程都像是这台服务配置的程序（PID {}），分不清该停哪一个；请手动处理",
+            "该端口有多个监听进程都像是这台服务配置的程序（PID {}），无法确定应停止哪一个；请手动处理",
             join_pids(matched)
         )),
     }
@@ -2918,7 +2915,7 @@ fn kill_process(pid: u32) -> Result<(), String> {
 fn terminate_error_text(pid: u32, code: u32) -> String {
     match code {
         5 => format!(
-            "结束 PID {pid} 失败：权限不够（它可能是管理员或系统启动的进程）；可以试试用管理员身份运行『上线助手』"
+            "结束 PID {pid} 失败：权限不足（它可能是管理员或系统启动的进程）；请尝试以管理员身份运行『上线助手』"
         ),
         87 | 299 => format!("结束 PID {pid} 失败：这个进程已经退出了"),
         _ => format!("结束 PID {pid} 失败（系统错误码 {code}）"),
@@ -2962,7 +2959,7 @@ mod tests {
         assert!(err.contains("都像是"), "err={err}");
         // 没配程序：多个 owner 一律拒绝
         let err = pick_owner_by_matches(&[7, 9], false, &[]).unwrap_err();
-        assert!(err.contains("分不清"), "err={err}");
+        assert!(err.contains("无法确定"), "err={err}");
     }
 
     #[test]
@@ -3305,14 +3302,14 @@ mod tests {
         assert!(
             exit_reason_from_log("remote port forwarding failed for listen port 18080", Some(255))
                 .unwrap()
-                .contains("占了")
+                .contains("占用")
         );
         assert!(exit_reason_from_log("everything is fine", None).is_none());
         assert!(exit_reason_from_log("everything is fine", Some(0)).is_none());
         // 退出码 255 但认不出关键字：给通用文案
         assert!(exit_reason_from_log("everything is fine", Some(255))
             .unwrap()
-            .contains("这一轮没连上"));
+            .contains("未连接成功"));
     }
 
     #[test]
@@ -3330,7 +3327,7 @@ mod tests {
         let tail = read_tail(&path, 3);
         assert_eq!(tail, "第一行\n第二行\n第三行", "tail={tail}");
         // 不存在的文件也给一句人话
-        assert!(read_tail(&dir.join("nope.log"), 3).contains("还没有日志"));
+        assert!(read_tail(&dir.join("nope.log"), 3).contains("暂无日志"));
     }
 
     #[test]

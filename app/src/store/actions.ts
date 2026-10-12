@@ -18,7 +18,6 @@ import {
   setServiceWatch,
   setSettings as saveSettingsApi,
   testServer,
-  tunnelRestart,
   tunnelStart,
   tunnelStop,
   updateTunnel,
@@ -78,7 +77,7 @@ function showDeletedToast(text: string, token: string | null, name: string): voi
 function cloudSummary(actual: AccessCheck | null | undefined): string {
   if (!actual) return "云端没有返回实际配置";
   if (actual.passwordOn && actual.ipOn) return "密码 + IP 白名单";
-  if (actual.passwordOn) return "要密码";
+  if (actual.passwordOn) return "已加密";
   if (actual.ipOn) return `仅白名单 IP（${actual.allowIps.length} 个）`;
   return "无访问保护";
 }
@@ -107,7 +106,7 @@ export interface BulkOptions {
   isStopped?(): boolean;
 }
 
-/** 访问保护页专用：只提交 id + 访问三件套，发布字段由 actions 从最新快照补齐 */
+/** 改访问保护时用：只提交 id + 访问三件套，发布字段由 actions 从最新快照补齐 */
 export interface TunnelProtectionInput {
   id: string;
   access: string[];
@@ -219,7 +218,7 @@ async function runBulkItem(
       dropOverride(key);
       return {
         ok: false,
-        error: "这个端口不是本应用启动的程序，批量停不了；请在卡片上单独停",
+        error: "这个端口不是本应用启动的程序，无法批量停止；请在卡片上单独停止",
       };
     }
     return { ok: true };
@@ -308,7 +307,7 @@ export const actions = {
         r.kind === "needsConfirm" ? null : { kind: "success", text: T.serviceStopped(serviceName(id)) },
       failure: { rethrow: true },
     });
-    if (result === undefined) throw new Error("停止没成功：上一步还在处理，等一下再试");
+    if (result === undefined) throw new Error("停止失败：上一步还在处理，请稍后重试");
     // 需要确认时其实什么都没停：把乐观值撤掉，别让卡片装成已停止
     if (result.kind === "needsConfirm") dropOverride(`service:${id}`);
     return result;
@@ -400,20 +399,6 @@ export const actions = {
     });
   },
 
-  tunnelRestart(id: string): void {
-    const current = getState().byTunnelId[id];
-    void runCommand({
-      key: `tunnel:${id}`,
-      optimistic: {
-        patch: { status: "connecting", lastFailure: null, attempt: 0 },
-        expect: { status: "connecting" },
-        before: { status: current?.status, lastFailure: current?.lastFailure, attempt: current?.attempt },
-      },
-      run: () => tunnelRestart(id),
-      success: { kind: "success", text: T.tunnelRestarting(tunnelName(id)) },
-    });
-  },
-
   /** 删除隧道：成功 toast + 5s 撤销；失败就地（卡片修复带） */
   async tunnelRemove(id: string): Promise<void> {
     const name = tunnelName(id);
@@ -444,13 +429,13 @@ export const actions = {
   },
 
   /**
-   * 只改访问三件套（访问保护页专用）。
+   * 只改访问三件套（改访问保护专用）。
    * 名称 / 云端端口 / 网址一律从 store 取最新值：弹层打开时的旧快照不回传，
    * 免得把别处刚改好的发布字段覆盖回去。
    */
   async tunnelProtectionSave(input: TunnelProtectionInput): Promise<void> {
     const current = getState().byTunnelId[input.id];
-    if (!current) throw new Error("这条隧道已经不在了，刷新后再试");
+    if (!current) throw new Error("这条隧道已不存在，请刷新后重试");
     await runCommand({
       key: `tunnel:${input.id}`,
       run: () =>
@@ -493,7 +478,7 @@ export const actions = {
   ): Promise<string | undefined> {
     const source = getState().byTunnelId[sourceId];
     if (!source) {
-      toast.error("这条隧道已经不在了，刷新后再试");
+      toast.error("这条隧道已不存在，请刷新后重试");
       return undefined;
     }
     try {
@@ -527,7 +512,7 @@ export const actions = {
       refreshNow();
       return id;
     } catch (e) {
-      setNotice(`tunnel:${sourceId}`, `克隆没成功：${errorText(e)}`);
+      setNotice(`tunnel:${sourceId}`, `克隆失败：${errorText(e)}`);
       throw e;
     }
   },
@@ -548,7 +533,7 @@ export const actions = {
             return { kind: "info", text: T.protectDrift(cloudSummary(r.actual)) };
           }
           if (status === "error") {
-            return { kind: "warn", text: `云端核不上：${r.check?.error ?? "原因不明"}` };
+            return { kind: "warn", text: `云端核对未通过：${r.check?.error ?? "原因不明"}` };
           }
           return { kind: "success", text: T.protectVerified(cloudSummary(r.actual)) };
         },
@@ -558,7 +543,7 @@ export const actions = {
     } catch (e) {
       setNotice(
         key,
-        `检查没成功：${errorText(e)}；也可能是服务器没开、密钥不对，先点「体检」看看`,
+        `检查失败：${errorText(e)}；也可能是服务器未启动、密钥不正确，请先点击「体检」查看`,
       );
     }
   },
@@ -588,7 +573,7 @@ export const actions = {
       if (token) undoKeys.set(token, `server:${id}`);
       showDeletedToast(T.serverRemoved(name), token, name);
     } catch (e) {
-      toast.error(`删除没成功：${errorText(e)}`);
+      toast.error(`删除失败：${errorText(e)}`);
     }
   },
 
@@ -648,7 +633,7 @@ export const actions = {
     if (failed.length === 0) {
       toast.success(`已恢复 ${ok} 条`);
     } else {
-      toast.warn(`${items.length} 条里有 ${failed.length} 条没恢复成功`, {
+      toast.warn(`${items.length} 条中有 ${failed.length} 条恢复失败`, {
         detail: failed.slice(0, 3).join("；"),
       });
     }
@@ -668,7 +653,7 @@ export const actions = {
   async copyText(text: string, successText: string): Promise<void> {
     const ok = await copyToClipboard(text);
     if (ok) toast.success(successText);
-    else toast.error("复制没成功：自己选中文字复制一下");
+    else toast.error("复制失败：请手动选中文字复制");
   },
 
   /** 整份 settings 写 config；失败就地挂到 `settings` 键（设置页订阅它） */

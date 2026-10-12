@@ -144,6 +144,9 @@ pub struct ServerBlock {
     pub ssl_certificates: Vec<String>,
     pub returns: Vec<ReturnRule>,
     pub rewrites: Vec<RewriteRule>,
+    /// `if` 子块里挂 $server_port / $scheme 条件的整站 https 跳转
+    /// （面板「强制 HTTPS」的标准写法，如 `if ($server_port !~ 443) { rewrite … permanent; }`）。
+    pub if_redirects: Vec<RedirectKind>,
     /// `access_log` 的第一个参数；`off` 原样记成 "off"
     pub access_logs: Vec<String>,
     /// 直接的 `location` 子块
@@ -198,27 +201,48 @@ impl ServerBlock {
         self.wellknown().is_some()
     }
 
-    /// 块里有没有「跳到 https」的 return/rewrite（只在块顶层看，和 D3 §4 一致）。
+    /// 块里有没有「跳到 https」的 return / rewrite / 整站 if。
+    ///
+    /// return / rewrite 只在块顶层看（和 D3 §4 一致）；`if` 子块另看：条件挂在
+    /// `$server_port` / `$scheme` 上的（面板「强制 HTTPS」的标准写法）算整站跳转，
+    /// 按路径写的 `if` 不算。rewrite 按 nginx 的真实行为分档：`permanent` 就是 301，
+    /// `redirect` 是 302；其它 flag 不看。
     pub fn redirect_to_https(&self) -> Option<RedirectKind> {
-        let mut temporary = None;
+        let mut permanent = false;
+        let mut temporary = false;
         for r in &self.returns {
             if !target_is_https(&r.target) {
                 continue;
             }
             match r.code {
-                301 | 308 => return Some(RedirectKind::Permanent),
-                302 | 307 => temporary = Some(RedirectKind::Temporary),
+                301 | 308 => permanent = true,
+                302 | 307 => temporary = true,
                 _ => {}
             }
         }
         for r in &self.rewrites {
-            if target_is_https(&r.target)
-                && (r.flag == "permanent" || r.flag == "redirect")
-            {
-                temporary = Some(RedirectKind::Temporary);
+            if !target_is_https(&r.target) {
+                continue;
+            }
+            match r.flag.as_str() {
+                "permanent" => permanent = true,
+                "redirect" => temporary = true,
+                _ => {}
             }
         }
-        temporary
+        for kind in &self.if_redirects {
+            match kind {
+                RedirectKind::Permanent => permanent = true,
+                RedirectKind::Temporary => temporary = true,
+            }
+        }
+        if permanent {
+            Some(RedirectKind::Permanent)
+        } else if temporary {
+            Some(RedirectKind::Temporary)
+        } else {
+            None
+        }
     }
 
     /// 第一个不是 off 的 `access_log` 路径。
@@ -227,6 +251,83 @@ impl ServerBlock {
             .iter()
             .map(String::as_str)
             .find(|p| !p.eq_ignore_ascii_case("off"))
+    }
+}
+
+/// `if` 子块里的整站 https 跳转：条件必须挂在 `$server_port` 或 `$scheme` 上，
+/// 这是「来的是 http 就跳」的整站判断；按路径写的 `if`（`$uri`、`$request_uri` 等）
+/// 是局部跳转，不算整站。rewrite 按 nginx 真实行为分档：`permanent` = 301，
+/// `redirect` = 302，其它 flag 不看。
+fn if_block_redirect(head: &str, directives: &[String]) -> Option<RedirectKind> {
+    let cond = head.to_ascii_lowercase();
+    if !cond.contains("$server_port") && !cond.contains("$scheme") {
+        return None;
+    }
+    let mut permanent = false;
+    let mut temporary = false;
+    for stmt in directives {
+        let (name, args) = split_directive(stmt);
+        match name.to_ascii_lowercase().as_str() {
+            "return" => {
+                if let Some(code) = args.first().and_then(|a| a.parse::<u16>().ok()) {
+                    let target = args.get(1).map(String::as_str).unwrap_or("");
+                    if target_is_https(target) {
+                        match code {
+                            301 | 308 => permanent = true,
+                            302 | 307 => temporary = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "rewrite" => {
+                if let Some(target) = args.get(1) {
+                    if target_is_https(target) {
+                        match args.get(2).map(|f| f.to_ascii_lowercase()).as_deref() {
+                            Some("permanent") => permanent = true,
+                            Some("redirect") => temporary = true,
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if permanent {
+        Some(RedirectKind::Permanent)
+    } else if temporary {
+        Some(RedirectKind::Temporary)
+    } else {
+        None
+    }
+}
+
+/// 在「主配置 + include 展开」的合并文本里，找根级（server 块外面）的整站 https 跳转。
+///
+/// 小皮面板把 `if ($server_port !~ 443) { rewrite … permanent; }` 单独写在
+/// `vhost/https/to_https.conf` 里、被证书文件 include 进站点配置。远端脚本把
+/// include 的内容拼回文本后，这段会落在 server 块外面，所以要在根级单独找一遍。
+/// 条件判定和块内 `if` 一样：只认 $server_port / $scheme。
+pub fn root_if_https_redirect(conf: &str) -> Option<RedirectKind> {
+    let mut permanent = false;
+    let mut temporary = false;
+    for node in parse_block_tree(conf) {
+        if !head_is(&node.head, "if") {
+            continue;
+        }
+        match if_block_redirect(&node.head, &node.directives) {
+            Some(RedirectKind::Permanent) => permanent = true,
+            Some(RedirectKind::Temporary) => temporary = true,
+            None => {}
+        }
+    }
+    if permanent {
+        Some(RedirectKind::Permanent)
+    } else if temporary {
+        Some(RedirectKind::Temporary)
+    } else {
+        None
     }
 }
 
@@ -360,6 +461,12 @@ fn build_server(node: &RawBlock) -> ServerBlock {
     }
 
     for child in &node.children {
+        if head_is(&child.head, "if") {
+            if let Some(kind) = if_block_redirect(&child.head, &child.directives) {
+                sb.if_redirects.push(kind);
+            }
+            continue;
+        }
         if !head_is(&child.head, "location") {
             continue;
         }
@@ -1006,6 +1113,45 @@ server { server_name _; }"#,
             "server { listen 80; server_name a.example.com; rewrite ^ https://$host$request_uri permanent; }",
         );
         assert!(blocks[0].redirect_to_https().is_some());
+    }
+
+    #[test]
+    fn rewrite_permanent_is_classified_permanent() {
+        let blocks = scan_servers(
+            "server { listen 80; server_name a.example.com; rewrite ^(/.*)$ https://$host$1 permanent; }",
+        );
+        assert_eq!(blocks[0].redirect_to_https(), Some(RedirectKind::Permanent));
+    }
+
+    #[test]
+    fn force_https_if_inside_server_block_is_recognized() {
+        // 面板「强制 HTTPS」的标准写法：条件挂 $server_port
+        let blocks = scan_servers(
+            "server {\n  listen 80;\n  listen 443 ssl http2;\n  server_name a.example.com;\n  if ($server_port !~ 443) {\n    rewrite ^(/.*)$ https://$host$1 permanent;\n  }\n}",
+        );
+        assert_eq!(blocks[0].redirect_to_https(), Some(RedirectKind::Permanent));
+    }
+
+    #[test]
+    fn path_specific_if_redirect_is_not_a_whole_site_redirect() {
+        let blocks = scan_servers(
+            "server { listen 80; server_name a.example.com; if ($request_uri ~ ^/old) { return 301 https://$host/new; } }",
+        );
+        assert_eq!(blocks[0].redirect_to_https(), None);
+    }
+
+    #[test]
+    fn root_level_if_redirect_from_merged_include_is_found() {
+        // 脚本把 include 的文件拼回文本后，跳转 if 会落在 server 块外面
+        let conf = "server {\n  listen 80;\n  listen 443 ssl;\n  server_name a.example.com;\n}\nif ($server_port !~ 443) {\n  rewrite ^(/.*)$ https://$host$1 permanent;\n}\n";
+        assert_eq!(root_if_https_redirect(conf), Some(RedirectKind::Permanent));
+    }
+
+    #[test]
+    fn root_level_if_without_https_redirect_is_ignored() {
+        let conf =
+            "server { listen 80; server_name a.example.com; }\nif ($scheme = http) { return 404; }\n";
+        assert_eq!(root_if_https_redirect(conf), None);
     }
 
     #[test]

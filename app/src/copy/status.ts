@@ -30,61 +30,50 @@ export interface StatusMeta {
 
 export const SERVICE_STATUS_META: Record<ServiceStatus, StatusMeta> = {
   stopped: {
-    word: "没启动",
-    sentence: "程序没在跑；填好启动程序后，点「启动」就能帮你拉起来。",
+    word: "未启动",
+    sentence: "程序未在运行。填写启动程序后，点击「启动」即可。",
   },
   starting: {
-    word: "正在启动",
-    sentence: "程序已经拉起来，正在看端口通不通，等几秒。",
+    word: "启动中",
+    sentence: "程序已启动，正在检查端口，请稍候。",
   },
   running: {
-    word: "在跑",
-    sentence: "程序在跑，端口也通。",
+    word: "运行中",
+    sentence: "程序正在运行，端口正常。",
   },
   not_listening: {
-    word: "进程在但端口不通",
-    sentence: "程序还在，但它监听的不是这个端口：换一个端口，或者看程序日志。",
+    word: "端口未监听",
+    sentence: "程序进程仍在，但未监听该端口：请更换端口，或查看程序日志。",
   },
   failed: {
-    word: "起不来（已停止自动重试）",
-    sentence: "程序启动失败，已经停止自动重试。检查启动程序、参数、工作目录，或看日志。",
+    word: "启动失败",
+    sentence: "程序启动失败，已停止自动重试。请检查启动程序、参数、工作目录，或查看日志。",
   },
 };
 
 export const TUNNEL_STATUS_META: Record<TunnelStatus, StatusMeta> = {
   running: {
-    word: "正在发布",
-    sentence: "隧道通了；云端配置贴好、域名解析对了之后，别人才能打开。",
+    word: "发布中",
+    sentence: "隧道已连通；云端配置和域名解析正确后，即可对外访问。",
     action: "暂停",
   },
   connecting: {
     word: "连接中",
-    sentence: "正在和云端服务器建立连接；如果一直停在这里，多半是连不上，点「看日志」看原因。",
+    sentence: "正在连接云端服务器；如长时间停留在此状态，通常是网络不通，请查看日志了解原因。",
   },
   disconnected: {
-    word: "掉线重连中",
-    sentence: "云端服务器联系不上了，可能网络波动。会自动重试。",
-    action: "立刻重连",
+    word: "重连中",
+    sentence: "无法连接云端服务器，可能网络波动，将自动重试。",
   },
   error: {
-    word: "出错",
-    sentence: "发布失败。",
-    action: "重试",
+    word: "发布失败",
+    sentence: "请查看日志了解原因。",
   },
   paused: {
     word: "已暂停",
-    sentence: "你暂停了发布，现在没人能访问。",
+    sentence: "发布已暂停，当前无法访问。",
     action: "开始发布",
   },
-};
-
-/** 本机服务排序：坏状态排前面（起不来 > 端口不通 > 正在启动 > 没启动 > 在跑） */
-export const SERVICE_ORDER: Record<ServiceStatus, number> = {
-  failed: 0,
-  not_listening: 1,
-  starting: 2,
-  stopped: 3,
-  running: 4,
 };
 
 /** 体检（doctor）每一步的结果。D0 裁决在三值上追加 warn，状态词 + 图标都不许只靠颜色。 */
@@ -101,8 +90,8 @@ export interface DoctorStatusMeta {
 
 export const DOCTOR_STATUS_META: Record<DoctorStatus, DoctorStatusMeta> = {
   pass: { word: "通过", icon: "✓", tone: "ok" },
-  warn: { word: "要留意", icon: "!", tone: "warn" },
-  fail: { word: "没通过", icon: "✕", tone: "error" },
+  warn: { word: "注意", icon: "!", tone: "warn" },
+  fail: { word: "未通过", icon: "✕", tone: "error" },
   skip: { word: "跳过", icon: "–", tone: "muted" },
 };
 

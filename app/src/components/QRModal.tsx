@@ -457,7 +457,7 @@ export function QrModal({ url, name, onClose }: Props) {
       >
         <div className="modal-head">
           <h2 className="modal-title">手机扫码打开 · {name}</h2>
-          <p className="modal-sub">扫不出来就复制网址发到手机。</p>
+          <p className="modal-sub">如无法扫描，请复制网址发送到手机。</p>
         </div>
         <div className="modal-body">
           {matrix ? (
@@ -486,7 +486,7 @@ export function QrModal({ url, name, onClose }: Props) {
             </div>
           ) : (
             <div className="error-line">
-              网址太长，二维码放不下；请用下面的「复制网址」发到手机。
+              网址过长，无法生成二维码；请使用下方的「复制网址」发送到手机。
             </div>
           )}
 
@@ -498,14 +498,14 @@ export function QrModal({ url, name, onClose }: Props) {
           </div>
           {copyFailed && (
             <div className="error-line" style={{ marginTop: 8 }}>
-              没复制成功：选中网址按 Ctrl+C。
+              复制失败：请选中网址后按 Ctrl+C。
             </div>
           )}
-          <p className="field-hint hint" title="不联网也能生成，网址不会发到网上。">
+          <p className="field-hint hint" title="无需联网即可生成，网址不会上传。">
             二维码是离线生成的。
           </p>
           {longUrl && matrix ? (
-            <p className="field-hint hint">网址有点长，二维码比较密，尽量用复制。</p>
+            <p className="field-hint hint">网址较长，二维码较密，建议使用复制。</p>
           ) : null}
         </div>
         <div className="modal-foot">

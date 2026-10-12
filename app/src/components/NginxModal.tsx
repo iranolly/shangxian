@@ -1,10 +1,9 @@
-// 云端配置弹层：给出要新增的 nginx 几行 + 简短示意，供用户复制到面板。
+// 云端配置弹层：给出要新增的 nginx 几行，供用户复制到面板。
 //
-// E3 改造（D4 §3.6 + D0 第 3/13 条）：
-// - acmeExempt 升级为多行（auth_basic off; / allow all; + 注释），单独一块可复制；
-// - 「可选附加行」区（noindex 行）：默认不生成，给复制的按钮 + 人话说明；
-// - 预设片段预览：按 tunnel.preset 给一行说明；
-// - 环境 / HTTPS / 端口 / 公网 IP 提示：来自 check_tunnel_cloud 的结果。
+// 极简版（2026-10-12）：一句话说明 + 一个复制块。
+// - 要加的行合并成一块（访问密码 / 白名单 / 预设 / 证书续期豁免，注释里写清放哪儿）；
+// - 不再有预览高亮、分段复制按钮和重复的「证书续期」块；
+// - 只保留真正要报警的 ⚠ 提示和检查结果（红灯/黄灯、密码文件缺失等）。
 
 import { useEffect, useRef, useState } from "react";
 
@@ -36,7 +35,7 @@ interface Props {
 }
 
 /** 弹层里能复制的内容 */
-type CopyTarget = "htpasswd" | "acme" | "optional" | `block-${number}`;
+type CopyTarget = "lines" | "htpasswd";
 
 const EMPTY_ACCESS: AccessCheck = {
   confFound: false,
@@ -61,12 +60,6 @@ type CheckState =
 function timeText(at: number): string {
   return new Date(at).toLocaleTimeString("zh-CN", { hour12: false });
 }
-
-const PRESET_NAME: Record<string, string> = {
-  web: "普通网站",
-  ws: "WebSocket（实时通信）",
-  upload: "大文件上传",
-};
 
 export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -146,14 +139,14 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
     return checkState.actual.confFound ? "ok" : "warn";
   })();
   const statusText = (() => {
-    if (checkState.phase === "idle") return "还没检查过云端。";
-    if (checkState.phase === "loading") return "正在连服务器检查…";
+    if (checkState.phase === "idle") return "尚未检查云端。";
+    if (checkState.phase === "loading") return "连接服务器检查中…";
     if (checkState.phase === "error") return `检查失败：${checkState.message}`;
     const { actual, at } = checkState;
     const head = `上次检查 ${timeText(at)}：`;
     if (checkResult) return `${head}${checkResult.text}`;
     if (!actual.confFound) {
-      return `${head}云端还没找到站点配置（可能没保存或没重载）。`;
+      return `${head}云端尚未找到站点配置（可能未保存或未重载）。`;
     }
     return `${head}云端已找到站点配置，当前生效：${cloudLabel(actual)}。`;
   })();
@@ -164,50 +157,22 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const { https } = readExtra(freshCheck);
   const light = tunnel ? httpsLight(tunnel, https) : null;
   const portExposed = cloud?.port?.bound === "exposed";
-  const presetNote =
-    tunnel?.preset && tunnel.preset !== "web"
-      ? `用的是「${PRESET_NAME[tunnel.preset] ?? tunnel.preset}」预设，高亮行里含对应几行。`
-      : "";
 
   // 复制按钮上的字：复制成功后显示"已复制"，1.6 秒后恢复
   const label = (target: CopyTarget, idle: string) =>
     copied === target ? "已复制 ✓" : idle;
 
-  // 把连续的高亮行合成一段：段里至少有一行真正的配置（不是 # 注释）才配小复制按钮；
-  // 按钮放在该段首行行尾，复制的是整段原文（含 # 注释行）。
-  const blockCopies = new Map<number, { target: CopyTarget; text: string }>();
-  {
-    const lines = data?.preview ?? [];
-    let i = 0;
-    let n = 0;
-    while (i < lines.length) {
-      if (!lines[i].isNew) {
-        i += 1;
-        continue;
-      }
-      let j = i;
-      while (j < lines.length && lines[j].isNew) j += 1;
-      const seg = lines.slice(i, j);
-      const hasConfig = seg.some(
-        (l) => l.text.trim() !== "" && !l.text.trimStart().startsWith("#"),
-      );
-      if (hasConfig) {
-        blockCopies.set(i, {
-          target: `block-${n}`,
-          text: seg.map((l) => l.text).join("\n"),
-        });
-        n += 1;
-      }
-      i = j;
-    }
-  }
+  // 要加的行合成一块：配置片段 + 证书续期豁免。每段自带注释写清放哪儿，
+  // 用户复制一次、按注释分别贴进对应位置。
+  const linesToAdd = [data?.snippet, data?.acmeExempt]
+    .filter((s): s is string => !!s && s.trim() !== "")
+    .join("\n\n");
 
-  // 「可选附加行」里的可复制内容：去掉注释行，只复制要加的那一行
-  const optionalLines: string[] =
-    (data as (NginxSnippet & { optional?: string[] }) | null)?.optional ?? [];
-  const optionalCopy = optionalLines
-    .filter((l) => l.trim() !== "" && !l.trimStart().startsWith("#"))
-    .join("\n");
+  // 生成器给的 ⚠ 警告照常显示（域名不对、白名单为空、没有访问保护之类）；
+  // 长篇操作步骤不再占地方。
+  const alertSteps = (data?.steps ?? []).filter((s) =>
+    s.trimStart().startsWith("⚠"),
+  );
 
   return (
     <div className="modal-backdrop">
@@ -220,19 +185,14 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
       >
         <div className="modal-head">
           <h2 className="modal-title">云端配置 · {name}</h2>
-          <p
-            className="modal-sub"
-            title="灰色是原配置的样子；只加高亮的这几行，不要替换整段。"
-          >
-            只加高亮的这几行，别替换整段。
-          </p>
+          <p className="modal-sub">将以下配置行加入站点配置，保存后重载 nginx。</p>
         </div>
         <div className="modal-body">
           {error && <div className="error-line">{error}</div>}
           <div className={`nginx-check ${checkTone}`}>
             <span
               className="nginx-check-text"
-              title="贴完上面的配置、保存并重载 nginx 后，点「检查云端」看生效没有。"
+              title="粘贴配置、保存并重载 nginx 后，点击「检查云端」查看是否生效。"
             >
               {statusText}
             </span>
@@ -246,7 +206,7 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
           </div>
           {checkResult?.htpasswdMissing && (
             <div className="warn-line">
-              ⚠ 服务器上还没有密码文件，密码可能进不去。
+              ⚠ 服务器上还没有密码文件，密码可能无法使用。
             </div>
           )}
           {light && (
@@ -261,151 +221,57 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
           {portExposed && (
             <div
               className="warn-line"
-              title="发布只绑 127.0.0.1（只有服务器自己能连的地址），说明有别的程序占着这个端口，请检查或关防火墙。"
+              title="发布仅绑定 127.0.0.1（仅服务器自身可连接的地址），说明该端口被其他程序占用，请检查或关闭防火墙。"
             >
-              云端端口对所有网卡开放，被别的程序占着。
+              云端端口对所有网卡开放，已被其他程序占用。
             </div>
           )}
           {cloud?.clientIp && (
             <div
               className="field-hint hint"
-              title="换网络可能就变了；运营商共享 IP 时加白名单可能不生效。"
+              title="更换网络后可能变化；运营商共享 IP 时，加入白名单可能不生效。"
             >
-              服务器看到你的上网 IP 是 {cloud.clientIp}。
-            </div>
-          )}
-          {presetNote && (
-            <div
-              className="field-hint hint"
-              title="预设行只能放进已有的那段花括号里，别贴到最外层。"
-            >
-              {presetNote}
+              服务器看到的访问 IP 是 {cloud.clientIp}。
             </div>
           )}
 
           {data && (
             <>
-              <ol className="steps-list">
-                {data.steps.map((s, i) => (
-                  <li key={i}>{s}</li>
-                ))}
-              </ol>
-              {data.snippet && (
-                <span
-                  className="field-label"
-                  style={{ display: "inline-block", marginBottom: 6 }}
-                >
-                  要新增的几行
-                </span>
-              )}
-              <pre className="log-view" style={{ maxHeight: 340, padding: "8px 10px" }}>
-                {data.preview?.length
-                  ? data.preview.map((l, i) => {
-                      const entry = blockCopies.get(i);
-                      return (
-                        <div
-                          key={i}
-                          style={{
-                            display: "flex",
-                            alignItems: "baseline",
-                            gap: 8,
-                            padding: "0 6px",
-                            margin: "0 -6px",
-                            borderRadius: 4,
-                            color: l.isNew ? "var(--text)" : "var(--text-2)",
-                            background: l.isNew
-                              ? "var(--accent-soft)"
-                              : "transparent",
-                            boxShadow: l.isNew
-                              ? "inset 2px 0 0 var(--accent)"
-                              : undefined,
-                          }}
-                        >
-                          <span style={{ flex: 1, minWidth: 0 }}>
-                            {l.text === "" ? "\u00a0" : l.text}
-                          </span>
-                          {entry && (
-                            <button
-                              className="link-btn"
-                              style={{ flexShrink: 0, padding: "0 4px" }}
-                              onClick={() => copy(entry.target, entry.text)}
-                            >
-                              {label(entry.target, "复制")}
-                            </button>
-                          )}
-                        </div>
-                      );
-                    })
-                  : data.snippet}
-              </pre>
-
-              {data.acmeExempt && (
-                <div className="field" style={{ marginTop: 12 }}>
+              {linesToAdd !== "" && (
+                <>
                   <div className="optional-head">
                     <span className="field-label" style={{ marginBottom: 0 }}>
-                      证书续期要加的行（放进已有的那段花括号里）
+                      要添加的配置行
                     </span>
                     <button
                       className="link-btn"
-                      onClick={() => copy("acme", data.acmeExempt!)}
+                      onClick={() => copy("lines", linesToAdd)}
                     >
-                      {label("acme", "复制")}
+                      {label("lines", "复制")}
                     </button>
                   </div>
-                  <div className="optional-block">
-                    <pre>{data.acmeExempt}</pre>
-                  </div>
-                  <p
-                    className="field-hint hint"
-                    title="只放开 /.well-known/ 这个地址，别的地址照样要密码 / 白名单；漏了证书到期续不上。"
+                  <pre
+                    className="log-view"
+                    style={{ maxHeight: 340, padding: "8px 10px" }}
+                    title="每段注释标明位置：① 放在 server_name 下方；② 放入已有的 location /.well-known/ { } 中（已有相同行则跳过）。"
                   >
-                    只放开证书续期那个地址。
-                  </p>
-                </div>
+                    {linesToAdd}
+                  </pre>
+                </>
               )}
 
-              {optionalLines.length > 0 && (
-                <div className="field" style={{ marginTop: 12 }}>
-                  <div className="optional-head">
-                    <span className="field-label" style={{ marginBottom: 0 }}>
-                      可选附加行（默认不加）
-                    </span>
-                    <button
-                      className="link-btn"
-                      disabled={optionalCopy === ""}
-                      onClick={() => copy("optional", optionalCopy)}
-                    >
-                      {label("optional", "复制")}
-                    </button>
-                  </div>
-                  <div className="optional-block">
-                    <pre>{optionalLines.join("\n")}</pre>
-                  </div>
-                  <p
-                    className="field-hint hint"
-                    title="它只是礼貌提醒，不是门锁；门锁还是密码或白名单。网站就是给所有人看的话不用加。"
-                  >
-                    告诉搜索引擎别收录这个网站。
-                  </p>
+              {alertSteps.map((s, i) => (
+                <div className="warn-line" key={i}>
+                  {s}
                 </div>
-              )}
+              ))}
 
-              {copyFailed && (
-                <div className="error-line" style={{ marginTop: 8 }}>
-                  没复制成功：选中内容按 Ctrl+C。
-                </div>
-              )}
               {data.htpasswd && (
                 <div className="field" style={{ marginTop: 12 }}>
-                  <label className="field-label">
-                    密码文件内容（htpasswd）
-                  </label>
-                  <p className="field-hint hint">网页访问用的密码文件，不是登录密码。</p>
-                  <div
-                    className="success-line"
-                    style={{ justifyContent: "flex-start" }}
-                  >
-                    <span className="secret">{data.htpasswd}</span>
+                  <div className="optional-head">
+                    <span className="field-label" style={{ marginBottom: 0 }}>
+                      密码文件内容
+                    </span>
                     <button
                       className="link-btn"
                       onClick={() => copy("htpasswd", data.htpasswd!)}
@@ -413,6 +279,24 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
                       {label("htpasswd", "复制")}
                     </button>
                   </div>
+                  <div
+                    className="success-line"
+                    style={{ justifyContent: "flex-start" }}
+                  >
+                    <span className="secret">{data.htpasswd}</span>
+                  </div>
+                  <p
+                    className="field-hint hint"
+                    title="网页访问使用的密码文件，不是登录密码；路径即上述配置中 auth_basic_user_file 指定的路径。"
+                  >
+                    保存到服务器配置中指定的 .htpasswd 路径（没有则新建）。
+                  </p>
+                </div>
+              )}
+
+              {copyFailed && (
+                <div className="error-line" style={{ marginTop: 8 }}>
+                  复制失败：请选中内容后按 Ctrl+C。
                 </div>
               )}
             </>

@@ -221,23 +221,23 @@ fn build_toast(group: &[&Notice], is_down: bool) -> Toast {
         let (kind, name) = identify(group[0]);
         return match (is_down, kind) {
             (true, NoticeKind::Tunnel) => Toast {
-                title: format!("发布掉线：{name}"),
-                body: "连不上了，正在自动重试。".into(),
+                title: format!("发布断开：{name}"),
+                body: "无法连接，正在自动重试。".into(),
                 is_down,
             },
             (true, NoticeKind::Service) => Toast {
-                title: format!("服务掉线：{name}"),
-                body: "程序不在了，看护会把它拉起来。".into(),
+                title: format!("服务断开：{name}"),
+                body: "程序已退出；已开启看护时会自动启动，否则请在应用中启动。".into(),
                 is_down,
             },
             (false, NoticeKind::Tunnel) => Toast {
                 title: format!("发布恢复：{name}"),
-                body: "已经重新连上。".into(),
+                body: "已重新连接。".into(),
                 is_down,
             },
             (false, NoticeKind::Service) => Toast {
                 title: format!("服务恢复：{name}"),
-                body: "已经重新连上。".into(),
+                body: "已重新连接。".into(),
                 is_down,
             },
         };
@@ -248,7 +248,7 @@ fn build_toast(group: &[&Notice], is_down: bool) -> Toast {
         .all(|notice| identify(notice).0 == NoticeKind::Service);
     let what = if all_service { "服务" } else { "发布" };
     let title = if is_down {
-        format!("{} 条{what}出问题了", group.len())
+        format!("{} 条{what}存在问题", group.len())
     } else {
         format!("{} 条{what}恢复了", group.len())
     };
@@ -261,9 +261,9 @@ fn build_toast(group: &[&Notice], is_down: bool) -> Toast {
         listing.push_str(" 等");
     }
     let body = if is_down {
-        format!("其中有：{listing}。打开应用看详情。")
+        format!("其中有：{listing}。请打开应用查看详情。")
     } else {
-        format!("{listing} 都重新连上了。")
+        format!("{listing} 均已重新连接。")
     };
     Toast {
         title,
@@ -443,7 +443,7 @@ mod tests {
         ];
         let toasts = summarize(&notices);
         assert_eq!(toasts.len(), 2);
-        assert_eq!(toasts[0].title, "发布掉线：相册发布");
+        assert_eq!(toasts[0].title, "发布断开：相册发布");
         assert!(toasts[0].is_down);
         assert_eq!(toasts[1].title, "服务恢复：相册");
         assert!(!toasts[1].is_down);
@@ -461,7 +461,7 @@ mod tests {
         let toasts = summarize(&notices);
         assert_eq!(toasts.len(), 1);
         assert!(toasts[0].is_down);
-        assert_eq!(toasts[0].title, "3 条服务出问题了");
+        assert_eq!(toasts[0].title, "3 条服务存在问题");
         assert!(toasts[0].body.contains("服务1、服务2、服务3"));
     }
 
@@ -476,7 +476,7 @@ mod tests {
             .collect();
         let toasts = summarize(&notices);
         assert_eq!(toasts.len(), 1);
-        assert_eq!(toasts[0].title, "5 条发布出问题了");
+        assert_eq!(toasts[0].title, "5 条发布存在问题");
         assert!(toasts[0].body.contains("发布1、发布2、发布3 等"), "{}", toasts[0].body);
     }
 

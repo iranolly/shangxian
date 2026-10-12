@@ -1,5 +1,5 @@
 // 编辑隧道弹层：只改发布相关的东西——名称 / 公网网址 / 云端端口。
-// 访问保护（网页密码、IP 白名单）请到「访问保护」页改；
+// 访问保护（网页密码、IP 白名单）在隧道卡片上点保护状态改；
 // 这里保存时把当前的 access / accessUser / accessDetail 原样回传，保证不误动保护。
 // 规则：云端端口改了会自动断开重连一次；端口 / 网址改了要重新贴一次云端配置。
 //
@@ -38,12 +38,12 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
   const save = async () => {
     setError("");
     if (!name.trim()) {
-      setError("隧道名字不能为空");
+      setError("隧道名称不能为空");
       return;
     }
     const rp = Number(remotePort);
     if (!Number.isInteger(rp) || rp < 1 || rp > 65535) {
-      setError("云端端口要填 1~65535 的数字");
+      setError("云端端口需填写 1~65535 的数字");
       return;
     }
 
@@ -61,7 +61,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
         accessDetail: tunnel.accessDetail ?? null,
       });
       if (!ok) {
-        setError("没保存成功：看页面顶上的红色提示，改好再点保存");
+        setError("保存失败：请查看页面顶部的红色提示，修改后再点击保存");
         return;
       }
       window.dispatchEvent(new CustomEvent("shangxian:notif-refresh"));
@@ -83,7 +83,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
           <h2 className="modal-title">编辑隧道 · {tunnel.name}</h2>
           <p
             className="modal-sub"
-            title="改端口保存后会断开重连一次，还要重新贴云端配置；访问保护（网页密码 / IP 白名单）在「访问保护」页改。"
+            title="修改端口保存后会断开重连一次，并需重新粘贴云端配置；访问保护（网页密码 / IP 白名单）请在隧道卡片上点击保护状态修改。"
           >
             本机服务：{tunnel.serviceName}（本机端口 {tunnel.localPort}）。
           </p>
@@ -94,15 +94,15 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
           {needPaste ? (
             <div
               className="warn-line"
-              title="服务器上贴过的 nginx 片段要跟着更新一次，不然外面还是按老配置走。"
+              title="服务器上已粘贴的 nginx 片段需同步更新，否则外部仍按旧配置运行。"
             >
-              保存好了：{portChanged && "端口改了，"}
-              {urlChanged && "网址改了，"}云端配置要重贴一次。
+              保存完成：{portChanged && "端口已修改，"}
+              {urlChanged && "网址已修改，"}云端配置需重新粘贴一次。
             </div>
           ) : (
             <>
               <div className="field">
-                <label className="field-label">隧道名字</label>
+                <label className="field-label">隧道名称</label>
                 <input
                   className="input"
                   value={name}
@@ -111,7 +111,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
               </div>
 
               <div className="field">
-                <label className="field-label">公网网址（可空）</label>
+                <label className="field-label">公网网址（可留空）</label>
                 <input
                   className="input"
                   value={url}
@@ -131,13 +131,13 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
                 />
               </div>
               {portChanged && (
-                <div className="warn-line" title="保存后会断开重连一次，还要重新贴一次云端配置。">
-                  端口改了，会重连并要重贴配置。
+                <div className="warn-line" title="保存后会断开重连一次，并需重新粘贴一次云端配置。">
+                  端口已修改，将重连并需重新粘贴配置。
                 </div>
               )}
               {urlChanged && !portChanged && (
-                <div className="warn-line" title="云端认了新网址才生效。">
-                  网址改了，要重贴配置才认。
+                <div className="warn-line" title="云端使用新网址后才生效。">
+                  网址已修改，需重新粘贴配置后才会生效。
                 </div>
               )}
             </>
@@ -147,18 +147,18 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
           {needPaste ? (
             <>
               <button className="btn btn-ghost" onClick={onClose}>
-                稍后再说
+                稍后处理
               </button>
               <span className="grow" />
               <button
                 className="btn btn-primary"
-                title="把新的几行贴到服务器面板里并重载 nginx"
+                title="将新增配置行粘贴到服务器面板并重载 nginx"
                 onClick={() => {
                   onNeedNginx?.(tunnel);
                   onClose();
                 }}
               >
-                贴云端配置
+                粘贴云端配置
               </button>
             </>
           ) : (
@@ -170,7 +170,7 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
               <button
                 className="btn btn-primary"
                 disabled={busy || !configTrusted}
-                title={!configTrusted ? "配置文件读不出来，先修好再改设置" : undefined}
+                title={!configTrusted ? "配置文件无法读取，请先修复后再修改设置" : undefined}
                 onClick={() => void save()}
               >
                 {busy ? "保存中…" : "保存"}

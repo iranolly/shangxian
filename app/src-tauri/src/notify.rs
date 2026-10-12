@@ -50,7 +50,7 @@ pub fn spawn_guard(guardian: Arc<Mutex<Guardian>>, app: AppHandle) {
                 quiet.enabled && notify::in_quiet_hours(local_minutes_of_day(), from, to);
             for toast in notify::summarize(&notices) {
                 if quiet_on && toast.is_down {
-                    log_info(TAG_NOTIFY, "免打扰时段，压掉一条掉线提醒");
+                    log_info(TAG_NOTIFY, "免打扰时段，已跳过一条断开提醒");
                     continue;
                 }
                 send_toast(&app, &toast.title, &toast.body);
@@ -81,11 +81,11 @@ pub fn send_toast(app: &AppHandle, title: &str, body: &str) -> bool {
             true
         }
         Err(e) => {
-            log_warn(TAG_NOTIFY, &format!("通知没发出去：{e}"));
+            log_warn(TAG_NOTIFY, &format!("通知发送失败：{e}"));
             crate::sys_notice(
                 app,
                 "warn",
-                "系统通知发不出去，掉线和恢复只会记在应用里；可以到系统设置里看看通知权限。",
+                "系统通知发送失败，断开和恢复事件仅会记录在应用内；可到系统设置中查看通知权限。",
                 false,
             );
             false
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(toasts.len(), 2);
         assert!(toasts[0].is_down);
         // 混合了隧道 + 服务：core 的合并标题用「发布」（全是服务时才写「服务」）
-        assert_eq!(toasts[0].title, "3 条发布出问题了");
+        assert_eq!(toasts[0].title, "3 条发布存在问题");
         assert!(toasts[0].body.contains("相册"));
         assert!(!toasts[1].is_down);
     }

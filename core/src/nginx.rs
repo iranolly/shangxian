@@ -205,7 +205,7 @@ fn preset_lines(preset: &str, ws_map: Option<bool>) -> Vec<String> {
             } else {
                 lines.push("proxy_set_header Connection \"upgrade\";".to_string());
                 lines.push(
-                    "# 如果服务器全局配置里已有 connection_upgrade 的 map，把这行换成 $connection_upgrade 更稳（宝塔默认有）。"
+                    "# 如果服务器全局配置里已有 connection_upgrade 的 map，把这行换成 $connection_upgrade 更稳定（宝塔默认有）。"
                         .to_string(),
                 );
             }
@@ -250,7 +250,7 @@ pub fn generate_with(
                 (clean, false)
             } else {
                 warnings.push(format!(
-                    "公网网址「{raw}」不能直接当域名用：只允许字母、数字、点、横杠（不要带 http://、端口、路径）。这里先用「你的域名」占位，请回应用里改成纯域名再重新生成。"
+                    "公网网址「{raw}」不能直接作为域名使用：只允许字母、数字、点、横杠（不要包含 http://、端口、路径）。这里先用「你的域名」占位，请回到应用中改为纯域名后重新生成。"
                 ));
                 ("你的域名".to_string(), false)
             }
@@ -282,7 +282,7 @@ pub fn generate_with(
         if !valid_user(&user) {
             // 用户名有冒号/空白/换行：不能冒险拼 htpasswd，也不生成密码块。
             warnings.push(format!(
-                "访问用户名「{user}」里有冒号、空白或换行，不能用来做密码保护（会有注入风险）。这块没有生成，请回应用里改成普通用户名。"
+                "访问用户名「{user}」包含冒号、空白或换行，无法用于密码保护（存在注入风险）。这项未生成，请回到应用中改为普通用户名。"
             ));
         } else {
             blocks.push(format!(
@@ -292,7 +292,7 @@ pub fn generate_with(
             match svc.access_hash.as_deref() {
                 Some(hash) if valid_hash(hash) => htpasswd = Some(format!("{user}:{hash}")),
                 Some(_) => warnings.push(
-                    "密码哈希里有空白或不是正常哈希，htpasswd 内容没有生成；请回应用里重新设置一次访问密码。"
+                    "密码哈希包含空白或不是有效哈希，htpasswd 内容未生成；请回到应用中重新设置一次访问密码。"
                         .into(),
                 ),
                 None => {}
@@ -325,13 +325,13 @@ pub fn generate_with(
         }
         if !bad.is_empty() {
             warnings.push(format!(
-                "IP 白名单里有不认识的写法：{}。只认单个 IP 或 CIDR（例如 1.2.3.4、10.0.0.0/8）；all、0.0.0.0/0 等于没设防，已经跳过。",
+                "IP 白名单中存在无法识别的写法：{}。仅支持单个 IP 或 CIDR（例如 1.2.3.4、10.0.0.0/8）；all、0.0.0.0/0 等于未设防，已跳过。",
                 bad.join("、")
             ));
         }
         if valid.is_empty() {
             warnings.push(
-                "IP 白名单是空的（或者全是无效写法），IP 限制没有生成；也不会只放一行 deny all; ——那会把所有人都挡在外面。请回应用里填上 IP 再重新生成。"
+                "IP 白名单为空（或全部为无效写法），IP 限制未生成；也不会只放一行 deny all; ——那会阻止所有访问。请回到应用中填写 IP 后重新生成。"
                     .into(),
             );
         } else {
@@ -424,19 +424,19 @@ pub fn generate_with(
     // ---------- 使用说明（人话，只留 4 条短句 + 按需追加） ----------
     let mut steps: Vec<String> = vec![
         format!(
-            "站点和证书先在面板建好；「反向代理」目标填 http://127.0.0.1:{}。（配过就跳过）",
+            "请先在面板建好站点和证书；「反向代理」目标填写 http://127.0.0.1:{}。（已配置可跳过）",
             svc.remote_port
         ),
-        "把下面高亮的行加进「站点 → 配置修改」：只加这几行，不替换整段；保存后重载 nginx，再从外网打开确认。".into(),
+        "把下面高亮的行加入「站点 → 配置修改」：只添加这几行，不替换整段；保存后重载 nginx，再从外网打开确认。".into(),
     ];
     if want_password {
         if htpasswd.is_some() {
-            steps.push(format!("密码文件内容存到服务器上的 {file}（没有就新建）。"));
+            steps.push(format!("密码文件内容保存到服务器上的 {file}（不存在则新建）。"));
         } else {
-            steps.push("这个服务还没有可用的密码哈希：回应用里重新设置一次访问密码，再回来生成。".into());
+            steps.push("这个服务还没有可用的密码哈希：请回到应用中重新设置一次访问密码，再回来生成。".into());
         }
         steps.push(format!(
-            "密码文件要存到 {dir}/ 下面。面板不是小皮的话，回应用里把服务器的「站点目录」改成你面板的目录（比如宝塔填 /www/server/panel/vhost），再回来重新生成；临时也可以先设环境变量 SHANGXIAN_HTPASSWD_DIR 再重新生成。"
+            "密码文件要保存到 {dir}/ 下面。如果面板不是小皮，请回到应用中把服务器的「站点目录」改为所用面板的目录（例如宝塔填 /www/server/panel/vhost），再回来重新生成；临时也可先设置环境变量 SHANGXIAN_HTPASSWD_DIR 再重新生成。"
         ));
     }
     if !acme_lines.is_empty() {
@@ -447,48 +447,48 @@ pub fn generate_with(
             (false, false) => "",
         };
         steps.push(format!(
-            "{what}别漏——漏了证书到期不能自动续；它只放开 /.well-known/ 这个地址，别的地址照样要密码/白名单。"
+            "{what}不要遗漏——遗漏后证书到期无法自动续期；它只放开 /.well-known/ 这个地址，其他地址仍然需要密码/白名单。"
         ));
     }
     match preset {
         "ws" => {
             steps.push(
-                "勾了「WebSocket」：这几行让 AI 聊天、实时进度这类网页长连接不断线；放进已有的 location / { } 里，别贴到 server 里。".into(),
+                "已勾选「WebSocket」：这几行可让 AI 聊天、实时进度这类网页长连接保持稳定；请放入已有的 location / { } 中，不要贴到 server 里。".into(),
             );
             if opts.ws_map != Some(true) {
                 steps.push(
-                    "「Connection」那行先用 \"upgrade\"：如果服务器全局配置里已有 connection_upgrade 的 map（宝塔一般有），换成 $connection_upgrade 更稳。"
+                    "「Connection」那行先用 \"upgrade\"：如果服务器全局配置里已有 connection_upgrade 的 map（宝塔通常有），换成 $connection_upgrade 更稳定。"
                         .into(),
                 );
             }
         }
         "upload" => {
             steps.push(
-                "勾了「大文件上传」：上传上限放到 2GB，边传边转发、不占服务器硬盘。注意：得确保密码或白名单开着，不然别人也能传大文件。"
+                "已勾选「大文件上传」：上传上限提高到 2GB，边传边转发、不占服务器硬盘。注意：需确保密码或白名单已开启，否则其他访问者也能上传大文件。"
                     .into(),
             );
         }
         _ => {}
     }
     steps.push(
-        "「可选附加行」里的 noindex 默认没加：加上是告诉搜索引擎别收录这个网站（礼貌提示，不是门锁）；网站就是给所有人看的话不用加。".into(),
+        "「可选附加行」里的 noindex 默认未添加：添加后会告诉搜索引擎不要收录这个网站（礼貌提示，不是门锁）；网站面向所有人公开时无需添加。".into(),
     );
     match (want_password, want_ip) {
         (true, true) => steps.push(
-            "白名单和密码两道门都要过；换网络或换手机时记得回应用里加 IP。".into(),
+            "白名单和密码两道门都要过；更换网络或手机时请记得回到应用中添加 IP。".into(),
         ),
         (false, true) => {
-            steps.push("只有白名单里的 IP 能访问；换网络或换手机时记得回应用里加 IP。".into())
+            steps.push("只有白名单中的 IP 能访问；更换网络或手机时请记得回到应用中添加 IP。".into())
         }
         (false, false) => {
-            steps.push("⚠ 这个服务目前没有访问保护，建议在应用里给它设一个访问密码。".into())
+            steps.push("⚠ 这个服务目前没有访问保护，建议在应用中为它设置访问密码。".into())
         }
         (true, false) => {}
     }
     if url_missing {
         steps.insert(
             0,
-            "⚠ 这条隧道还没填公网网址：先回应用里把网址填上再回来重新生成（现在示意里的域名是占位符）。".into(),
+            "⚠ 这条隧道尚未填写公网网址：请先回到应用中填写网址，再回来重新生成（当前示意中的域名为占位符）。".into(),
         );
     }
 
@@ -721,7 +721,7 @@ mod tests {
         let tun = tunnel_with(vec!["ip"], None, None, Some("all"));
         let snip = generate(&tun, 8080, &fake_server());
         assert!(snip.snippet.is_none(), "只有 deny all 会把所有人挡住，不能生成");
-        assert!(snip.steps.iter().any(|s| s.contains("挡在外面")));
+        assert!(snip.steps.iter().any(|s| s.contains("阻止所有访问")));
         assert!(snip.acme_exempt.is_none(), "没有真正生效的白名单就不生成续期豁免");
     }
 

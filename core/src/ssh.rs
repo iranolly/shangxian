@@ -123,7 +123,7 @@ fn known_hosts_path() -> Result<PathBuf, String> {
     let home = std::env::var("USERPROFILE")
         .ok()
         .filter(|h| !h.trim().is_empty())
-        .ok_or_else(|| "读不到当前用户的目录（%USERPROFILE%）；可以手动打开 .ssh\\known_hosts 删掉那一行。".to_string())?;
+        .ok_or_else(|| "无法读取当前用户目录（%USERPROFILE%）；可手动打开 .ssh\\known_hosts 删除对应行。".to_string())?;
     Ok(Path::new(&home).join(".ssh").join("known_hosts"))
 }
 
@@ -133,7 +133,7 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<String, String> {
     let known_hosts = known_hosts_path()?;
     let target = known_hosts_target(host, port);
     let manual_hint = format!(
-        "可以手动打开 {} 删掉 {} 那一行。",
+        "可手动打开 {} 删除 {} 对应行。",
         known_hosts.display(),
         target
     );
@@ -164,7 +164,7 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<String, String> {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "重置失败：等了 {} 秒还没结束，已经把它停掉。{manual_hint}",
+                        "重置失败：等待 {} 秒后仍未结束，已将其停止。{manual_hint}",
                         FORGET_HOST_KEY_TIMEOUT.as_secs()
                     ));
                 }
@@ -193,7 +193,7 @@ pub fn forget_host_key(host: &str, port: u16) -> Result<String, String> {
         return Err(format!("重置失败：{detail}。{manual_hint}"));
     }
 
-    Ok("已忘掉旧指纹，下次连接会重新记下来。".into())
+    Ok("已清除旧主机指纹，下次连接会重新记录。".into())
 }
 
 fn first_non_empty_line(text: &str) -> Option<String> {

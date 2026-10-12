@@ -56,7 +56,7 @@ const DNS_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const DETAIL_MAX_CHARS: usize = 200;
 const ADVICE_MAX_CHARS: usize = 200;
 /// 超时统一文案（D2 §14.2）。
-pub const TIMEOUT_ADVICE: &str = "网络慢或服务器没响应；稍后再试。";
+pub const TIMEOUT_ADVICE: &str = "网络慢或服务器无响应；稍后再试。";
 
 // ---------- 模式与状态 ----------
 
@@ -352,24 +352,24 @@ pub fn run(req: &DoctorRequest) -> DoctorReport {
 fn step_app(req: &DoctorRequest) -> StepResult {
     if !req.app_running {
         return StepResult::fail(
-            "应用没在跑；这是离线体检，实时状态看不到。",
-            "先启动「上线助手」，再在应用里跑一次体检。",
+            "应用未启动；这是离线体检，无法查看实时状态。",
+            "请先启动「上线助手」，再在应用中运行一次体检。",
         );
     }
     if !req.config_trusted {
         let why = req
             .config_error
             .clone()
-            .unwrap_or_else(|| "配置文件读坏了（已留底成 config.json.bad），现在新设置不能保存。".into());
-        return StepResult::fail(why, "先修好设置文件，或恢复 config.json.bad，再重开应用。")
+            .unwrap_or_else(|| "配置文件已损坏（已备份为 config.json.bad），当前新设置无法保存。".into());
+        return StepResult::fail(why, "请先修复设置文件，或恢复 config.json.bad，再重开应用。")
             .with_fix(open_data_dir_fix());
     }
     if req.config.is_none() {
         let why = req
             .config_error
             .clone()
-            .unwrap_or_else(|| "设置文件读不出来。".into());
-        return StepResult::fail(why, "检查设置文件；修好或恢复备份后再重开应用。")
+            .unwrap_or_else(|| "设置文件无法读取。".into());
+        return StepResult::fail(why, "请检查设置文件；修复或恢复备份后再重开应用。")
             .with_fix(open_data_dir_fix());
     }
 
@@ -384,7 +384,7 @@ fn step_app(req: &DoctorRequest) -> StepResult {
         .filter(|v| !v.is_empty())
         .map(|v| format!("，版本 {v}"))
         .unwrap_or_default();
-    StepResult::pass(format!("应用在跑{pid}{ver}，设置文件能正常读。"))
+    StepResult::pass(format!("应用运行中{pid}{ver}，设置文件可正常读取。"))
 }
 
 // ---------- 步骤 2：dirs ----------
@@ -392,43 +392,43 @@ fn step_app(req: &DoctorRequest) -> StepResult {
 fn step_dirs(req: &DoctorRequest) -> StepResult {
     if req.data_dir.as_os_str().is_empty() {
         return StepResult::fail(
-            "没拿到数据目录，没法检查文件夹。",
-            "先启动应用；命令行体检时用参数指定数据目录。",
+            "未获取到数据目录，无法检查文件夹。",
+            "请先启动应用；命令行体检时通过参数指定数据目录。",
         );
     }
     if !req.data_dir.is_dir() {
         return StepResult::fail(
-            format!("数据目录不在：{}。", req.data_dir.display()),
-            "先去设置里确认数据目录；重新启动应用一般会自动把它建好。",
+            format!("数据目录不存在：{}。", req.data_dir.display()),
+            "请先在设置中确认数据目录；重新启动应用通常会自动创建。",
         );
     }
     if !dir_writable(&req.data_dir) {
         return StepResult::fail(
-            format!("数据目录在，但写不进去：{}。", req.data_dir.display()),
-            "检查这个文件夹的权限（也可能是杀毒软件或只读盘）；不行就把数据目录换到别的位置。",
+            format!("数据目录存在，但无法写入：{}。", req.data_dir.display()),
+            "请检查该文件夹的权限（也可能由杀毒软件或只读盘导致）；如仍无法写入，请把数据目录换到其他位置。",
         );
     }
 
     let bad = req.data_dir.join("config.json.bad");
     if bad.exists() {
         return StepResult::fail(
-            "上次配置读坏了，原文件留底在 config.json.bad；现在新设置保存不了。",
-            "把 config.json.bad 修好改回 config.json，或删掉它重新配置，然后重开应用。",
+            "上次配置读取失败，原文件已备份为 config.json.bad；当前新设置无法保存。",
+            "请修复 config.json.bad 后改回 config.json，或删除它重新配置，然后重开应用。",
         )
         .with_fix(open_data_dir_fix());
     }
     if let Some(err) = &req.config_error {
         return StepResult::fail(
             err.clone(),
-            "修好设置文件，或恢复备份，再重开应用。",
+            "请修复设置文件，或恢复备份，再重开应用。",
         )
         .with_fix(open_data_dir_fix());
     }
 
     if req.config.is_none() {
-        return StepResult::pass("数据目录能读能写；还没有设置文件（第一次运行正常）。");
+        return StepResult::pass("数据目录可读可写；尚未有设置文件（首次运行属正常）。");
     }
-    StepResult::pass("配置和数据目录都在，能读能写。")
+    StepResult::pass("配置和数据目录均存在，可读可写。")
 }
 
 /// 数据目录可写探测：建一个探针文件再删掉（只读体检不改用户数据）。
@@ -449,7 +449,7 @@ fn dir_writable(dir: &Path) -> bool {
 
 fn step_ssh(req: &DoctorRequest) -> StepResult {
     if !cfg!(windows) {
-        return StepResult::skip("当前系统不是 Windows；这一步跳过。");
+        return StepResult::skip("当前系统不是 Windows；本步骤跳过。");
     }
     let exe = req
         .ssh_exe
@@ -459,12 +459,12 @@ fn step_ssh(req: &DoctorRequest) -> StepResult {
         StepResult::pass(format!("找到系统自带 ssh：{}", exe.display()))
     } else {
         StepResult::fail(
-            format!("没找到 ssh 程序：{} 不存在。", exe.display()),
-            "去「设置 → 应用 → 可选功能」里装上「OpenSSH 客户端」，装完重开应用。",
+            format!("未找到 ssh 程序：{} 不存在。", exe.display()),
+            "请在「设置 → 应用 → 可选功能」中安装「OpenSSH 客户端」，安装后重开应用。",
         )
         .with_fix(DoctorFix {
-            label: "怎么装 OpenSSH".into(),
-            text: "1. 打开 Windows「设置」；\n2. 进「应用 → 可选功能」；\n3. 添加「OpenSSH 客户端」；\n4. 装好重开「上线助手」再体检。".into(),
+            label: "如何安装 OpenSSH".into(),
+            text: "1. 打开 Windows「设置」；\n2. 进入「应用 → 可选功能」；\n3. 添加「OpenSSH 客户端」；\n4. 安装完成后重开「上线助手」再体检。".into(),
         })
     }
 }
@@ -473,10 +473,10 @@ fn step_ssh(req: &DoctorRequest) -> StepResult {
 
 fn step_ports(req: &DoctorRequest) -> StepResult {
     if !req.app_running {
-        return StepResult::skip("应用没在跑，看不到实时状态。");
+        return StepResult::skip("应用未启动，无法查看实时状态。");
     }
     if req.services.is_empty() {
-        return StepResult::skip("还没有登记本机服务。");
+        return StepResult::skip("尚未登记本机服务。");
     }
     let n = req.services.len();
     let up = req.services.iter().filter(|s| s.health == "up").count();
@@ -486,7 +486,7 @@ fn step_ports(req: &DoctorRequest) -> StepResult {
     if down.is_empty() {
         let mut detail = format!("{n} 台服务里 {up} 台端口正常");
         if unknown > 0 {
-            detail.push_str(&format!("，{unknown} 台还没探到"));
+            detail.push_str(&format!("，{unknown} 台尚未探测到"));
         }
         StepResult::pass(format!("{detail}。"))
     } else {
@@ -496,8 +496,8 @@ fn step_ports(req: &DoctorRequest) -> StepResult {
             .collect::<Vec<_>>()
             .join("、");
         StepResult::fail(
-            format!("{n} 台服务里 {} 台端口不通：{names}。", down.len()),
-            "先把这些本机服务启动起来；启动后还不通，就看服务自己的日志。",
+            format!("{n} 台服务中 {} 台端口不通：{names}。", down.len()),
+            "请先启动这些本机服务；启动后仍不通，请查看服务自身的日志。",
         )
     }
 }
@@ -507,25 +507,25 @@ fn step_ports(req: &DoctorRequest) -> StepResult {
 fn step_servers(req: &DoctorRequest) -> StepResult {
     let servers = effective_servers(req);
     if servers.is_empty() {
-        return StepResult::skip("还没有配置云端服务器。");
+        return StepResult::skip("尚未配置云端服务器。");
     }
     let tunnels = effective_tunnels(req);
     let enabled: Vec<&DoctorTunnel> = tunnels.iter().filter(|t| t.enabled).collect();
     if enabled.is_empty() {
-        return StepResult::skip("没有开启的隧道，没有服务器引用要查。");
+        return StepResult::skip("没有已开启的隧道，无需检查服务器引用。");
     }
 
     let mut bad: Vec<String> = Vec::new();
     for tun in &enabled {
         match find_server(&servers, &tun.server_id) {
-            None => bad.push(format!("{}（云端服务器不在了）", tun.name)),
+            None => bad.push(format!("{}（云端服务器已不存在）", tun.name)),
             Some(server) => {
                 if server.host.trim().is_empty() {
-                    bad.push(format!("{}（服务器地址是空的）", tun.name));
+                    bad.push(format!("{}（服务器地址为空）", tun.name));
                     continue;
                 }
                 if server.ssh_port == 0 {
-                    bad.push(format!("{}（SSH 端口不对）", tun.name));
+                    bad.push(format!("{}（SSH 端口无效）", tun.name));
                     continue;
                 }
                 let key = tun
@@ -536,7 +536,7 @@ fn step_servers(req: &DoctorRequest) -> StepResult {
                     .filter(|k| !k.is_empty());
                 if let Some(key) = key {
                     if !Path::new(key).is_file() {
-                        bad.push(format!("{}（密钥文件不在了：{key}）", tun.name));
+                        bad.push(format!("{}（密钥文件已不存在：{key}）", tun.name));
                     }
                 }
             }
@@ -545,22 +545,22 @@ fn step_servers(req: &DoctorRequest) -> StepResult {
 
     if bad.is_empty() {
         StepResult::pass(format!(
-            "{n} 条开启的隧道，引用的服务器信息都正常。",
+            "{n} 条已开启的隧道，引用的服务器信息均正常。",
             n = enabled.len()
         ))
     } else {
         StepResult::fail(
             format!(
-                "{n} 条开启的隧道里 {m} 条有问题：{list}。",
+                "{n} 条已开启的隧道中 {m} 条存在问题：{list}。",
                 n = enabled.len(),
                 m = bad.len(),
                 list = bad.join("；")
             ),
-            "去「云端服务器」页补齐信息；密钥文件不在的话，重新用密码配一次免密。",
+            "请在「云端服务器」页补齐信息；密钥文件不存在时，请重新用密码配置一次免密登录。",
         )
         .with_fix(DoctorFix {
             label: "去云端服务器".into(),
-            text: "1. 打开「云端服务器」页；\n2. 核对地址、端口和密钥；\n3. 密钥没了就重新配一次免密；\n4. 回来再体检。".into(),
+            text: "1. 打开「云端服务器」页；\n2. 核对地址、端口和密钥；\n3. 密钥不存在时重新配置一次免密；\n4. 返回后再体检。".into(),
         })
     }
 }
@@ -569,13 +569,13 @@ fn step_servers(req: &DoctorRequest) -> StepResult {
 
 fn step_tunnels(req: &DoctorRequest) -> StepResult {
     if !req.app_running {
-        return StepResult::skip("应用没在跑，看不到实时状态。");
+        return StepResult::skip("应用未启动，无法查看实时状态。");
     }
     let servers = effective_servers(req);
     let tunnels = effective_tunnels(req);
     let enabled: Vec<&DoctorTunnel> = tunnels.iter().filter(|t| t.enabled).collect();
     if enabled.is_empty() {
-        return StepResult::pass("现在没有开启的发布隧道；建好并开启后这里会显示发布情况。");
+        return StepResult::pass("当前没有已开启的发布隧道；创建并开启后这里会显示发布情况。");
     }
 
     let running = enabled.iter().filter(|t| t.status == "running").count();
@@ -588,10 +588,10 @@ fn step_tunnels(req: &DoctorRequest) -> StepResult {
     for tun in &enabled {
         let mut why: Vec<String> = Vec::new();
         if !has_service(req, &tun.service_id) {
-            why.push("本机服务不在了".into());
+            why.push("本机服务已不存在".into());
         }
         if find_server(&servers, &tun.server_id).is_none() {
-            why.push("云端服务器不在了".into());
+            why.push("云端服务器已不存在".into());
         }
         if tun.status == "error" {
             let reason = tun
@@ -599,7 +599,7 @@ fn step_tunnels(req: &DoctorRequest) -> StepResult {
                 .as_deref()
                 .map(str::trim)
                 .filter(|r| !r.is_empty())
-                .unwrap_or("发布出错了");
+                .unwrap_or("发布出错");
             why.push(reason.to_string());
         }
         if !why.is_empty() {
@@ -608,26 +608,26 @@ fn step_tunnels(req: &DoctorRequest) -> StepResult {
     }
 
     let mut detail = format!(
-        "{} 条开启：{running} 条正在发布，{no_url} 条还没填网址",
+        "{} 条已开启：{running} 条发布中，{no_url} 条尚未填写网址",
         enabled.len()
     );
     if bad.is_empty() {
         if no_url > 0 {
-            detail.push_str("（没填网址的隧道公网检查会跳过）");
+            detail.push_str("（未填写网址的隧道将跳过公网检查）");
         }
         StepResult::pass(format!("{detail}。"))
     } else {
         StepResult::fail(
             format!(
-                "{detail}；{} 条有问题：{}。",
+                "{detail}；{} 条存在问题：{}。",
                 bad.len(),
                 bad.join("；")
             ),
-            "先看这几条隧道的日志，点「重连」；引用缺了就回「本机服务」或「云端服务器」补齐。",
+            "请先查看这几条隧道的日志；需要重试时先点「暂停」、再点「开始发布」；引用缺失时回「本机服务」或「云端服务器」补齐。",
         )
         .with_fix(DoctorFix {
-            label: "去看日志".into(),
-            text: "1. 打开对应隧道的卡片；\n2. 点「看日志」，先看最后几行；\n3. 修好后点「重连」；\n4. 回来再体检。".into(),
+            label: "查看日志".into(),
+            text: "1. 打开对应隧道的卡片；\n2. 点击「查看日志」，先看最后几行；\n3. 修复后先点「暂停」、再点「开始发布」重试；\n4. 返回后再体检。".into(),
         })
     }
 }
@@ -636,11 +636,11 @@ fn step_tunnels(req: &DoctorRequest) -> StepResult {
 
 fn step_cloud(req: &DoctorRequest, deadline: Instant) -> StepResult {
     if !req.mode.is_deep() {
-        return StepResult::skip("快速检查不连服务器；想看云端就切「深度检查」再跑。");
+        return StepResult::skip("快速检查不连接服务器；如需检查云端，请切换「深度检查」后再运行。");
     }
     let servers = effective_servers(req);
     if servers.is_empty() {
-        return StepResult::skip("还没有配置云端服务器，没得测。");
+        return StepResult::skip("尚未配置云端服务器，无法测试。");
     }
     if budget_exhausted(deadline) {
         return budget_fail("云端配置");
@@ -662,7 +662,7 @@ fn step_cloud(req: &DoctorRequest, deadline: Instant) -> StepResult {
             .collect()
     };
     if targets.is_empty() {
-        return StepResult::skip("开启的隧道没有引用到现存服务器；先去「云端服务器」页补回来。");
+        return StepResult::skip("已开启的隧道未引用到现存服务器；请先在「云端服务器」页补齐。");
     }
     let truncated = targets.len() > MAX_CLOUD_SERVERS;
     targets.truncate(MAX_CLOUD_SERVERS);
@@ -685,7 +685,7 @@ fn step_cloud(req: &DoctorRequest, deadline: Instant) -> StepResult {
     let warn_n = children.iter().filter(|c| c.status == DoctorStatus::Warn).count();
 
     let mut detail = match status {
-        DoctorStatus::Pass => format!("{total} 台服务器都连得上，站点目录也在。"),
+        DoctorStatus::Pass => format!("{total} 台服务器均可连接，站点目录存在。"),
         DoctorStatus::Fail => {
             let names = children
                 .iter()
@@ -693,13 +693,13 @@ fn step_cloud(req: &DoctorRequest, deadline: Instant) -> StepResult {
                 .map(|c| c.title.as_str())
                 .collect::<Vec<_>>()
                 .join("、");
-            format!("{total} 台服务器里 {fail_n} 台没通过：{names}。")
+            format!("{total} 台服务器中 {fail_n} 台未通过：{names}。")
         }
-        DoctorStatus::Warn => format!("{total} 台服务器能连上，但有 {warn_n} 台要留意。"),
-        DoctorStatus::Skip => format!("{total} 台服务器这次都跳过了。"),
+        DoctorStatus::Warn => format!("{total} 台服务器可连接，但有 {warn_n} 台需注意。"),
+        DoctorStatus::Skip => format!("{total} 台服务器本次均已跳过。"),
     };
     if truncated {
-        detail.push_str("（最多测 5 台，其余这次没测）");
+        detail.push_str("（最多测试 5 台，其余本次未测试）");
     }
 
     let mut result = StepResult::from_parts(status, detail, first_actionable_advice(&children));
@@ -707,7 +707,7 @@ fn step_cloud(req: &DoctorRequest, deadline: Instant) -> StepResult {
     if status == DoctorStatus::Fail {
         result.fix = Some(DoctorFix {
             label: "去云端服务器".into(),
-            text: "1. 打开「云端服务器」页；\n2. 核对地址、SSH 端口和密钥；\n3. 确认面板站点目录填对（宝塔一般是 /www/server/panel/vhost）；\n4. 回来再体检。".into(),
+            text: "1. 打开「云端服务器」页；\n2. 核对地址、SSH 端口和密钥；\n3. 确认面板站点目录填写正确（宝塔通常为 /www/server/panel/vhost）；\n4. 返回后再体检。".into(),
         });
     }
     result
@@ -722,8 +722,8 @@ fn check_cloud_server(
 ) -> StepResult {
     if server.host.trim().is_empty() {
         return StepResult::fail(
-            format!("{}：服务器地址是空的。", server.name),
-            "去「云端服务器」页把地址补上，再体检。",
+            format!("{}：服务器地址为空。", server.name),
+            "请在「云端服务器」页补全地址，再体检。",
         );
     }
     let timeout = step_timeout(step_end, SSH_TIMEOUT);
@@ -745,15 +745,15 @@ fn check_cloud_server(
                 || out.contains("dir-missing");
             if !reached {
                 StepResult::fail(
-                    format!("{}：连上了，但没看懂服务器返回的内容。", server.name),
-                    "稍后再试；一直这样就把诊断包发给懂行的人。",
+                    format!("{}：已连接，但无法解析服务器返回的内容。", server.name),
+                    "请稍候重试；若持续出现，请把诊断包发给技术人员排查。",
                 )
             } else if out.contains("dir-ok") {
-                StepResult::pass(format!("{}：连接正常，站点目录也在。", server.name))
+                StepResult::pass(format!("{}：连接正常，站点目录存在。", server.name))
             } else {
                 StepResult::fail(
-                    format!("{}：连上了，但站点目录不在：{nginx_dir}。", server.name),
-                    "去「云端服务器」页把「站点目录」改成面板的实际目录（宝塔一般是 /www/server/panel/vhost），再重新检查。",
+                    format!("{}：已连接，但站点目录不存在：{nginx_dir}。", server.name),
+                    "请在「云端服务器」页把「站点目录」改为面板的实际目录（宝塔通常为 /www/server/panel/vhost），再重新检查。",
                 )
             }
         }
@@ -765,10 +765,10 @@ fn check_cloud_server(
 
 fn step_web(req: &DoctorRequest, deadline: Instant) -> StepResult {
     if !req.mode.is_deep() {
-        return StepResult::skip("快速检查不连服务器；想看公网就切「深度检查」再跑。");
+        return StepResult::skip("快速检查不连接服务器；如需检查公网，请切换「深度检查」后再运行。");
     }
     if !req.app_running {
-        return StepResult::skip("应用没在跑，看不到隧道状态；先启动应用再跑深度检查。");
+        return StepResult::skip("应用未启动，无法查看隧道状态；请先启动应用再运行深度检查。");
     }
     let tunnels = effective_tunnels(req);
     let mut targets: Vec<&DoctorTunnel> = tunnels
@@ -777,7 +777,7 @@ fn step_web(req: &DoctorRequest, deadline: Instant) -> StepResult {
         .filter(|t| t.url.as_deref().map(|u| !u.trim().is_empty()).unwrap_or(false))
         .collect();
     if targets.is_empty() {
-        return StepResult::skip("没有开着、又填了公网网址的隧道。");
+        return StepResult::skip("没有已开启且填写了公网网址的隧道。");
     }
     let truncated = targets.len() > MAX_WEB_TUNNELS;
     targets.truncate(MAX_WEB_TUNNELS);
@@ -816,24 +816,24 @@ fn step_web(req: &DoctorRequest, deadline: Instant) -> StepResult {
                 .map(|c| c.title.trim_start_matches("公网："))
                 .collect::<Vec<_>>()
                 .join("、");
-            format!("{total} 条隧道里 {fail_n} 条打不开：{names}。")
+            format!("{total} 条隧道中 {fail_n} 条无法打开：{names}。")
         }
-        DoctorStatus::Warn => format!("{total} 条隧道能打开，但有 {warn_n} 条要留意。"),
+        DoctorStatus::Warn => format!("{total} 条隧道可打开，但有 {warn_n} 条需注意。"),
         DoctorStatus::Pass => {
             let skip_n = children
                 .iter()
                 .filter(|c| c.status == DoctorStatus::Skip)
                 .count();
             if skip_n == 0 {
-                format!("{total} 条隧道都能打开。")
+                format!("{total} 条隧道均可打开。")
             } else {
-                format!("{total} 条隧道里 {pass_n} 条正常，{skip_n} 条没在发布（跳过）。")
+                format!("{total} 条隧道中 {pass_n} 条正常，{skip_n} 条未在发布（跳过）。")
             }
         }
-        DoctorStatus::Skip => "这次没有正在发布的隧道，等隧道跑起来再测。".into(),
+        DoctorStatus::Skip => "本次没有发布中的隧道，待隧道启动后再测试。".into(),
     };
     if truncated {
-        detail.push_str("（最多测 10 条，其余这次没测）");
+        detail.push_str("（最多测试 10 条，其余本次未测试）");
     }
 
     let mut result = StepResult::from_parts(status, detail, first_actionable_advice(&children));
@@ -852,30 +852,30 @@ fn check_web_tunnel(
     global_deadline: Instant,
 ) -> StepResult {
     if tun.status != "running" {
-        return StepResult::skip("这条隧道没在发布，先点「开始」再测。");
+        return StepResult::skip("这条隧道未在发布，请先点击「开始发布」再测试。");
     }
     let servers = effective_servers(req);
     let Some(server) = find_server(&servers, &tun.server_id) else {
         return StepResult::fail(
-            "这条隧道挂的云端服务器不在了。",
-            "去「云端服务器」页重新选一台，或删掉这条隧道。",
+            "这条隧道关联的云端服务器已不存在。",
+            "请在「云端服务器」页重新选择一台，或删除这条隧道。",
         );
     };
     let raw = tun.url.as_deref().map(str::trim).unwrap_or("");
     if raw.is_empty() {
-        return StepResult::skip("这条隧道没填公网网址，跳过。");
+        return StepResult::skip("这条隧道尚未填写公网网址，跳过。");
     }
     let domain = crate::nginx::normalize_domain(raw);
     if domain.is_empty() {
         return StepResult::fail(
-            format!("网址「{raw}」看不出域名。"),
-            "回隧道设置把网址填成 example.com 这种域名（或带 https:// 的完整网址）。",
+            format!("网址「{raw}」无法识别域名。"),
+            "请在隧道设置中把网址填写为 example.com 形式的域名（或带 https:// 的完整网址）。",
         );
     }
     if server.host.trim().is_empty() {
         return StepResult::fail(
-            "服务器地址是空的，没法探测。",
-            "去「云端服务器」页把地址补上。",
+            "服务器地址为空，无法探测。",
+            "请在「云端服务器」页补全地址。",
         );
     }
 
@@ -899,22 +899,22 @@ fn check_web_tunnel(
                 }
                 return match tcp_probe(host, tun.remote_port, fallback) {
                     Ok(()) => StepResult::pass(format!(
-                        "服务器上没装 curl；用本机直连 {host}:{} 测了一下：通。",
+                        "服务器未安装 curl；已用本机直连 {host}:{} 测试：可连接。",
                         tun.remote_port
                     )),
                     Err(err) => StepResult::fail(
                         format!(
-                            "服务器上没装 curl；本机连 {host}:{} 也不通（{err}）。",
+                            "服务器未安装 curl；本机连接 {host}:{} 也不通（{err}）。",
                             tun.remote_port
                         ),
-                        "检查域名解析和防火墙；服务器上装上 curl 后体检会更准。",
+                        "请检查域名解析和防火墙；服务器安装 curl 后体检会更准确。",
                     ),
                 };
             }
             match judge_probe(&probe, &domain) {
                 Some((status, detail, advice)) => StepResult::from_parts(status, detail, advice),
                 None => StepResult::fail(
-                    "没拿到公网探测结果。",
+                    "未获取到公网探测结果。",
                     TIMEOUT_ADVICE,
                 ),
             }
@@ -1022,41 +1022,41 @@ fn judge_probe(probe: &ProbeOutput, domain: &str) -> Option<(DoctorStatus, Strin
             (
                 DoctorStatus::Fail,
                 format!("https://{domain}/ 的证书有问题（校验结果 {}）。", probe.https_ssl),
-                "去面板点「续签证书」，或检查证书绑的域名对不对。".into(),
+                "请在面板点击「续签证书」，或检查证书绑定的域名是否正确。".into(),
             )
         } else {
             match probe.https_code {
                 Some(code) if matches!(code, 200 | 204 | 301 | 302 | 307 | 308) => (
                     DoctorStatus::Pass,
-                    format!("https://{domain}/ 返回 {code}，能打开。"),
+                    format!("https://{domain}/ 返回 {code}，可正常打开。"),
                     String::new(),
                 ),
                 Some(code) if matches!(code, 401 | 403) => (
                     DoctorStatus::Pass,
-                    format!("https://{domain}/ 返回 {code}（要密码或不在白名单），说明保护正常、线路也通。"),
+                    format!("https://{domain}/ 返回 {code}（需要密码或不在白名单），说明保护正常、线路也通。"),
                     String::new(),
                 ),
                 Some(404) => (
                     DoctorStatus::Warn,
                     format!(
-                        "https://{domain}/ 返回 404：线路通，但网站本身可能没配对。"
+                        "https://{domain}/ 返回 404：线路通，但网站本身可能未正确配置。"
                     ),
-                    "去面板核对「反向代理」是不是指向 http://127.0.0.1:<本隧道的云端端口>，再看本机服务在不在跑。".into(),
+                    "请在面板核对「反向代理」是否指向 http://127.0.0.1:<本隧道的云端端口>，再检查本机服务是否在运行。".into(),
                 ),
                 Some(code) if (500..=599).contains(&code) => (
                     DoctorStatus::Warn,
-                    format!("https://{domain}/ 返回 {code}：线路通，但网站本身出错了。"),
-                    "去面板看站点配置；本机服务的日志里通常有线索。".into(),
+                    format!("https://{domain}/ 返回 {code}：线路通，但网站本身出错。"),
+                    "请在面板查看站点配置；本机服务的日志中通常有线索。".into(),
                 ),
                 Some(code) => (
                     DoctorStatus::Warn,
-                    format!("https://{domain}/ 返回了 {code}，说不上好还是坏。"),
-                    "先用浏览器打开看看；打不开就查面板里的站点配置。".into(),
+                    format!("https://{domain}/ 返回 {code}，暂无法判断是否正常。"),
+                    "请先用浏览器打开查看；若无法打开，请检查面板中的站点配置。".into(),
                 ),
                 None => (
                     DoctorStatus::Warn,
-                    format!("https://{domain}/ 没拿到 HTTP 状态码。"),
-                    "过一会儿再测；一直这样就把诊断包发给懂行的人。".into(),
+                    format!("https://{domain}/ 未获取到 HTTP 状态码。"),
+                    "请稍候再测；若持续出现，请把诊断包发给技术人员排查。".into(),
                 ),
             }
         }
@@ -1064,25 +1064,25 @@ fn judge_probe(probe: &ProbeOutput, domain: &str) -> Option<(DoctorStatus, Strin
         (
             DoctorStatus::Fail,
             format!("https://{domain}/ 的证书有问题（curl 退出码 60）。"),
-            "去面板点「续签」，或检查证书绑的域名。".into(),
+            "请在面板点击「续签」，或检查证书绑定的域名。".into(),
         )
     } else if probe.https_rc == 6 {
         (
             DoctorStatus::Fail,
-            format!("{domain} 域名解析不了。"),
-            "检查域名解析（DNS）是不是指向这台服务器。".into(),
+            format!("{domain} 域名无法解析。"),
+            "请检查域名解析（DNS）是否指向这台服务器。".into(),
         )
     } else if probe.https_rc == 7 || probe.https_rc == 28 {
         (
             DoctorStatus::Fail,
-            format!("https://{domain}/ 连不上或超时（curl 退出码 {}）。", probe.https_rc),
-            "可能是域名没解析、防火墙没开 443/80，或者服务器在 NAT/CDN 后面、自己访问不了自己的公网地址。可以先换手机流量再点一次体检。".into(),
+            format!("https://{domain}/ 无法连接或超时（curl 退出码 {}）。", probe.https_rc),
+            "可能是域名未解析、防火墙未开放 443/80，或者服务器位于 NAT/CDN 之后、无法访问自身公网地址。可以换用手机流量后再体检一次。".into(),
         )
     } else if probe.https_rc < 0 {
         (
             DoctorStatus::Fail,
-            format!("https://{domain}/ 没拿到探测结果。"),
-            "检查服务器上能不能正常跑命令；稍后再试。".into(),
+            format!("https://{domain}/ 未获取到探测结果。"),
+            "请检查服务器上能否正常执行命令；稍后再试。".into(),
         )
     } else {
         (
@@ -1099,8 +1099,8 @@ fn judge_probe(probe: &ProbeOutput, domain: &str) -> Option<(DoctorStatus, Strin
     {
         return Some((
             DoctorStatus::Warn,
-            format!("http://{domain}/ 能直接打开，没跳 https。"),
-            "去面板打开「强制 HTTPS」，不然内容（和密码）是明文传的。".into(),
+            format!("http://{domain}/ 可直接打开，未跳转 https。"),
+            "请在面板打开「强制 HTTPS」，否则内容（和密码）会以明文传输。".into(),
         ));
     }
 
@@ -1111,12 +1111,12 @@ fn judge_probe(probe: &ProbeOutput, domain: &str) -> Option<(DoctorStatus, Strin
 
 fn step_dns(req: &DoctorRequest, deadline: Instant) -> StepResult {
     if !req.mode.is_deep() {
-        return StepResult::skip("快速检查不查域名；想看域名就切「深度检查」再跑。");
+        return StepResult::skip("快速检查不查询域名；如需检查域名，请切换「深度检查」后再运行。");
     }
     let tunnels = effective_tunnels(req);
     let domains = tunnel_domains(&tunnels, MAX_DNS_DOMAINS);
     if domains.is_empty() {
-        return StepResult::skip("没有填公网网址的隧道，没域名可查。");
+        return StepResult::skip("没有填写公网网址的隧道，无域名可查。");
     }
     if budget_exhausted(deadline) {
         return budget_fail("域名解析");
@@ -1148,9 +1148,9 @@ fn step_dns(req: &DoctorRequest, deadline: Instant) -> StepResult {
                 .map(|c| c.title.as_str())
                 .collect::<Vec<_>>()
                 .join("、");
-            format!("{total} 个域名里 {fail_n} 个解析不了：{names}。")
+            format!("{total} 个域名中 {fail_n} 个无法解析：{names}。")
         }
-        _ => format!("{total} 个域名都能解析。"),
+        _ => format!("{total} 个域名均可解析。"),
     };
 
     let mut result = StepResult::from_parts(status, detail, first_actionable_advice(&children));
@@ -1168,13 +1168,13 @@ fn dns_lookup(domain: &str, step_end: Instant, global_deadline: Instant) -> Step
     }
     match resolve_with_timeout(domain, 443, timeout) {
         Ok(ips) => StepResult::pass(format!(
-            "{domain} 能解析到 {} 个地址（例：{}）。",
+            "{domain} 可解析到 {} 个地址（例如：{}）。",
             ips.len(),
             ips[0]
         )),
         Err(err) => StepResult::fail(
-            format!("{domain} 解析不了：{err}。"),
-            "检查域名解析是不是指向这台服务器；也可以换个本机 DNS 再试。",
+            format!("{domain} 无法解析：{err}。"),
+            "请检查域名解析是否指向这台服务器；也可更换本机 DNS 再试。",
         ),
     }
 }
@@ -1204,7 +1204,7 @@ fn tunnel_domains(tunnels: &[DoctorTunnel], max: usize) -> Vec<String> {
 /// 本机 TCP 直连 `host:port`，成功才算通（web 步没有 curl 时的兜底）。
 fn tcp_probe(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
     if timeout.is_zero() {
-        return Err("时间不够".into());
+        return Err("时间不足".into());
     }
     let half = timeout / 2;
     let ips = resolve_with_timeout(host, port, half)?;
@@ -1217,7 +1217,7 @@ fn tcp_probe(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
         }
     }
     Err(if last.is_empty() {
-        "连不上".into()
+        "无法连接".into()
     } else {
         last
     })
@@ -1226,7 +1226,7 @@ fn tcp_probe(host: &str, port: u16, timeout: Duration) -> Result<(), String> {
 /// 带超时的域名解析：std 的 `ToSocketAddrs` 没有超时参数，放到独立线程里等。
 fn resolve_with_timeout(host: &str, port: u16, timeout: Duration) -> Result<Vec<IpAddr>, String> {
     if timeout.is_zero() {
-        return Err("时间不够".into());
+        return Err("时间不足".into());
     }
     let (tx, rx) = mpsc::channel();
     let owned = host.to_string();
@@ -1239,7 +1239,7 @@ fn resolve_with_timeout(host: &str, port: u16, timeout: Duration) -> Result<Vec<
     });
     match rx.recv_timeout(timeout) {
         Ok(Ok(ips)) if !ips.is_empty() => Ok(ips),
-        Ok(Ok(_)) => Err("没有解析到 IP".into()),
+        Ok(Ok(_)) => Err("未解析到 IP".into()),
         Ok(Err(err)) => Err(err),
         Err(_) => Err(format!("解析超时（{} 秒）", timeout.as_secs())),
     }
@@ -1310,8 +1310,8 @@ fn catch_result(f: impl FnOnce() -> StepResult) -> StepResult {
         Err(payload) => {
             let message = panic_text(payload);
             StepResult::fail(
-                format!("检查时出了个意外错误：{message}"),
-                "先重开应用再体检一次；还不行就把诊断包发给懂行的人。",
+                format!("检查时出现意外错误：{message}"),
+                "请先重开应用再体检一次；若仍不行，请把诊断包发给技术人员排查。",
             )
         }
     }
@@ -1394,7 +1394,7 @@ fn budget_exhausted(deadline: Instant) -> bool {
 
 fn budget_fail(what: &str) -> StepResult {
     StepResult::fail(
-        format!("体检总时间用完了（最多 60 秒），「{what}」没跑完。"),
+        format!("体检总时间已用完（最多 60 秒），「{what}」未完成。"),
         TIMEOUT_ADVICE,
     )
 }
@@ -1405,7 +1405,7 @@ fn deadline_fail(what: &str, step_end: Instant, global_deadline: Instant) -> Ste
         budget_fail(what)
     } else {
         StepResult::fail(
-            format!("「{what}」等太久了（单步最多 20 秒），这次没跑完。"),
+            format!("「{what}」等待过久（单步最多 20 秒），本次未完成。"),
             TIMEOUT_ADVICE,
         )
     }
@@ -1419,7 +1419,7 @@ fn ssh_failure(err: &str) -> (DoctorStatus, String, String) {
     if lower.contains("命令超时") || lower.contains("timed out") {
         return (
             DoctorStatus::Fail,
-            "连服务器超时（网络慢或服务器没响应）。".into(),
+            "连接服务器超时（网络慢或服务器无响应）。".into(),
             TIMEOUT_ADVICE.into(),
         );
     }
@@ -1434,8 +1434,8 @@ fn ssh_failure(err: &str) -> (DoctorStatus, String, String) {
     }
     (
         DoctorStatus::Fail,
-        format!("连服务器失败：{}", one_line(err)),
-        "检查网络、服务器地址、SSH 端口和密钥，再试一次。".into(),
+        format!("连接服务器失败：{}", one_line(err)),
+        "请检查网络、服务器地址、SSH 端口和密钥，然后重试。".into(),
     )
 }
 
@@ -1557,10 +1557,10 @@ fn ssh_exec(req: &DoctorRequest, server: &ServerConfig) -> SshExec {
 
 fn persist_report(req: &DoctorRequest, report: &DoctorReport) -> Result<(), String> {
     if req.data_dir.as_os_str().is_empty() {
-        return Err("数据目录是空的".into());
+        return Err("数据目录为空".into());
     }
     let logs = req.data_dir.join("logs");
-    std::fs::create_dir_all(&logs).map_err(|err| format!("建日志目录失败：{err}"))?;
+    std::fs::create_dir_all(&logs).map_err(|err| format!("创建日志目录失败：{err}"))?;
     let path = logs.join("doctor-last.json");
     let text = serde_json::to_string_pretty(report)
         .map_err(|err| format!("体检报告序列化失败：{err}"))?;
@@ -1573,7 +1573,7 @@ fn persist_report(req: &DoctorRequest, report: &DoctorReport) -> Result<(), Stri
         }
         let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::write(&path, text.as_bytes()).map_err(|err| format!("写体检报告失败：{err}"))
+    std::fs::write(&path, text.as_bytes()).map_err(|err| format!("写入体检报告失败：{err}"))
 }
 
 fn emit_doctor_ran(req: &DoctorRequest, report: &DoctorReport) {
@@ -1612,14 +1612,14 @@ fn emit_doctor_ran(req: &DoctorRequest, report: &DoctorReport) {
 fn open_data_dir_fix() -> DoctorFix {
     DoctorFix {
         label: "打开数据目录".into(),
-        text: "1. 打开应用的数据目录；\n2. 先把 config.json.bad 备份出来；\n3. 修好 config.json，或删掉重配；\n4. 重开应用再体检。".into(),
+        text: "1. 打开应用的数据目录；\n2. 先备份 config.json.bad；\n3. 修复 config.json，或删除后重新配置；\n4. 重开应用再体检。".into(),
     }
 }
 
 fn diag_fix() -> DoctorFix {
     DoctorFix {
         label: "导出诊断包".into(),
-        text: "1. 在体检弹层点「导出诊断包」；\n2. 把它发给帮你排查的人；\n3. 里面不含密码和密钥，放心发。".into(),
+        text: "1. 在体检弹层点击「导出诊断包」；\n2. 将其发送给协助排查的人员；\n3. 其中不含密码和密钥，可以放心发送。".into(),
     }
 }
 
@@ -1821,7 +1821,7 @@ mod tests {
 
         let (status, detail, _) = ssh_failure("完全认不出的故障 xyz-unknown");
         assert_eq!(status, DoctorStatus::Fail);
-        assert!(detail.contains("连服务器失败"));
+        assert!(detail.contains("连接服务器失败"));
     }
 
     #[test]
@@ -1921,7 +1921,7 @@ mod tests {
         );
         let (status, detail, advice) = judge_probe(&out, "a.example.com").unwrap();
         assert_eq!(status, DoctorStatus::Fail);
-        assert!(detail.contains("域名解析"));
+        assert!(detail.contains("无法解析"));
         assert!(advice.contains("DNS"));
     }
 
@@ -1930,7 +1930,7 @@ mod tests {
         let out = parse_probe_output("");
         let (status, detail, _) = judge_probe(&out, "a.example.com").unwrap();
         assert_eq!(status, DoctorStatus::Fail);
-        assert!(detail.contains("没拿到探测结果"));
+        assert!(detail.contains("未获取到探测结果"));
     }
 
     // ---- 域名提取 ----
@@ -2022,7 +2022,7 @@ mod tests {
         }];
         let result = step_ports(&req);
         assert_eq!(result.status, DoctorStatus::Pass);
-        assert!(result.detail.contains("还没探到"));
+        assert!(result.detail.contains("尚未探测到"));
         cleanup_dir(&dir);
     }
 
@@ -2034,7 +2034,7 @@ mod tests {
         req.tunnels = vec![tun("t1", Some("a.example.com"), true, "running")];
         let result = step_servers(&req);
         assert_eq!(result.status, DoctorStatus::Fail);
-        assert!(result.detail.contains("密钥文件不在了"));
+        assert!(result.detail.contains("密钥文件已不存在"));
         assert!(result.fix.is_some());
         cleanup_dir(&dir);
     }
@@ -2084,7 +2084,7 @@ mod tests {
         req.tunnels = vec![tun("t1", None, true, "running")];
         let result = step_tunnels(&req);
         assert_eq!(result.status, DoctorStatus::Pass);
-        assert!(result.detail.contains("没填网址"));
+        assert!(result.detail.contains("尚未填写网址"));
         cleanup_dir(&dir);
     }
 
@@ -2112,7 +2112,7 @@ mod tests {
         req.config = Some(AppConfig::default());
         let result = step_web(&req, Instant::now() + TOTAL_BUDGET);
         assert_eq!(result.status, DoctorStatus::Skip);
-        assert!(result.detail.contains("应用没在跑"));
+        assert!(result.detail.contains("应用未启动"));
         cleanup_dir(&dir);
     }
 

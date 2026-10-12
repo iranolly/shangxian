@@ -9,7 +9,6 @@ import { SrAnnouncer } from "./components/SrAnnouncer";
 import { ServicesPage } from "./pages/Services";
 import { TunnelsPage } from "./pages/Tunnels";
 import { ServersPage } from "./pages/Servers";
-import { PasswordsPage } from "./pages/Passwords";
 import { SettingsPage } from "./pages/Settings";
 import { onConfigError } from "./api";
 import { actions } from "./store/actions";
@@ -22,7 +21,7 @@ const POLL_WARN_AFTER = 3;
 
 /** configTrusted=false 且没收到后端事件时的兜底文案（D2 §13.2 的固定文案在事件里带 found/supported） */
 const CONFIG_UNTRUSTED_FALLBACK =
-  "配置文件读不出来，改动暂时不能保存。请先升级到最新版再打开；你的设置文件没有被改过。";
+  "配置文件无法读取，改动暂时无法保存。请先升级到最新版本再打开；设置文件未被修改。";
 
 interface Banner {
   id: string;
@@ -227,7 +226,7 @@ export default function App() {
   if (banners.length === 0 && !app.jobGuardOk && !dismissed.jobGuard) {
     banners.push({
       id: "job-guard",
-      text: app.jobGuardError ?? "子进程保底清理没装配好；退出时可能有残留进程的风险",
+      text: app.jobGuardError ?? "子进程保底清理未正确装配，退出时可能有残留进程。",
       actionLabel: "去体检",
       run: () => {
         // 走全局事件：App 的监听会切到设置页并直接打开 DoctorModal
@@ -268,7 +267,7 @@ export default function App() {
         <div className="sidebar-wrap">
           {polling.failStreak >= POLL_WARN_AFTER ? (
             <div className="poll-warn" role="status">
-              刷新失败了 {polling.failStreak} 次，正在重试…
+              刷新失败 {polling.failStreak} 次，重试中…
             </div>
           ) : null}
           <Sidebar
@@ -304,7 +303,6 @@ export default function App() {
               servers={servers}
               onStart={actions.tunnelStart}
               onStop={actions.tunnelPause}
-              onRestart={actions.tunnelRestart}
               onNavigate={navigate}
               onRefresh={refreshNow}
               intent={intent}
@@ -317,10 +315,8 @@ export default function App() {
               intent={intent}
               onIntentDone={clearIntent}
             />
-          ) : page === "settings" ? (
-            <SettingsPage intent={intent} onIntentDone={clearIntent} />
           ) : (
-            <PasswordsPage tunnels={tunnels} onRefresh={refreshNow} />
+            <SettingsPage intent={intent} onIntentDone={clearIntent} />
           )}
         </main>
       </div>

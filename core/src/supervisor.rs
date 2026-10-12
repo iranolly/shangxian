@@ -333,14 +333,14 @@ impl Tunnel {
             let now = Instant::now();
             self.retry_at = Some(now);
             self.phase = Phase::Backoff { until: now };
-            self.log_line("[看护] 收到系统事件，退避提前到现在");
+            self.log_line("[看护] 收到系统事件，退避提前至当前时刻");
             true
         } else {
             false
         }
     }
 
-    /// 「再试一次」：清失败计数/原因/退避，回到 Idle，下一轮立刻重连。
+    /// 「再试一次」：清失败计数/原因/退避，回到 Idle，下一轮马上重试。
     /// `stable_once` 不在这里清——它只在实例重建时重新考核（D1 §9.2）。
     pub fn reset_for_retry(&mut self) {
         self.attempt = 0;
@@ -370,8 +370,8 @@ impl Tunnel {
             reason: ReasonCode::RetryStopped.text().to_string(),
         });
         self.phase = Phase::GaveUp;
-        let text = format!("隧道「{}」连续失败到上限，已经停止自动重试", self.spec.name);
-        self.log_line("[看护] 连续失败到上限，停止自动重试（等用户点「再试一次」）");
+        let text = format!("隧道「{}」连续失败已达上限，已停止自动重试", self.spec.name);
+        self.log_line("[看护] 连续失败达到上限，已停止自动重试（等待用户重新开始发布）");
         self.reporter.report(LogLevel::Warn, TAG_TUNNEL, &text);
     }
 
@@ -440,7 +440,7 @@ impl Tunnel {
                     }
 
                     self.log_line(&format!(
-                        "[看护] 进程退出了（退出码 {}，活了 {} 秒）：{}",
+                        "[看护] 进程已退出（退出码 {}，运行 {} 秒）：{}",
                         exit_code
                             .map(|c| c.to_string())
                             .unwrap_or_else(|| "未知".into()),
@@ -495,7 +495,7 @@ impl Tunnel {
                         self.reason_code = None;
                         self.last_failure = None;
                         self.retry_state = RetryState::Active;
-                        self.log_line("[隧道] 已连上（云端转发已建立）");
+                        self.log_line("[隧道] 已连接（云端转发已建立）");
                     }
                     // 跑满 stable_after：算「站稳过」，失败计数清零，以后永久重试。
                     if self.connected
@@ -507,7 +507,7 @@ impl Tunnel {
                     {
                         self.stable_once = true;
                         self.attempt = 0;
-                        self.log_line("[看护] 已经稳定运行，失败计数清零");
+                        self.log_line("[看护] 已稳定运行，失败计数清零");
                     }
                 }
                 Err(err) => {
@@ -701,7 +701,7 @@ impl Tunnel {
                 LogLevel::Warn,
                 TAG_TUNNEL,
                 &format!(
-                    "隧道「{}」放进作业失败：崩溃时可能留下连接（{e}）",
+                    "隧道「{}」加入作业失败：崩溃时可能残留连接（{e}）",
                     self.spec.name
                 ),
             );
@@ -1066,7 +1066,7 @@ mod tests {
         assert_eq!(tunnel.reason_code(), None);
         assert!(tunnel.last_failure().is_none());
         assert!(matches!(tunnel.phase(), Phase::Idle));
-        assert_eq!(tunnel.retry_in_secs(), None, "回 Idle 后立刻重连，没有倒计时");
+        assert_eq!(tunnel.retry_in_secs(), None, "回 Idle 后马上重试，没有倒计时");
     }
 
     #[test]

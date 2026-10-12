@@ -17,7 +17,7 @@ interface Props {
 
 function errorText(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
-  return text.trim() || "不知道出了什么问题";
+  return text.trim() || "原因未知";
 }
 
 export function DiagExportModal({ onClose }: Props) {
@@ -35,20 +35,20 @@ export function DiagExportModal({ onClose }: Props) {
       toast.show({
         kind: "success",
         text: T.diagExported(result.path),
-        detail: result.truncated ? "日志太多，包里的日志被缩短了" : undefined,
+        detail: result.truncated ? "日志过多，包内日志已截断" : undefined,
         action: {
           label: "打开文件夹",
           run: () => {
             void revealItemInDir(result.path).catch(() => {
-              toast.error("打不开那个文件夹，手动去数据目录里找吧");
+              toast.error("无法打开该文件夹，请手动到数据目录中查找");
             });
           },
         },
       });
       onClose();
     } catch (e) {
-      setError(`诊断包没做出来：${errorText(e)}`);
-      toast.error(`诊断包没做出来：${errorText(e)}`);
+      setError(`诊断包生成失败：${errorText(e)}`);
+      toast.error(`诊断包生成失败：${errorText(e)}`);
     } finally {
       setBusy(false);
     }
@@ -59,8 +59,8 @@ export function DiagExportModal({ onClose }: Props) {
       <div className="modal diag-modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">导出诊断包</h2>
-          <p className="modal-sub" title="诊断包是一份“现场记录”，发给帮你排查的人就能定位问题。">
-            把现场情况打包，发给懂行的人排查。
+          <p className="modal-sub" title="诊断包是一份“现场记录”，发送给排查人员即可定位问题。">
+            打包现场情况，发送给排查人员。
           </p>
         </div>
         <div className="modal-body">
@@ -77,7 +77,7 @@ export function DiagExportModal({ onClose }: Props) {
           <div className="field" style={{ marginTop: 14, marginBottom: 0 }}>
             <label
               className="switch"
-              title="会连服务器和公网，最多 1 分钟；不勾只查本机。"
+              title="会连接服务器和公网，最长 1 分钟；不勾选则仅检查本机。"
             >
               <input
                 type="checkbox"
@@ -87,7 +87,7 @@ export function DiagExportModal({ onClose }: Props) {
               />
               深度检查
             </label>
-            <p className="field-hint hint">会连服务器，最多 1 分钟。</p>
+            <p className="field-hint hint">会连接服务器，最长 1 分钟。</p>
           </div>
           {error && <div className="error-line settings-error">{error}</div>}
         </div>
@@ -97,7 +97,7 @@ export function DiagExportModal({ onClose }: Props) {
           </button>
           <span className="grow" />
           <button className="btn btn-primary" disabled={busy} onClick={() => void run()}>
-            {busy ? "正在打包…" : "导出诊断包"}
+            {busy ? "打包中…" : "导出诊断包"}
           </button>
         </div>
       </div>

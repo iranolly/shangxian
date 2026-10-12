@@ -22,7 +22,7 @@ pub fn init(data_dir: &std::path::Path) -> Result<(), String> {
             log::set_reporter(Arc::new(log::StderrReporter));
             install_panic_hook();
             Err(format!(
-                "日志文件建不出来（{e}）：{}。程序先用控制台日志跑，其它功能不受影响。",
+                "日志文件创建失败（{e}）：{}。程序将先使用控制台日志运行，其它功能不受影响。",
                 log_dir.display()
             ))
         }

@@ -223,3 +223,17 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - `skills/shangxian/SKILL.md`：同步铁律、命令表、验收与排查配方，保持自包含；改完原样拷贝到 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`，`diff` 验证一致。
 - `DESIGN.md`：HEADER 增加 v0.6 变更；修正 SQLite 等过时表述；新增 **§12 架构与数据模型**（模块清单、数据文件、安全模型、生命周期、明确不做）。
 - `PROGRESS.md`：本节。
+
+## 界面合并：「访问保护」并入「发布隧道」（2026-10-12）
+
+按用户要求两页不再重复，拍板合并：删掉独立「访问保护」页，门禁跟着隧道卡片走。
+
+- **导航**：本机服务 / 发布隧道 / 云端服务器 / 设置（4 项）。
+- **卡片**：删掉原来两份重复的显示（保护徽标 + 云端检查条），改由 `ProtectionStatus` 一处承担：保护小牌 + 「检查云端」 + 漂移条 + HTTPS 提醒；小牌可点，直接开 `ProtectionModal` 改保护。
+- **列表工具条**：新增「没设保护」「待核对」两个筛选（带条数），替代旧保护页顶部的「一览」卡片。
+- **⋯ 菜单**：新增「访问记录」，点开弹窗查看（新组件 `AuditModal`；2026-10-12 晚由卡片内联小框改成弹窗）；读取逻辑从旧保护页搬来，行为不变。
+- **保存流程不变**：`ProtectionModal` 保存成功 → 自动打开该隧道的「云端配置」。
+- **发布向导第 3 步 / 克隆弹层保留**：新建时设一次；相关文案（向导成功屏、编辑隧道弹层提示）改指向「卡片上的保护小牌」。
+- **文件**：删 `pages/Passwords.tsx`、`components/card/ProtectionBadge.tsx`、`components/card/CloudDriftBar.tsx`；新增 `components/AuditModal.tsx`；改 `App` / `Sidebar` / `Tunnels` / `TunnelCard` / `CardMenu` / `ProtectionStatus` / `ListToolbar` / `listPrefs` / `selectors`。
+- **验证**：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
+- **文档**：DESIGN.md §4.2 / §9.6、docs/使用手册.md（3.2 / 3.4 / 3.7 弹层表 / 排查表）、README.md 文件树同步。

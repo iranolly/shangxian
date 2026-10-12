@@ -391,7 +391,7 @@ export function NotificationCenter({ onClose, onOpenSettings }: Props) {
         ) : null}
         <button
           className="link-btn"
-          title="只压界面提醒；系统通知请用「免打扰时段」"
+          title="仅抑制界面提醒；系统通知请在「免打扰时段」设置"
           onClick={() => setMutedUntil(muted ? null : Date.now() + MUTE_MS)}
         >
           {muted ? "取消静音" : "静音 1 小时"}
@@ -400,8 +400,8 @@ export function NotificationCenter({ onClose, onOpenSettings }: Props) {
 
       {items.length === 0 ? (
         <div className="notif-empty">
-          <p className="notif-empty-title">还没有通知</p>
-          <p>掉线、恢复、体检失败会记在这里。</p>
+          <p className="notif-empty-title">尚无通知</p>
+          <p>断开、恢复、体检失败会记录在此。</p>
         </div>
       ) : (
         <div className="notif-list">
@@ -455,7 +455,7 @@ export function NotificationCenter({ onClose, onOpenSettings }: Props) {
         </button>
         <span className="grow" style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--text-3)" }}>
-          掉线、恢复会记在这里
+          断开、恢复会记录在此
         </span>
       </div>
     </div>

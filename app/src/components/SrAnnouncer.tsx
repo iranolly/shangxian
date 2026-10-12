@@ -48,7 +48,7 @@ function subscribeSr(fn: () => void): () => void {
 }
 
 /** BulkBar 的完成 toast：全部成功 / 部分失败 / 批量删除（key 带 bulk-）。 */
-const BULK_DONE_RE = /条已处理，全部成功$|条里有 \d+ 条没成功/;
+const BULK_DONE_RE = /条已处理，全部成功$|条中有 \d+ 条失败/;
 
 export function SrAnnouncer() {
   const text = useSyncExternalStore(subscribeSr, () => current, () => current);
@@ -68,8 +68,8 @@ export function SrAnnouncer() {
         if (before === undefined || before === tunnel.status) continue;
         const wasBad = before === "disconnected" || before === "error";
         const isBad = tunnel.status === "disconnected" || tunnel.status === "error";
-        if (!wasBad && isBad) announce(`「${tunnel.name}」掉线了`);
-        else if (wasBad && tunnel.status === "running") announce(`「${tunnel.name}」恢复了`);
+        if (!wasBad && isBad) announce(`「${tunnel.name}」已断开`);
+        else if (wasBad && tunnel.status === "running") announce(`「${tunnel.name}」已恢复`);
       }
       const alive = new Set(state.tunnels.map((t) => t.id));
       for (const id of [...statuses.keys()]) {
@@ -99,7 +99,7 @@ export function SrAnnouncer() {
     if (!doctorReport || doctorReport.summary.fail <= 0) return;
     if (announcedReportAt.current === doctorReport.checkedAt) return;
     announcedReportAt.current = doctorReport.checkedAt;
-    announce(`体检失败了，有 ${doctorReport.summary.fail} 项没通过`);
+    announce(`体检未通过，有 ${doctorReport.summary.fail} 项未通过`);
   }, [doctorReport]);
 
   return (

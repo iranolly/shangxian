@@ -18,7 +18,7 @@ interface Props {
 }
 
 function formatDay(at?: number | null): string {
-  if (typeof at !== "number" || at <= 0) return "还没记下时间";
+  if (typeof at !== "number" || at <= 0) return "尚未记录时间";
   const d = new Date(at);
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -59,7 +59,7 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
       setLiveUpdate(result);
       refreshNow();
     } catch (e) {
-      setCheckError(String(e) || "检查更新没成功");
+      setCheckError(String(e) || "检查更新失败");
     } finally {
       setChecking(false);
     }
@@ -67,10 +67,10 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
 
   const download = () => {
     if (!update.url) {
-      toast.error("没有拿到下载地址，点「再试一次」看看");
+      toast.error("未获取到下载地址，请点击「再试一次」");
       return;
     }
-    void openUrl(update.url).catch(() => toast.error("打不开下载页，手动去发布页看看吧"));
+    void openUrl(update.url).catch(() => toast.error("无法打开下载页，请手动前往发布页"));
   };
 
   const updateText = (() => {
@@ -78,11 +78,11 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
       case "upToDate":
         return `已是最新版本（v${update.latest ?? (app.appVersion || "未知")}）`;
       case "available":
-        return `有新版本 ${update.latest ?? "？"}，当前是 v${app.appVersion || "未知"}`;
+        return `发现新版本 ${update.latest ?? "？"}，当前版本 v${app.appVersion || "未知"}`;
       case "error":
-        return `检查失败：${update.error ?? "没查到原因"}`;
+        return `检查失败：${update.error ?? "原因未知"}`;
       default:
-        return "还没检查过";
+        return "尚未检查";
     }
   })();
   const updateTone =
@@ -103,13 +103,13 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
 
       <div className="about-row">
         <span className="about-label">数据目录</span>
-        <span className="about-value mono">{app.dataDir || "还不确定"}</span>
+        <span className="about-value mono">{app.dataDir || "尚未获取"}</span>
         <span className="about-actions">
           <button
             className="btn btn-ghost btn-sm"
             title="配置、日志、密钥都在这里"
             onClick={() => {
-              void openDataDir().catch(() => toast.error("打不开数据目录，手动去文件夹里看看吧"));
+              void openDataDir().catch(() => toast.error("无法打开数据目录，请手动到文件夹中查找"));
             }}
           >
             打开
@@ -124,8 +124,8 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
             {sshMeta.icon} {ssh.detail}
           </span>
         ) : (
-          <span className="about-value muted" title="跑一次体检，看 SSH 通不通">
-            点「去体检」看看
+          <span className="about-value muted" title="运行一次体检，检查 SSH 是否可用">
+            点击「去体检」查看
           </span>
         )}
         {(!ssh || !sshOk) && (
@@ -142,7 +142,7 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
         {app.jobGuardOk ? (
           <span className="about-value ok">✓ 正常</span>
         ) : (
-          <span className="about-value warn">⚠ {app.jobGuardError ?? "后台守卫没装配好"}</span>
+          <span className="about-value warn">⚠ {app.jobGuardError ?? "后台守卫未正确配置"}</span>
         )}
         {!app.jobGuardOk && (
           <span className="about-actions">
@@ -158,7 +158,7 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
         {app.configTrusted ? (
           <span className="about-value ok">✓ 正常</span>
         ) : (
-          <span className="about-value warn">⚠ 配置读不出来，改动暂时不能保存</span>
+          <span className="about-value warn">⚠ 配置无法读取，改动暂时不能保存</span>
         )}
       </div>
 
@@ -167,7 +167,7 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
         <span className={`about-value ${updateTone}`}>
           {updateText}
           <span className="about-hint hint">
-            上次检查：{update.checkedAt ? formatDay(update.checkedAt) : "还没检查过"}
+            上次检查：{update.checkedAt ? formatDay(update.checkedAt) : "尚未检查"}
           </span>
           {checkError && <span className="about-hint hint">⚠ {checkError}</span>}
         </span>
@@ -190,7 +190,7 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
 
       <div className="about-row">
         <span className="about-label">诊断包</span>
-        <span className="about-value" title="诊断包给懂行的人排查用">
+        <span className="about-value" title="诊断包供排查人员使用">
           密码、密钥、令牌不会放进去。
         </span>
         <span className="about-actions">

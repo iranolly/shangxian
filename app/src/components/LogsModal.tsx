@@ -396,7 +396,7 @@ export function LogsModal(props: LogsModalProps) {
       if (legacy) {
         if (targetKind === "all") {
           setGroups([]);
-          setError("当前后台看不了全部日志，只能单看一条。");
+          setError("当前后台无法查看全部日志，只能查看单条。");
           return;
         }
         const text =
@@ -477,7 +477,7 @@ export function LogsModal(props: LogsModalProps) {
       if (!legacy) {
         // 旧后端没有 query_logs：切到旧接口，下次进这里走纯文本
         setLegacy(true);
-        setError("这个后台还没有新日志接口，已切到简单模式");
+        setError("当前后台尚无新的日志接口，已切换到简单模式");
         return;
       }
       setError(errorText(e));
@@ -624,20 +624,20 @@ export function LogsModal(props: LogsModalProps) {
 
   const doCopy = async () => {
     if (plainText === "") {
-      toast.info("这里还没有日志");
+      toast.info("暂无日志");
       return;
     }
     setBusyAction("copy");
     const ok = await copyText(plainText);
     setBusyAction("");
     if (ok) toast.show({ kind: "success", text: T.logCopied() });
-    else toast.error("没复制成功：选中内容按 Ctrl+C");
+    else toast.error("复制失败：请选中内容后按 Ctrl+C");
   };
 
   const doExport = async () => {
     if (legacy) return;
     if (plainText === "") {
-      toast.info("这里还没有日志");
+      toast.info("暂无日志");
       return;
     }
     setBusyAction("export");
@@ -650,8 +650,8 @@ export function LogsModal(props: LogsModalProps) {
     } catch (e) {
       // 保存不了就退回「复制 + 自己粘贴保存」
       const ok = await copyText(plainText);
-      if (ok) toast.info("没写进文件，已复制到剪贴板");
-      else toast.error(`导出没成功：${errorText(e)}`);
+      if (ok) toast.info("未能写入文件，已复制到剪贴板");
+      else toast.error(`导出失败：${errorText(e)}`);
     } finally {
       setBusyAction("");
     }
@@ -665,7 +665,7 @@ export function LogsModal(props: LogsModalProps) {
       try {
         await openDataDir();
       } catch (e) {
-        toast.error(`打开文件夹没成功：${errorText(e)}`);
+        toast.error(`打开文件夹失败：${errorText(e)}`);
       }
     }
   };
@@ -678,13 +678,13 @@ export function LogsModal(props: LogsModalProps) {
       : `${effectiveTarget.kind === "tunnel" ? "发布日志" : "程序日志"} · ${effectiveTarget.name}`;
   const sourceHint =
     effectiveTarget.kind === "all"
-      ? "所有隧道和程序的日志按来源分组。出问题把这里的内容发出来就能定位。"
+      ? "所有隧道和程序的日志按来源分组。出现问题时提供此处内容即可定位。"
       : effectiveTarget.kind === "tunnel"
-        ? "这条隧道的连接记录。出问题把这里的内容发出来就能定位。"
-        : "程序自己打印的内容（含看护记录）。出问题把内容发出来就能定位。";
+        ? "这条隧道的连接记录。出现问题时提供此处内容即可定位。"
+        : "程序自身输出的内容（含看护记录）。出现问题时提供此处内容即可定位。";
 
   const hasArchives = archives.length > 0;
-  const legacyTitle = "这个功能需要新版本后台";
+  const legacyTitle = "该功能需要新版本后台";
 
   const disabledLegacyProps = (fallbackTitle: string) =>
     legacy ? { disabled: true, title: fallbackTitle } : {};
@@ -708,7 +708,7 @@ export function LogsModal(props: LogsModalProps) {
           <div className="logs-row">
             <input
               className="input logs-search"
-              placeholder="搜日志里的字…"
+              placeholder="搜索日志内容…"
               value={view.query}
               onChange={(e) => setView((v) => ({ ...v, query: e.target.value }))}
               onKeyDown={(e) => {
@@ -756,7 +756,7 @@ export function LogsModal(props: LogsModalProps) {
                 className={view.filter === "human" ? "active" : ""}
                 onClick={() => setView((v) => ({ ...v, filter: "human" }))}
               >
-                只看人话行
+                只看摘要
               </button>
               <button
                 className={view.filter === "error" ? "active" : ""}
@@ -835,7 +835,7 @@ export function LogsModal(props: LogsModalProps) {
                   上一份
                 </option>
                 <option value={2} disabled={archives.length < 2}>
-                  上上份
+                  上两份
                 </option>
               </select>
             </label>
@@ -861,7 +861,7 @@ export function LogsModal(props: LogsModalProps) {
 
           {pathOpen && (
             <div className="logs-path-row">
-              <span className="mono">{dataDir ? `${dataDir}\\logs` : "还没拿到数据目录"}</span>
+              <span className="mono">{dataDir ? `${dataDir}\\logs` : "尚未获取数据目录"}</span>
               <button
                 className="link-btn"
                 disabled={legacy}
@@ -883,7 +883,7 @@ export function LogsModal(props: LogsModalProps) {
               {view.query.trim() || view.filter !== "all" ? (
                 <>
                   <p className="log-empty-title">没有符合条件的日志</p>
-                  <p>换个关键词，或者把过滤切回「全部」。</p>
+                  <p>请更换关键词，或将过滤切换回「全部」。</p>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() =>
@@ -895,15 +895,15 @@ export function LogsModal(props: LogsModalProps) {
                 </>
               ) : (
                 <>
-                  <p className="log-empty-title">这里还没有日志</p>
-                  <p title="一直空着就先体检一下">等它跑一会儿再来看看。</p>
+                  <p className="log-empty-title">暂无日志</p>
+                  <p title="如果一直为空，请先做一次体检">程序运行一段时间后再查看。</p>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() =>
                       window.dispatchEvent(new CustomEvent("shangxian:open-doctor"))
                     }
                   >
-                    先体检一下
+                    开始体检
                   </button>
                 </>
               )}
@@ -956,7 +956,7 @@ export function LogsModal(props: LogsModalProps) {
                   );
                 })}
                 {truncated && (
-                  <div className="log-truncated">日志太多，只显示了这些</div>
+                  <div className="log-truncated">日志过多，仅显示这些</div>
                 )}
               </div>
               {!autoScroll && (

@@ -110,7 +110,7 @@ fn job_guard_error() -> Option<String> {
         None
     } else {
         Some(
-            "子进程保底清理没装配好：创建或指派作业对象失败；会有残留进程的风险。建议先重启电脑；还不行就检查安全软件。"
+            "子进程保底清理未配置完成：创建或指派作业对象失败；可能存在残留进程的风险。建议先重启电脑；若仍无效，请检查安全软件。"
                 .to_string(),
         )
     }
@@ -129,7 +129,7 @@ pub(crate) fn sys_notice(app: &tauri::AppHandle, level: &str, text: &str, sticky
         PENDING_SYS_NOTICES.lock().unwrap().push(payload.clone());
     }
     if let Err(e) = app.emit("sys-notice", payload) {
-        log_warn(TAG_CONFIG, &format!("界面还没起来，提示先记着：{e}"));
+        log_warn(TAG_CONFIG, &format!("界面尚未启动，提示已暂存：{e}"));
     }
 }
 
@@ -169,7 +169,7 @@ pub(crate) fn server_conn(
 ) -> Result<ServerConn, String> {
     let g = guardian
         .lock()
-        .map_err(|_| "内部状态锁坏了：重启一下应用".to_string())?;
+        .map_err(|_| "内部状态锁已损坏：请重启应用".to_string())?;
     let s = g
         .servers()
         .into_iter()
@@ -192,7 +192,7 @@ pub(crate) fn run_server_test(conn: &ServerConn) -> Result<String, String> {
             .map_err(|e| ssh_error_human(&e, conn))?;
     if !out.contains("shangxian-ok") {
         return Err(format!(
-            "连上了，但服务器回的话看不懂（{}）。看看这台服务器的默认 shell 是不是被改过。",
+            "连接成功，但无法解析服务器返回的内容（{}）。请检查这台服务器的默认 shell 是否被修改过。",
             out.trim()
         ));
     }
@@ -215,7 +215,7 @@ fn ssh_error_human(raw: &str, conn: &ServerConn) -> String {
         return text;
     }
     format!(
-        "连不上 {}（端口 {}）：{text}。原始报错：{}",
+        "无法连接 {}（端口 {}）：{text}。原始报错：{}",
         conn.target(),
         conn.ssh_port,
         raw.trim()
@@ -353,7 +353,7 @@ async fn service_stop(
     tauri::async_runtime::spawn_blocking(move || {
         guardian
             .lock()
-            .map_err(|_| "内部状态锁坏了：重启一下应用".to_string())?
+            .map_err(|_| "内部状态锁已损坏：请重启应用".to_string())?
             .stop_service(&id, kill_foreign.unwrap_or(false), expected_pid)
     })
     .await
@@ -444,12 +444,6 @@ fn tunnel_stop(id: String, state: State<'_, AppState>) -> Result<(), String> {
     state.ctx.lock_guardian()?.set_enabled(&id, false)
 }
 
-/// 立刻重连。
-#[tauri::command]
-fn tunnel_restart(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    state.ctx.lock_guardian()?.restart(&id)
-}
-
 // 清掉这台服务器的 SSH 指纹记录（服务器重装/换机器后连不上时用）。
 ctl_sync!(forget_host_key, "forget_host_key", "id" => id: String);
 
@@ -488,7 +482,7 @@ async fn setup_passwordless(
     ctx.lock_guardian()?
         .set_server_key(&server_id, &result.key_path)?;
     Ok(format!(
-        "配好了！以后连这台服务器都走密钥，不用再输密码。密钥放在：{}",
+        "配置完成。以后连接这台服务器都使用密钥，无需再输入密码。密钥位置：{}",
         result.key_path
     ))
 }
@@ -523,11 +517,11 @@ fn send_test_notification(app: &tauri::AppHandle) -> Result<(), String> {
     if notify::send_toast(
         app,
         "上线助手",
-        "通知长这样：服务掉线或恢复时，我会在这里提醒你。",
+        "通知示例：服务断开或恢复时，将在此处提醒。",
     ) {
         Ok(())
     } else {
-        Err("通知发不出去；可以到系统设置里看看通知权限".to_string())
+        Err("通知发送失败；可到系统设置中查看通知权限".to_string())
     }
 }
 
@@ -538,15 +532,15 @@ fn send_test_notification(app: &tauri::AppHandle) -> Result<(), String> {
 fn notify_exit_stop_result(app: &tauri::AppHandle, stopped: usize, remaining: usize) {
     let body = if remaining == 0 {
         if stopped == 0 {
-            "没有正在跑的本地服务需要停止。".to_string()
+            "没有运行中的本机服务需要停止。".to_string()
         } else {
-            format!("已停止 {stopped} 个本地服务。")
+            format!("已停止 {stopped} 个本机服务。")
         }
     } else if stopped == 0 {
-        format!("{remaining} 个本地服务没能停（可能是脚本启动的服务，需要手动处理）。")
+        format!("{remaining} 个本机服务未能停止（可能是脚本启动的服务，需要手动处理）。")
     } else {
         format!(
-            "已停止 {stopped} 个本地服务；{remaining} 个没能停（可能是脚本启动的服务，需要手动处理）。"
+            "已停止 {stopped} 个本机服务；{remaining} 个未能停止（可能是脚本启动的服务，需要手动处理）。"
         )
     };
     notify::send_toast(app, "上线助手", &body);
@@ -617,7 +611,7 @@ async fn test_server(
     let server_id = server_id
         .or(id)
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "缺少参数 serverId（要测哪台服务器的 id）".to_string())?;
+        .ok_or_else(|| "缺少参数 serverId（指定要测试的服务器 id）".to_string())?;
     let guardian = state.ctx.guardian.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = server_conn(&guardian, &server_id)?;
@@ -753,7 +747,7 @@ fn save_text_file(
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     if content.len() > 20 * 1024 * 1024 {
-        return Err("内容太大了（超过 20MB）：分段复制，或者先用诊断包".to_string());
+        return Err("内容过大（超过 20MB）：请分段复制，或先使用诊断包".to_string());
     }
     let safe: String = name
         .chars()
@@ -781,7 +775,7 @@ fn save_text_file(
         safe
     };
     let dir = state.ctx.data_dir.join("exports");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("存文件失败：目录建不出来（{e}）"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("保存文件失败：目录创建失败（{e}）"))?;
     let mut path = dir.join(&safe);
     if path.exists() {
         let stem = std::path::Path::new(&safe)
@@ -800,7 +794,7 @@ fn save_text_file(
             }
         }
     }
-    std::fs::write(&path, content.as_bytes()).map_err(|e| format!("存文件失败：{e}"))?;
+    std::fs::write(&path, content.as_bytes()).map_err(|e| format!("保存文件失败：{e}"))?;
     Ok(serde_json::json!({ "path": path.display().to_string() }))
 }
 
@@ -808,14 +802,14 @@ fn save_text_file(
 #[tauri::command]
 fn open_log_folder(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     let dir = state.ctx.data_dir.join("logs");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("日志文件夹建不出来：{e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("日志文件夹创建失败：{e}"))?;
     use tauri_plugin_opener::OpenerExt;
     match app.opener().reveal_item_in_dir(&dir) {
         Ok(()) => Ok(()),
         Err(e) => {
             log_warn(
                 TAG_CONFIG,
-                &format!("用系统文件管理器打开失败（{e}），换 explorer 再试"),
+                &format!("用系统文件管理器打开失败（{e}），改用 explorer 重试"),
             );
             std::process::Command::new("explorer")
                 .arg(&dir)
@@ -1052,7 +1046,7 @@ fn setup(
                 log_warn(
                     TAG_CONFIG,
                     &format!(
-                        "设置里有不认识的取值，已经按默认值处理：{}",
+                        "设置中有无法识别的取值，已按默认值处理：{}",
                         outcome.normalized.join("、")
                     ),
                 );
@@ -1109,7 +1103,7 @@ fn setup(
     {
         let mut g = guardian
             .lock()
-            .map_err(|_| "内部状态锁坏了：重启一下应用")?;
+            .map_err(|_| "内部状态锁已损坏：请重启应用")?;
         g.attach_state(state.clone());
         g.attach_events(events.clone());
     }
@@ -1135,7 +1129,7 @@ fn setup(
         sys_notice(
             app.handle(),
             "warn",
-            &format!("这台电脑不允许登记崩溃恢复；崩溃后需要你手动打开应用。（{e}）"),
+            &format!("这台电脑不允许登记崩溃恢复；崩溃后需要手动打开应用。（{e}）"),
             true,
         );
     }
@@ -1143,7 +1137,7 @@ fn setup(
         sys_notice(
             app.handle(),
             "warn",
-            "这台电脑限制了应用的进程管理功能：隧道可能留下没关干净的连接。建议先重启电脑；还不行就检查安全软件。",
+            "这台电脑限制了应用的进程管理功能：隧道可能留下未清理的连接。建议先重启电脑；若仍无效，请检查安全软件。",
             true,
         );
         log_warn(TAG_GUARD, &err);
@@ -1173,13 +1167,13 @@ fn setup(
                         shangxian_core::supervisor::Event::SystemWake { kind, .. } => {
                             let text = match kind {
                                 shangxian_core::wake::WakeKind::Resumed { .. } => {
-                                    "电脑刚醒过来，正在马上重新连上服务器…"
+                                    "电脑刚唤醒，正在立即重新连接服务器…"
                                 }
                                 shangxian_core::wake::WakeKind::NetworkChanged => {
-                                    "网络刚恢复，正在马上重连…"
+                                    "网络刚恢复，正在立即重连…"
                                 }
                                 shangxian_core::wake::WakeKind::ClockJump { .. } => {
-                                    "系统时间变了，正在重新连…"
+                                    "系统时间已变更，正在重新连接…"
                                 }
                             };
                             log_info(TAG_POWER, text);
@@ -1227,7 +1221,7 @@ fn setup(
     // ---------- 托盘：图标 + 右键菜单 ----------
     let show_item = MenuItemBuilder::with_id("show", "打开主界面").build(app)?;
     let quit_stop_item =
-        MenuItemBuilder::with_id("quit_stop_services", "退出并停止全部本地服务").build(app)?;
+        MenuItemBuilder::with_id("quit_stop_services", "退出并停止全部本机服务").build(app)?;
     let quit_item = MenuItemBuilder::with_id("quit", "退出（会停止发布）").build(app)?;
     let menu = MenuBuilder::new(app)
         .items(&[&show_item, &quit_stop_item, &quit_item])
@@ -1276,12 +1270,12 @@ fn setup(
         Ok(icon) => icon,
         Err(e) => {
             // 托盘建不出来又没窗口 → 应用会“看不见但活着”；立刻建窗口把错误给用户看。
-            log_error("托盘", &format!("托盘图标建不出来：{e}"));
+            log_error("托盘", &format!("托盘图标创建失败：{e}"));
             mainwindow::show_or_create(app.handle());
             sys_notice(
                 app.handle(),
                 "error",
-                &format!("托盘图标没建出来（{e}）：窗口关了就得重新打开应用"),
+                &format!("托盘图标创建失败（{e}）：窗口关闭后需要重新打开应用"),
                 true,
             );
             return Ok(());
@@ -1318,7 +1312,7 @@ fn setup(
         sys_notice(
             app.handle(),
             "error",
-            "程序刚才连续崩溃了 3 次，已经暂停自动恢复。服务还在跑；想看原因就去「设置 → 打开日志文件夹」。",
+            "程序刚才连续崩溃 3 次，已暂停自动恢复。服务仍在运行；如需查看原因，请前往「设置 → 打开日志文件夹」。",
             true,
         );
     }
@@ -1336,7 +1330,7 @@ fn tray_tooltip(guardian: &Arc<Mutex<Guardian>>) -> String {
     if publishing + down == 0 {
         "上线助手".to_string()
     } else {
-        format!("{publishing} 条发布中 · {down} 条掉线")
+        format!("{publishing} 条发布中 · {down} 条断开")
     }
 }
 
@@ -1357,7 +1351,7 @@ fn confirm_quit_with_publishing(app: &tauri::AppHandle) -> bool {
         return true;
     }
     let text = format!(
-        "现在有 {total} 条隧道开着发布。\n\n退出后发布就停了，公网访问会中断；本机服务不受影响。\n\n确定要退出吗？"
+        "当前有 {total} 条隧道发布中。\n\n退出后发布将停止，公网访问会中断；本机服务不受影响。\n\n确定要退出吗？"
     );
     let owner = app
         .get_webview_window(mainwindow::MAIN_LABEL)
@@ -1395,7 +1389,7 @@ fn notify_tray_hint_once(app: &tauri::AppHandle) {
     notify::send_toast(
         app,
         "上线助手",
-        "窗口关了，程序还在托盘里看着服务；右键托盘图标可以退出。",
+        "窗口已关闭，程序仍在托盘中监控服务；右键托盘图标即可退出。",
     );
 }
 
@@ -1411,7 +1405,7 @@ pub fn run() {
     };
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         fatal_dialog(&format!(
-            "数据目录建不出来（{e}）：{}。把程序挪到能写的文件夹，或者删掉便携标记再用普通模式。",
+            "数据目录创建失败（{e}）：{}。请将程序移动到可写入的文件夹，或删除便携标记后使用普通模式。",
             data_dir.display()
         ));
         std::process::exit(1);
@@ -1537,7 +1531,6 @@ pub fn run() {
             remove_tunnel,
             tunnel_start,
             tunnel_stop,
-            tunnel_restart,
             forget_host_key,
             list_local_ports,
             setup_passwordless,
@@ -1589,7 +1582,7 @@ pub fn run() {
     let app = match builder.build(tauri::generate_context!()) {
         Ok(app) => app,
         Err(e) => {
-            log_error(TAG_START, &format!("界面框架起不来：{e}"));
+            log_error(TAG_START, &format!("界面框架启动失败：{e}"));
             shangxian_core::ctl::remove_ctl_info(&exit_data_dir);
             std::process::exit(1);
         }
@@ -1641,6 +1634,6 @@ mod tests {
         assert!(!missing.contains("原始报错"), "{missing}");
 
         let dns = ssh_error_human("ssh: Could not resolve hostname nope.invalid", &conn);
-        assert!(dns.contains("解析不了"), "{dns}");
+        assert!(dns.contains("无法解析"), "{dns}");
     }
 }

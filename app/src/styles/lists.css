@@ -195,6 +195,13 @@
   color: var(--st-paused-fg);
 }
 
+/* 没在跑、但端口上有别的程序在听：要提醒，不是错误 */
+.chip.health.occupied {
+  background: var(--st-disconnected-bg);
+  color: var(--st-disconnected-fg);
+  font-weight: 500;
+}
+
 button.chip {
   border: 1px solid transparent;
   font-family: inherit;

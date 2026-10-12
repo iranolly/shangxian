@@ -52,21 +52,12 @@ export function FixRibbon({ tunnelId, serviceId, onLogs, onEditPort }: Props) {
         <span className="fix-actions">
           {portBusy && onEditPort ? (
             <button className="btn btn-primary btn-sm" disabled={pending} onClick={() => onEditPort(tunnelId)}>
-              改云端端口
+              修改云端端口
             </button>
-          ) : (
-            <button
-              className="btn btn-primary btn-sm"
-              disabled={pending}
-              aria-busy={pending}
-              onClick={() => actions.tunnelRestart(tunnelId)}
-            >
-              {tunnel.status === "error" ? "重试" : "立刻重连"}
-            </button>
-          )}
+          ) : null}
           {onLogs ? (
             <button className="link-btn" onClick={() => onLogs(tunnelId)}>
-              看日志
+              查看日志
             </button>
           ) : null}
         </span>
@@ -97,12 +88,12 @@ export function FixRibbon({ tunnelId, serviceId, onLogs, onEditPort }: Props) {
           ) : null}
           {onLogs ? (
             <button className="link-btn" onClick={() => onLogs(serviceId)}>
-              看日志
+              查看日志
             </button>
           ) : null}
           {service.status === "not_listening" && onEditPort ? (
             <button className="link-btn" onClick={() => onEditPort(serviceId)}>
-              改端口
+              修改端口
             </button>
           ) : null}
         </span>

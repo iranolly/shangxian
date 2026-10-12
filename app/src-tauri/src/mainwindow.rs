@@ -46,7 +46,7 @@ pub fn show_or_create(app: &AppHandle) {
             return;
         }
         if let Err(e) = create(&handle) {
-            log_error(TAG_WINDOW, &format!("主窗口打不开：{e}"));
+            log_error(TAG_WINDOW, &format!("主窗口打开失败：{e}"));
         }
     });
     if let Err(e) = queued {
@@ -129,7 +129,7 @@ pub fn save_state(app: &AppHandle) {
                 let _ = std::fs::remove_file(&tmp);
             }
         }
-        Err(e) => log_warn(TAG_WINDOW, &format!("窗口位置记不下来：{e}")),
+        Err(e) => log_warn(TAG_WINDOW, &format!("窗口位置记录失败：{e}")),
     }
 }
 

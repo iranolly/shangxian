@@ -488,7 +488,7 @@ export async function inspectProcessLaunchInfo(
       args: null,
       workdir: null,
       rawCommandLine: null,
-      warnings: [{ code: "preview", text: "浏览器预览模式：不会真的去读进程的启动方式。" }],
+      warnings: [{ code: "preview", text: "浏览器预览模式：不会实际读取进程的启动方式。" }],
     };
   }
   return await invoke<LaunchInfo>("inspect_process_launch_info", {
@@ -604,11 +604,6 @@ export async function tunnelStart(id: string): Promise<void> {
 /** 暂停发布。 */
 export async function tunnelStop(id: string): Promise<void> {
   if (inTauri) await invoke("tunnel_stop", { id });
-}
-
-/** 立刻重连。 */
-export async function tunnelRestart(id: string): Promise<void> {
-  if (inTauri) await invoke("tunnel_restart", { id });
 }
 
 /** 隧道日志（id 是隧道 id）。 */
@@ -967,7 +962,7 @@ export async function runDoctor(params: { mode?: "quick" | "deep" } = {}): Promi
 export async function buildDiag(params: { out?: string; deep?: boolean } = {}): Promise<DiagResult> {
   if (!inTauri) {
     return {
-      path: "（浏览器预览不会真的打包）",
+      path: "（浏览器预览模式不会实际打包）",
       bytes: 0,
       redacted: true,
       deep: params.deep === true,
@@ -1071,7 +1066,7 @@ export async function runAccessAudit(id: string): Promise<AccessAudit> {
       topIps: [],
       entries: [],
       truncated: false,
-      warnings: ["浏览器预览模式：不会真的去读服务器日志。"],
+      warnings: ["浏览器预览模式：不会实际读取服务器日志。"],
     };
   }
   // ctl 的 run_access_audit 返回的是整包（check/actual/audit…），这里只取 audit 那一段。
@@ -1156,7 +1151,7 @@ export async function setupPasswordless(
   serverId: string,
   password: string,
 ): Promise<string> {
-  if (!inTauri) return "（浏览器预览不会真的连服务器）";
+  if (!inTauri) return "（浏览器预览模式不会实际连接服务器）";
   return await invoke<string>("setup_passwordless", { serverId, password });
 }
 
@@ -1165,7 +1160,7 @@ export async function setupPasswordless(
  * 兼容两种参数名：后端用 id 或 serverId 都能取到。
  */
 export async function testServer(id: string): Promise<string> {
-  if (!inTauri) return "（浏览器预览不会真的连服务器）";
+  if (!inTauri) return "（浏览器预览模式不会实际连接服务器）";
   return await invoke<string>("test_server", { id, serverId: id });
 }
 
@@ -1285,6 +1280,6 @@ export async function onConfigError(
   if (!inTauri) return () => {};
   return await listen<{ message?: string }>("config-error", (e) => {
     const msg = e.payload?.message?.trim();
-    handler(msg || "配置文件读不出来，已保留原文件；请到「设置」页打开数据目录看看。");
+    handler(msg || "配置文件无法读取，已保留原文件；请到「设置」页打开数据目录查看。");
   });
 }

@@ -46,7 +46,7 @@ function BulkRemoveConfirm({
   const bullets = names.slice(0, 5);
   if (n > 5) bullets.push(`…等共 ${n} 条`);
   const warning =
-    unit === "隧道" ? "删掉后别人立刻打不开" : "如果还有隧道在用它，程序会拦下来";
+    unit === "隧道" ? "删除后外部（访客）将立即无法访问" : "如果仍有隧道使用它，程序会阻止该操作";
   const overflow = n > 20 ? "超过 20 条的部分不能撤销。" : "";
 
   return (
@@ -106,7 +106,7 @@ export function BulkConfirmModal({ action, names, unit, onConfirm, onClose }: Pr
       body={
         action === "start"
           ? "这些隧道会立刻开始连接云端。"
-          : "暂停后别人就打不开了。"
+          : "暂停后外部（访客）将无法访问。"
       }
       confirmLabel={action === "start" ? "开始发布" : "暂停发布"}
       onConfirm={onConfirm}

@@ -25,7 +25,7 @@ export function GroupHeader({ serverId, count, downCount, collapsed, onToggle }:
       </span>
       <span className="group-name">{name}</span>
       <span className="group-count">· {count} 条</span>
-      {downCount > 0 ? <span className="group-down">（{downCount} 条掉线）</span> : null}
+      {downCount > 0 ? <span className="group-down">（{downCount} 条断开）</span> : null}
     </button>
   );
 }

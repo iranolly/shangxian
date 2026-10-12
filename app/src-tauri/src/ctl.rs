@@ -71,7 +71,7 @@ impl Ctx {
     pub(crate) fn lock_guardian(&self) -> Result<std::sync::MutexGuard<'_, Guardian>, String> {
         self.guardian
             .lock()
-            .map_err(|_| "内部状态锁坏了：重启一下应用".to_string())
+            .map_err(|_| "内部状态锁已损坏：请重启应用".to_string())
     }
 
     /// 配置能不能安全写回（界面提示用）。
@@ -126,7 +126,7 @@ pub(crate) fn spawn(ctx: Ctx) {
         let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) {
             Ok(l) => l,
             Err(e) => {
-                log_warn(TAG_CTL, &format!("控制通道开不出来，命令行用不了：{e}"));
+                log_warn(TAG_CTL, &format!("控制通道启动失败，命令行无法使用：{e}"));
                 return;
             }
         };
@@ -141,7 +141,7 @@ pub(crate) fn spawn(ctx: Ctx) {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         };
         if let Err(e) = core_ctl::write_ctl_info(&ctx.data_dir, &info) {
-            log_warn(TAG_CTL, &format!("写 ctl.json 失败，命令行用不了：{e}"));
+            log_warn(TAG_CTL, &format!("写入 ctl.json 失败，命令行无法使用：{e}"));
             return;
         }
         log_info(TAG_CTL, &format!("控制通道已开启：127.0.0.1:{port}"));
@@ -153,7 +153,7 @@ pub(crate) fn spawn(ctx: Ctx) {
             let Some(slot) = ConnSlot::try_acquire(&live) else {
                 let _ = reply(
                     &stream,
-                    &json!({"id": 0, "ok": false, "error": format!("同时处理的连接太多了（最多 {MAX_CONNECTIONS} 条），稍后再试")}),
+                    &json!({"id": 0, "ok": false, "error": format!("同时处理的连接过多（最多 {MAX_CONNECTIONS} 条），请稍后重试")}),
                 );
                 continue;
             };
@@ -186,7 +186,7 @@ fn handle(stream: TcpStream, ctx: &Ctx, token: &str) -> std::io::Result<()> {
         {
             return reply(
                 &stream,
-                &json!({"id": 0, "ok": false, "error": "读请求超时了（连上了但一直没把请求发过来）"}),
+                &json!({"id": 0, "ok": false, "error": "读取请求超时（已连接但未发送请求）"}),
             );
         }
         Err(e) => return Err(e),
@@ -194,7 +194,7 @@ fn handle(stream: TcpStream, ctx: &Ctx, token: &str) -> std::io::Result<()> {
     if line.len() > MAX_LINE_BYTES {
         return reply(
             &stream,
-            &json!({"id": 0, "ok": false, "error": "请求太长了：一行最多 64KB"}),
+            &json!({"id": 0, "ok": false, "error": "请求过长：每行最多 64KB"}),
         );
     }
 
@@ -203,7 +203,7 @@ fn handle(stream: TcpStream, ctx: &Ctx, token: &str) -> std::io::Result<()> {
         Err(e) => {
             return reply(
                 &stream,
-                &json!({"id": 0, "ok": false, "error": format!("请求看不懂：{e}")}),
+                &json!({"id": 0, "ok": false, "error": format!("无法解析请求：{e}")}),
             );
         }
     };
@@ -211,7 +211,7 @@ fn handle(stream: TcpStream, ctx: &Ctx, token: &str) -> std::io::Result<()> {
     if req.get("token").and_then(|v| v.as_str()) != Some(token) {
         return reply(
             &stream,
-            &json!({"id": id, "ok": false, "error": "通行证不对（ctl.json 可能是旧的，重启应用即可）"}),
+            &json!({"id": id, "ok": false, "error": "通行证不正确（ctl.json 可能已过期，重启应用即可）"}),
         );
     }
     let method = req.get("method").and_then(|v| v.as_str()).unwrap_or("");
@@ -477,14 +477,14 @@ fn logs_query(ctx: &Ctx, params: &Value) -> Result<Value, String> {
         "all" | "tunnel" | "service" | "app" => source,
         other => {
             return Err(format!(
-                "source 只认 all / tunnel / service / app，不认「{other}」"
+                "source 仅支持 all / tunnel / service / app，不支持「{other}」"
             ));
         }
     };
     let lines = opt_usize(params, "lines", 200).clamp(1, LOGS_MAX_LINES);
     let archive = opt_usize(params, "archive", 0);
     if archive > 2 {
-        return Err("--archive 只能是 0、1、2；0 = 只看当前文件".to_string());
+        return Err("--archive 只能是 0、1、2；0 = 仅查看当前文件".to_string());
     }
     let archive = archive as u8;
     let format = opt_str(params, "format").unwrap_or_else(|| "lines".to_string());
@@ -518,7 +518,7 @@ fn logs_query(ctx: &Ctx, params: &Value) -> Result<Value, String> {
         }
         "tunnel" => {
             let id =
-                id.ok_or_else(|| "看隧道日志要带 id（logs_query 的 source=tunnel）".to_string())?;
+                id.ok_or_else(|| "查看隧道日志需要指定 id（logs_query 的 source=tunnel）".to_string())?;
             let path = tunnel_log_path(ctx, &id);
             let mut group = SourceLog::new(&format!("tunnel:{id}"));
             for line in read_tail_lines(&archive_path(&path, archive), lines) {
@@ -531,7 +531,7 @@ fn logs_query(ctx: &Ctx, params: &Value) -> Result<Value, String> {
         }
         "service" => {
             let id =
-                id.ok_or_else(|| "看服务日志要带 id（logs_query 的 source=service）".to_string())?;
+                id.ok_or_else(|| "查看服务日志需要指定 id（logs_query 的 source=service）".to_string())?;
             let path = service_log_path(ctx, &id)
                 .ok_or_else(|| format!("找不到这台服务的日志文件：{id}"))?;
             let mut group = SourceLog::new(&format!("service:{id}"));
@@ -1336,22 +1336,22 @@ fn diag_default_path(ctx: &Ctx) -> PathBuf {
 fn diag_readme() -> String {
     "上线助手诊断包
 
-这个包里有什么：
-- meta.json：这次打包的信息（版本、系统、有没有截断）
-- config.redacted.json：脱敏后的设置（密码哈希、密钥路径已经去掉）
+本包内容：
+- meta.json：本次打包信息（版本、系统、是否截断）
+- config.redacted.json：脱敏后的设置（密码哈希、密钥路径已移除）
 - state.redacted.json：脱敏后的运行记录
 - snapshot.json：当前的服务 / 隧道 / 服务器一览
 - stats.json：运行统计
-- doctor.json：最近一次自检报告（没有就是没跑过）
+- doctor.json：最近一次体检报告（未运行过则无）
 - events.tail.jsonl：最近的事件记录
-- logs/*：应用、隧道、本机服务的日志尾巴
+- logs/*：应用、隧道、本机服务的日志尾部
 
 脱敏说明：
-- 访问密码的哈希、密钥真实路径一定不会出现；命令行参数只保留长度。
-- 日志里的密码 / token / 私钥文本会被替换成 <已省略>。
-- Windows 用户名会被替换成 <用户>。
+- 访问密码哈希与密钥真实路径一定不会出现；命令行参数仅保留长度。
+- 日志中的密码 / token / 私钥文本会被替换为 <已省略>。
+- Windows 用户名会被替换为 <用户>。
 
-给谁：请自己把包发给帮你排查的人；这个包不会自动上传，也不会联网。
+交给谁：请自行将此包发给排查人员；此包不会自动上传，也不会联网。
 "
     .to_string()
 }
@@ -1422,7 +1422,7 @@ pub(crate) fn build_diag(ctx: &Ctx, deep: bool, out: Option<&str>) -> Result<Val
                             .to_string()
                     }),
                 Err(e) => format!(
-                    "{{\n  \"schemaVersion\": 0,\n  \"note\": \"还没有跑过体检，这次也没跑成：{e}\"\n}}\n"
+                    "{{\n  \"schemaVersion\": 0,\n  \"note\": \"尚未运行过体检，本次也未能运行：{e}\"\n}}\n"
                 ),
             }
         }
@@ -1499,7 +1499,7 @@ pub(crate) fn build_diag(ctx: &Ctx, deep: bool, out: Option<&str>) -> Result<Val
         }
         total = entries.iter().map(|(_, d)| d.len()).sum();
         if total > DIAG_MAX_BYTES {
-            return Err("诊断包没做出来：内容超过 20MB 了；先把日志清理一下再试".to_string());
+            return Err("诊断包生成失败：内容超过 20MB；请先清理日志后重试".to_string());
         }
     }
 
@@ -1536,17 +1536,17 @@ pub(crate) fn build_diag(ctx: &Ctx, deep: bool, out: Option<&str>) -> Result<Val
         _ => diag_default_path(ctx),
     };
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("诊断包没做出来：目录建不出来（{e}）"))?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("诊断包生成失败：目录创建失败（{e}）"))?;
     }
     // 先写同目录的临时文件，成功了再改名到最终路径：中途失败不会在最终路径留半成品。
     let tmp = temp_diag_path(&path);
     if let Err(e) = std::fs::write(&tmp, &zip) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("诊断包没做出来：写文件失败（{e}）"));
+        return Err(format!("诊断包生成失败：写入文件失败（{e}）"));
     }
     if let Err(e) = std::fs::rename(&tmp, &path) {
         let _ = std::fs::remove_file(&tmp);
-        return Err(format!("诊断包没做出来：写文件失败（{e}）"));
+        return Err(format!("诊断包生成失败：写入文件失败（{e}）"));
     }
 
     Ok(json!({
@@ -1633,7 +1633,7 @@ fn fetch_latest_release() -> Result<Value, String> {
             if let Ok(json) = serde_json::from_str::<Value>(&text) {
                 return Ok(json);
             }
-            return Err("更新服务器回的内容看不懂；稍后再试".to_string());
+            return Err("无法解析更新服务器返回的内容；请稍后重试".to_string());
         }
     }
 
@@ -1645,13 +1645,13 @@ fn fetch_latest_release() -> Result<Value, String> {
     let output = no_window_command("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Command", script])
         .output()
-        .map_err(|e| format!("检查更新失败：网络连不上；稍后再试（{e}）"))?;
+        .map_err(|e| format!("更新检查失败：无法连接网络；请稍后重试（{e}）"))?;
     if !output.status.success() {
-        return Err("检查更新失败：网络连不上；稍后再试".to_string());
+        return Err("更新检查失败：无法连接网络；请稍后重试".to_string());
     }
     let text = String::from_utf8_lossy(&output.stdout).to_string();
     serde_json::from_str::<Value>(&text)
-        .map_err(|_| "更新服务器回的内容看不懂；稍后再试".to_string())
+        .map_err(|_| "无法解析更新服务器返回的内容；请稍后重试".to_string())
 }
 
 /// 版本号比较：只认 x.y.z 数字段；返回 latest 是否比 current 新。
@@ -1694,7 +1694,7 @@ pub(crate) fn check_update(ctx: &Ctx, announce: bool, app: Option<&tauri::AppHan
                     latest: None,
                     url: Some(UPDATE_PAGE.to_string()),
                     checked_at: Some(now_ms()),
-                    error: Some("更新服务器回的内容看不懂；稍后再试".to_string()),
+                    error: Some("无法解析更新服务器返回的内容；请稍后重试".to_string()),
                 }
             } else if version_is_newer(env!("CARGO_PKG_VERSION"), &tag) {
                 UpdateInfo {
@@ -1726,14 +1726,14 @@ pub(crate) fn check_update(ctx: &Ctx, announce: bool, app: Option<&tauri::AppHan
     ctx.state.set_update_info(info.clone());
     let message = match info.status.as_str() {
         "available" => format!(
-            "发现新版本 {}，可以去发布页下载",
+            "发现新版本 {}，可前往发布页下载",
             info.latest.as_deref().unwrap_or("")
         ),
         "upToDate" => format!(
-            "更新检查完成：已经是最新版（v{}）",
+            "更新检查完成：已是最新版本（v{}）",
             env!("CARGO_PKG_VERSION")
         ),
-        "error" => "更新检查完成：这次没连上更新服务器".to_string(),
+        "error" => "更新检查完成：本次未能连接更新服务器".to_string(),
         _ => "更新检查完成".to_string(),
     };
     let code = if info.status == "available" {
@@ -1761,7 +1761,7 @@ pub(crate) fn check_update(ctx: &Ctx, announce: bool, app: Option<&tauri::AppHan
             crate::notify::send_toast(
                 app,
                 "上线助手有新版本",
-                &format!("上线助手有新版本 {latest}，打开应用点「去下载」"),
+                &format!("上线助手有新版本 {latest}，请打开应用点击「去下载」"),
             );
         }
     }
@@ -1783,7 +1783,7 @@ pub(crate) fn spawn_update_guard(ctx: Ctx, app: tauri::AppHandle) {
             )
         };
         if !enabled {
-            log_info(TAG_CTL, "启动检查更新是关的，这次跳过");
+            log_info(TAG_CTL, "启动时更新检查已关闭，本次跳过");
             return;
         }
         if let Some(checked) = last {
@@ -1802,9 +1802,9 @@ pub(crate) fn spawn_update_guard(ctx: Ctx, app: tauri::AppHandle) {
 pub(crate) fn export_config(ctx: &Ctx, redacted: bool, out: Option<&str>) -> Result<Value, String> {
     let path = ctx.data_dir.join("config.json");
     let raw: Value = std::fs::read_to_string(&path)
-        .map_err(|e| format!("读配置失败：{e}"))?
+        .map_err(|e| format!("读取配置失败：{e}"))?
         .parse::<Value>()
-        .map_err(|e| format!("配置文件读不出来：{e}"))?;
+        .map_err(|e| format!("配置文件无法读取：{e}"))?;
     let config = redacted_config(&raw, false, !redacted);
     let doc = json!({
         "kind": "shangxian.config-export",
@@ -1821,7 +1821,7 @@ pub(crate) fn export_config(ctx: &Ctx, redacted: bool, out: Option<&str>) -> Res
         let text = serde_json::to_string_pretty(&doc).map_err(|e| format!("导出失败：{e}"))?;
         let tmp = target.with_extension("json.tmp");
         std::fs::write(&tmp, text.as_bytes())
-            .map_err(|e| format!("导出失败：写文件失败（{e}）"))?;
+            .map_err(|e| format!("导出失败：写入文件失败（{e}）"))?;
         std::fs::rename(&tmp, &target).map_err(|e| format!("导出失败：{e}"))?;
         result["path"] = Value::String(target.display().to_string());
     }
@@ -1856,7 +1856,7 @@ fn build_doctor_request(ctx: &Ctx, mode: DoctorMode) -> Result<DoctorRequest, St
     } else if config_trusted {
         match AppConfig::load(&config_path) {
             Ok(config) => (Some(config), None),
-            Err(e) => (None, Some(format!("设置文件读不出来：{e}"))),
+            Err(e) => (None, Some(format!("设置文件无法读取：{e}"))),
         }
     } else {
         // 读坏留底（config.json.bad）：doctor 自己的步骤会用人话报出来
@@ -1951,24 +1951,24 @@ fn import_config(ctx: &Ctx, params: &Value) -> Result<Value, String> {
     let doc_param = opt_str(params, "doc");
     let path_param = opt_str(params, "path");
     if doc_param.is_some() && path_param.is_some() {
-        return Err("doc 和 path 只能给一个：doc 是内容，path 是文件路径".to_string());
+        return Err("doc 和 path 只能提供一个：doc 为内容，path 为文件路径".to_string());
     }
     let doc = match (doc_param, path_param) {
         (Some(doc), None) => doc,
         (None, Some(path)) => {
-            let meta = std::fs::metadata(&path).map_err(|e| format!("看不了这个文件：{e}"))?;
+            let meta = std::fs::metadata(&path).map_err(|e| format!("无法读取此文件：{e}"))?;
             if meta.len() > shangxian_core::import::IMPORT_DOC_MAX_BYTES as u64 {
                 return Err(
-                    "导入文件太大了（最多 1MB）；用 cli config export 导出的文件才合适"
+                    "导入文件过大（最多 1MB）；请使用 cli config export 导出的文件"
                         .to_string(),
                 );
             }
-            std::fs::read_to_string(&path).map_err(|e| format!("读不了这个文件：{e}"))?
+            std::fs::read_to_string(&path).map_err(|e| format!("无法读取此文件：{e}"))?
         }
-        _ => return Err("缺少参数：doc（内容）或 path（文件路径）二选一".to_string()),
+        _ => return Err("缺少参数：doc（内容）或 path（文件路径）必须提供一个".to_string()),
     };
     if doc.len() > shangxian_core::import::IMPORT_DOC_MAX_BYTES {
-        return Err("导入内容太大了（最多 1MB）".to_string());
+        return Err("导入内容过大（最多 1MB）".to_string());
     }
 
     // 导入是「读现状 → 校验 → 写盘 → 换内存」的原子操作：全程持锁避免和界面写操作交错
@@ -1981,7 +1981,7 @@ fn import_config(ctx: &Ctx, params: &Value) -> Result<Value, String> {
     }
     if !g.config_trusted() {
         return Err(
-            "配置文件上次没读成功（已经留底成 config.json.bad），这次不能导入；请先修好配置文件再重开应用"
+            "配置文件上次未能成功读取（已备份为 config.json.bad），本次无法导入；请先修复配置文件再重新打开应用"
                 .to_string(),
         );
     }
@@ -2015,7 +2015,7 @@ fn load_config_for_import(path: &Path) -> Result<AppConfig, String> {
     if !path.exists() {
         return Ok(AppConfig::default());
     }
-    AppConfig::load(path).map_err(|e| format!("读现有设置失败：{e}"))
+    AppConfig::load(path).map_err(|e| format!("读取现有设置失败：{e}"))
 }
 
 // ============================================================
@@ -2103,14 +2103,14 @@ fn last_extra(ctx: &Ctx, tunnel_id: &str) -> Option<Value> {
 // ============================================================
 
 const METHODS: &[(&str, &str, &str)] = &[
-    ("ping", "看应用在不在（会校验通行证）", "{}"),
+    ("ping", "检查应用是否运行（会校验通行证）", "{}"),
     (
         "status",
-        "一次拿全：应用信息 + 本机服务 + 隧道 + 服务器",
+        "一次获取全部：应用信息 + 本机服务 + 隧道 + 服务器",
         "{}",
     ),
-    ("get_snapshot", "只拿三张清单（不含应用信息）", "{}"),
-    ("methods", "列出所有能调的方法（就是这张表）", "{}"),
+    ("get_snapshot", "仅获取三张清单（不含应用信息）", "{}"),
+    ("methods", "列出所有可调用的方法（即本表）", "{}"),
     ("stats", "运行统计：时长、今日重连、重试倒计时", "{}"),
     (
         "logs_query",
@@ -2119,14 +2119,14 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     (
         "doctor",
-        "自检（app→dirs→ssh→ports→servers→tunnels→cloud→web→dns）",
+        "体检（app→dirs→ssh→ports→servers→tunnels→cloud→web→dns）",
         "{mode?}",
     ),
-    ("run_doctor", "自检（doctor 的旧名字，等价）", "{mode?}"),
-    ("build_diag", "打一个脱敏诊断包", "{out?, deep?}"),
+    ("run_doctor", "体检（doctor 的旧名字，等价）", "{mode?}"),
+    ("build_diag", "生成脱敏诊断包", "{out?, deep?}"),
     (
         "stop_all",
-        "停止全部发布与本机服务（卸载/升级前用）",
+        "停止全部发布与本机服务（卸载/升级前使用）",
         "{}",
     ),
     ("list_deleted", "最近删除（10 分钟内可撤销）", "{}"),
@@ -2142,8 +2142,8 @@ const METHODS: &[(&str, &str, &str)] = &[
         "导入配置（默认合并）",
         "{doc?/path?, mode?, dryRun?}",
     ),
-    ("check_update", "检查有没有新版本", "{}"),
-    ("get_settings", "读设置项", "{}"),
+    ("check_update", "检查是否有新版本", "{}"),
+    ("get_settings", "读取设置项", "{}"),
     (
         "set_settings",
         "整份保存设置项",
@@ -2157,32 +2157,32 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("scan_imports", "扫描现有启动脚本，返回可导入的建议", "{}"),
     (
         "import_services",
-        "把导入建议变成服务（默认暂停）",
+        "将导入建议创建为服务（默认暂停）",
         "{items: [...]}",
     ),
     (
         "save_service",
-        "新增/编辑本机服务（不填 id 就是新增）",
+        "新增/编辑本机服务（不填 id 即为新增）",
         "{id?, name, localPort, launchExe?, launchArgs?, launchWorkdir?, watch, autostart, note?}",
     ),
     (
         "remove_service",
-        "删除本机服务（有隧道在用会拒绝；返回撤销令牌）",
+        "删除本机服务（有隧道使用时会被拒绝；返回撤销令牌）",
         "{id}",
     ),
     (
         "service_start",
-        "启动本机服务（用登记过的启动方式）",
+        "启动本机服务（使用已登记的启动方式）",
         "{id}",
     ),
     (
         "service_stop",
-        "停止本机服务（默认只停应用自己启动的；外部进程要先拿 needsConfirm 让用户确认）",
+        "停止本机服务（默认只停止由应用启动的进程；外部进程会先返回 needsConfirm 等待用户确认）",
         "{id, killForeign?, expectedPid?}",
     ),
     (
         "service_restart",
-        "重启本机服务（先停再启；外部进程在听时不碰，返回 needsConfirm）",
+        "重启本机服务（先停后启；外部进程占用端口时不操作，返回 needsConfirm）",
         "{id}",
     ),
     (
@@ -2192,19 +2192,19 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     (
         "preview_launch_command",
-        "给人看的实际命令行预览（走和启动一样的分支，不参与启动）",
+        "实际命令行预览（与启动走同一分支，仅用于显示）",
         "{exe, args}",
     ),
     (
         "set_service_watch",
-        "开关看护（掉了自动拉起）",
+        "开关看护（进程退出后自动启动）",
         "{id, watch}",
     ),
     ("set_service_autostart", "开关开机自启", "{id, autostart}"),
-    ("get_service_logs", "读本机服务的日志尾部", "{id, lines?}"),
+    ("get_service_logs", "读取本机服务的日志尾部", "{id, lines?}"),
     (
         "restart_service_rotate_logs",
-        "重启本机服务并轮转日志（日志太大时用）",
+        "重启本机服务并轮转日志（日志过大时使用）",
         "{id}",
     ),
     (
@@ -2220,36 +2220,35 @@ const METHODS: &[(&str, &str, &str)] = &[
     ("remove_tunnel", "删除发布隧道（返回撤销令牌）", "{id}"),
     ("tunnel_start", "开始发布", "{id}"),
     ("tunnel_stop", "暂停发布", "{id}"),
-    ("tunnel_restart", "立刻重连", "{id}"),
     (
         "forget_host_key",
-        "清掉这台服务器的 SSH 指纹记录（服务器重装过时用）",
+        "清除这台服务器的 SSH 指纹记录（服务器重装过时使用）",
         "{id}",
     ),
-    ("get_logs", "读隧道的日志尾部", "{id, lines?}"),
+    ("get_logs", "读取隧道的日志尾部", "{id, lines?}"),
     (
         "save_server",
-        "新增/编辑云端服务器（不填 id 就是新增）",
+        "新增/编辑云端服务器（不填 id 即为新增）",
         "{id?, name, host, sshPort, user, keyPath?, vhostDir?}",
     ),
     (
         "delete_server",
-        "删除云端服务器（有隧道在用会拒绝；返回撤销令牌）",
+        "删除云端服务器（有隧道使用时会被拒绝；返回撤销令牌）",
         "{id}",
     ),
     (
         "setup_passwordless",
-        "用密码登录一次，自动配好免密（密码不落盘）",
+        "使用密码登录一次，自动配置免密登录（密码不写入磁盘）",
         "{serverId, password}",
     ),
     (
         "test_server",
-        "测试连接：真连一次这台服务器的 SSH",
+        "测试连接：实际连接一次这台服务器的 SSH",
         "{serverId}",
     ),
     (
         "hash_password",
-        "生成访问密码的哈希（bcrypt，本机算好、给 nginx 用）",
+        "生成访问密码哈希（bcrypt，本机计算，供 nginx 使用）",
         "{serverId, password}",
     ),
     ("get_nginx_snippet", "生成某条隧道的 nginx 配置片段", "{id}"),
@@ -2273,18 +2272,18 @@ const METHODS: &[(&str, &str, &str)] = &[
         "统计最近 1000 行的 401/403 访问情况",
         "{id}",
     ),
-    ("get_public_ip", "看服务器眼里你的上网 IP", "{}"),
-    ("get_notify_enabled", "掉线通知开着吗", "{}"),
-    ("set_notify_enabled", "开关掉线通知", "{enabled}"),
+    ("get_public_ip", "查看服务器视角的公网 IP", "{}"),
+    ("get_notify_enabled", "断开通知是否开启", "{}"),
+    ("set_notify_enabled", "开关断开通知", "{enabled}"),
     ("get_notify_quiet", "免打扰时段设置", "{}"),
     (
         "set_notify_quiet",
         "设置免打扰时段",
         "{enabled, start, end}",
     ),
-    ("get_autostart", "开机自启开着吗", "{}"),
+    ("get_autostart", "开机自启是否开启", "{}"),
     ("set_autostart", "开关开机自启", "{enabled}"),
-    ("get_data_dir", "配置文件夹在哪", "{}"),
+    ("get_data_dir", "配置文件夹位置", "{}"),
     ("get_recovery_state", "崩溃自动恢复的状态", "{}"),
     (
         "clear_recovery_state",
@@ -2371,7 +2370,7 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
             match ctx.state.take_trash(&token) {
                 Some(_) => Ok(json!({"ok": true})),
                 None => Err(
-                    "这条撤销已经过期了（删除超过 10 分钟）；要恢复只能重新建一个".to_string(),
+                    "此撤销已过期（删除超过 10 分钟）；如需恢复只能重新创建".to_string(),
                 ),
             }
         }
@@ -2411,7 +2410,7 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
                 .cloned()
                 .ok_or_else(|| "缺少参数 items".to_string())?;
             let items: Vec<shangxian_core::import::ImportSuggestion> =
-                serde_json::from_value(items).map_err(|e| format!("items 不对：{e}"))?;
+                serde_json::from_value(items).map_err(|e| format!("items 参数不正确：{e}"))?;
             ctx.lock_guardian()?
                 .import_services(items)
                 .map(|n| json!({"imported": n}))
@@ -2466,7 +2465,7 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
                 .get("port")
                 .and_then(|v| v.as_u64())
                 .ok_or_else(|| "缺少参数 port".to_string())?;
-            let port = u16::try_from(port).map_err(|_| "端口要填 1~65535 的数字".to_string())?;
+            let port = u16::try_from(port).map_err(|_| "端口必须是 1~65535 的数字".to_string())?;
             let expected_pid = params
                 .get("expectedPid")
                 .and_then(|v| v.as_u64())
@@ -2532,10 +2531,6 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
         "tunnel_stop" => {
             let id = need_str(params, "id")?;
             ctx.lock_guardian()?.set_enabled(&id, false).map(|_| json!({"ok": true}))
-        }
-        "tunnel_restart" => {
-            let id = need_str(params, "id")?;
-            ctx.lock_guardian()?.restart(&id).map(|_| json!({"ok": true}))
         }
         "forget_host_key" => {
             let id = need_str(params, "id")?;
@@ -2640,7 +2635,7 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
         }
 
         other => Err(format!(
-            "没有这个方法：{other}（能用的都在这儿：cli methods）"
+            "没有这个方法：{other}（可用方法见：cli methods）"
         )),
     }
 }
@@ -2704,7 +2699,7 @@ fn parse_check_mode(params: &Value, default: CheckMode) -> Result<CheckMode, Str
         Some("audit") => Ok(CheckMode::Audit),
         Some("env") => Ok(CheckMode::Env),
         Some(other) => Err(format!(
-            "检查模式只支持 full / drift / audit / env，不认「{other}」"
+            "检查模式仅支持 full / drift / audit / env，不支持「{other}」"
         )),
     }
 }
@@ -3045,7 +3040,7 @@ fn scan_server_env(ctx: &Ctx, params: &Value) -> Result<Value, String> {
     );
     let mut env = result
         .env
-        .ok_or_else(|| "环境识别没读出结果（服务器回的内容看不懂），稍后再试".to_string())?;
+        .ok_or_else(|| "环境识别未获取到结果（无法解析服务器返回的内容），请稍后重试".to_string())?;
     env.detected_at = Some(now_ms());
     if let Ok(value) = serde_json::to_value(&env) {
         ctx.state.set_server_env(&server_id, value.clone());
@@ -3065,11 +3060,11 @@ fn get_public_ip(ctx: &Ctx) -> Result<Value, String> {
             .find(|t| t.enabled)
             .map(|t| t.server_id.clone())
             .or_else(|| servers.first().map(|s| s.id.clone()))
-            .ok_or_else(|| "还没有配置云端服务器：先加一台服务器再取公网 IP".to_string())?;
+            .ok_or_else(|| "尚未配置云端服务器：请先添加一台服务器，再获取公网 IP".to_string())?;
         let server = servers
             .into_iter()
             .find(|s| s.id == server_id)
-            .ok_or_else(|| "找不到这台云端服务器".to_string())?;
+            .ok_or_else(|| "未找到这台云端服务器".to_string())?;
         (
             format!("{}@{}", server.user, server.host),
             server.ssh_port,
@@ -3088,9 +3083,9 @@ fn get_public_ip(ctx: &Ctx) -> Result<Value, String> {
     };
     let message = match &ip {
         Some(ip) => format!(
-            "服务器看到的你的上网 IP 是 {ip}。换网络可能就变了；运营商共享 IP 时加白名单可能不生效。"
+            "服务器看到的公网 IP 是 {ip}。更换网络后可能变化；运营商共享 IP 时白名单可能不生效。"
         ),
-        None => "这次没读到公网 IP（服务器没回话）；换个网络或稍后再试。".to_string(),
+        None => "本次未获取到公网 IP（服务器无响应）；请更换网络或稍后重试。".to_string(),
     };
     Ok(json!({
         "ip": ip,
@@ -3119,7 +3114,7 @@ fn setup_passwordless(ctx: &Ctx, params: &Value) -> Result<Value, String> {
         .set_server_key(&server_id, &result.key_path)?;
     Ok(json!({
         "keyPath": result.key_path,
-        "message": format!("配好了！以后连这台服务器都走密钥，不用再输密码。密钥放在：{}", result.key_path),
+        "message": format!("配置完成。以后连接这台服务器都使用密钥，无需再输入密码。密钥位置：{}", result.key_path),
     }))
 }
 

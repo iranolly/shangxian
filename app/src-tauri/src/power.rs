@@ -39,7 +39,7 @@ static POWER_PARAMS: PowerParams = PowerParams(DEVICE_NOTIFY_SUBSCRIBE_PARAMETER
 /// - 重复调用返回 `Err("已经注册过了")`。
 pub fn install() -> Result<(), String> {
     if INSTALLED.get().is_some() {
-        return Err("已经注册过了".to_string());
+        return Err("已注册过".to_string());
     }
 
     #[cfg(windows)]
@@ -59,7 +59,7 @@ pub fn install() -> Result<(), String> {
         if h == 0 {
             let err = unsafe { GetLastError() };
             let msg = format!(
-                "电源回调注册失败（错误码 {err}）：睡眠唤醒后的自动重连会慢一些，其它功能不受影响"
+                "电源回调注册失败（错误码 {err}）：睡眠唤醒后的自动重连会稍有延迟，其它功能不受影响"
             );
             shangxian_core::log::log_warn(shangxian_core::log::TAG_POWER, &msg);
             return Err(msg);
@@ -79,7 +79,7 @@ pub fn install() -> Result<(), String> {
         if code != 0 {
             shangxian_core::log::log_warn(
                 shangxian_core::log::TAG_POWER,
-                &format!("网卡变化通知注册失败（错误码 {code}）：换网后重连会慢一些"),
+                &format!("网卡变化通知注册失败（错误码 {code}）：更换网络后重连会稍有延迟"),
             );
         } else {
             NET_HANDLE.store(net_handle as isize, Ordering::SeqCst);

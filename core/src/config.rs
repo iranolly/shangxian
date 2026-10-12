@@ -194,7 +194,7 @@ const QUIET_KEYS: [&str; 3] = ["enabled", "start", "end"];
 /// 多余的键，一律拒绝并返回人话（文案见 D2 §3.4，逐字）。
 pub fn parse_settings_strict(value: &serde_json::Value) -> Result<Settings, String> {
     let Some(obj) = value.as_object() else {
-        return Err("设置项不完整：少了 refreshIntervalMs、quietHours、checkUpdateOnStart，请整份设置一起提交".to_string());
+        return Err("设置项不完整：缺少 refreshIntervalMs、quietHours、checkUpdateOnStart，请整份设置一起提交".to_string());
     };
 
     let missing: Vec<&str> = SETTINGS_KEYS
@@ -204,13 +204,13 @@ pub fn parse_settings_strict(value: &serde_json::Value) -> Result<Settings, Stri
         .collect();
     if !missing.is_empty() {
         return Err(format!(
-            "设置项不完整：少了 {}，请整份设置一起提交",
+            "设置项不完整：缺少 {}，请整份设置一起提交",
             missing.join("、")
         ));
     }
     for key in obj.keys() {
         if !SETTINGS_KEYS.contains(&key.as_str()) {
-            return Err(format!("设置里有不认识的项：{key}"));
+            return Err(format!("设置中包含无法识别的项：{key}"));
         }
     }
 
@@ -221,7 +221,7 @@ pub fn parse_settings_strict(value: &serde_json::Value) -> Result<Settings, Stri
 
     let Some(quiet) = obj.get("quietHours").and_then(|v| v.as_object()) else {
         return Err(
-            "设置项不完整：少了 quietHours.enabled、quietHours.start、quietHours.end，请整份设置一起提交"
+            "设置项不完整：缺少 quietHours.enabled、quietHours.start、quietHours.end，请整份设置一起提交"
                 .to_string(),
         );
     };
@@ -232,41 +232,41 @@ pub fn parse_settings_strict(value: &serde_json::Value) -> Result<Settings, Stri
         .collect();
     if !quiet_missing.is_empty() {
         return Err(format!(
-            "设置项不完整：少了 {}，请整份设置一起提交",
+            "设置项不完整：缺少 {}，请整份设置一起提交",
             quiet_missing.join("、")
         ));
     }
     for key in quiet.keys() {
         if !QUIET_KEYS.contains(&key.as_str()) {
-            return Err(format!("设置里有不认识的项：quietHours.{key}"));
+            return Err(format!("设置中包含无法识别的项：quietHours.{key}"));
         }
     }
 
     let enabled = quiet
         .get("enabled")
         .and_then(|v| v.as_bool())
-        .ok_or_else(|| "设置项不完整：quietHours.enabled 的值写法不对，请整份设置一起提交".to_string())?;
+        .ok_or_else(|| "设置项不完整：quietHours.enabled 的值格式不正确，请整份设置一起提交".to_string())?;
     let start = quiet
         .get("start")
         .and_then(|v| v.as_str())
         .filter(|s| parse_hhmm(s).is_some())
-        .ok_or_else(|| "静音时段要写 24 小时制的时间，例如 22:00".to_string())?
+        .ok_or_else(|| "免打扰时段须填写 24 小时制时间，例如 22:00".to_string())?
         .to_string();
     let end = quiet
         .get("end")
         .and_then(|v| v.as_str())
         .filter(|s| parse_hhmm(s).is_some())
-        .ok_or_else(|| "静音时段要写 24 小时制的时间，例如 22:00".to_string())?
+        .ok_or_else(|| "免打扰时段须填写 24 小时制时间，例如 22:00".to_string())?
         .to_string();
     if start == end {
-        return Err("静音时段的开始和结束不能是同一个时间；不想静音就把开关关掉".to_string());
+        return Err("免打扰时段的开始和结束不能相同；如不需要免打扰，请关闭该开关".to_string());
     }
 
     let check_update_on_start = obj
         .get("checkUpdateOnStart")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| {
-            "设置项不完整：checkUpdateOnStart 的值写法不对，请整份设置一起提交".to_string()
+            "设置项不完整：checkUpdateOnStart 的值格式不正确，请整份设置一起提交".to_string()
         })?;
 
     Ok(Settings {
@@ -732,7 +732,7 @@ impl AppConfig {
                 io::Error::new(
                     e.kind(),
                     format!(
-                        "配置文件读不出来：{e}；原文件已经留底为 config.json.bad，修好后再打开应用"
+                        "配置文件无法读取：{e}；原文件已备份为 config.json.bad，修复后再打开应用"
                     ),
                 )
             }
@@ -746,10 +746,10 @@ impl AppConfig {
             }
             VersionRead::Value(version) => {
                 if version == CONFIG_VERSION {
-                    let cfg = parse_current(&text, path, "配置文件格式不对")?;
+                    let cfg = parse_current(&text, path, "配置文件格式不正确")?;
                     cfg
                 } else if version == 5 {
-                    let mut cfg = parse_current(&text, path, "配置文件格式不对")?;
+                    let mut cfg = parse_current(&text, path, "配置文件格式不正确")?;
                     backup_once(path, "json.v5.bak", &text);
                     cfg.version = CONFIG_VERSION;
                     // 写回是尽力而为：磁盘满/没权限也不能让调用方退回空配置。
@@ -757,7 +757,7 @@ impl AppConfig {
                     outcome.migrated_from = Some(5);
                     cfg
                 } else if version == 4 {
-                    let mut cfg = parse_current(&text, path, "配置文件格式不对")?;
+                    let mut cfg = parse_current(&text, path, "配置文件格式不正确")?;
                     backup_once(path, "json.v4.bak", &text);
                     cfg.version = CONFIG_VERSION;
                     let _ = cfg.save(path);
@@ -765,7 +765,7 @@ impl AppConfig {
                     cfg
                 } else {
                     let old: LegacyConfig = serde_json::from_str(&text).map_err(|e| {
-                        corrupt_config_error(path, "老配置文件格式不对，没法迁移", &e)
+                        corrupt_config_error(path, "旧配置文件格式不正确，无法迁移", &e)
                     })?;
                     let migrated = old.migrate();
                     backup_once(path, "json.v3.bak", &text);
@@ -778,7 +778,7 @@ impl AppConfig {
             // 不是 JSON 或没有 version：按老结构走，解析失败会留底报错
             VersionRead::NotObject => {
                 let old: LegacyConfig = serde_json::from_str(&text).map_err(|e| {
-                    corrupt_config_error(path, "老配置文件格式不对，没法迁移", &e)
+                    corrupt_config_error(path, "旧配置文件格式不正确，无法迁移", &e)
                 })?;
                 let migrated = old.migrate();
                 backup_once(path, "json.v3.bak", &text);
@@ -881,7 +881,7 @@ fn corrupt_config_error(path: &Path, what: &str, err: &serde_json::Error) -> io:
     let tail = quarantine_tail(path);
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("{what}：{err}；{tail}；修好后再打开应用"),
+        format!("{what}：{err}；{tail}；修复后再打开应用"),
     )
 }
 
@@ -889,14 +889,14 @@ fn corrupt_version_error(path: &Path) -> io::Error {
     let tail = quarantine_tail(path);
     io::Error::new(
         io::ErrorKind::InvalidData,
-        format!("配置文件格式不对：version 字段不是数字；{tail}；修好后再打开应用"),
+        format!("配置文件格式不正确：version 字段不是数字；{tail}；修复后再打开应用"),
     )
 }
 
 fn quarantine_tail(path: &Path) -> String {
     match quarantine_bad_config(path) {
-        Ok(bad) => format!("原文件已经留底为 {}", bad.display()),
-        Err(e) => format!("原文件没能留底（{e}），请先手动备份再改"),
+        Ok(bad) => format!("原文件已备份为 {}", bad.display()),
+        Err(e) => format!("原文件备份失败（{e}），请先手动备份再修改"),
     }
 }
 
@@ -905,7 +905,7 @@ fn quarantine_tail(path: &Path) -> String {
 /// 降级拦截的固定文案第一句（D2 §13.2，逐字）。
 pub fn config_unsupported_message(found: u32) -> String {
     format!(
-        "这份设置是新版「上线助手」存的（版本 {found}），当前版本只认到 {CONFIG_VERSION}。请先升级到最新版再打开；你的设置文件没有被改过。"
+        "这份设置是新版「上线助手」存的（版本 {found}），当前版本只认到 {CONFIG_VERSION}。请先升级到最新版再打开；设置文件未被修改。"
     )
 }
 
@@ -1006,7 +1006,7 @@ pub fn resolve_data_dir(
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "SHANGXIAN_DATA_DIR 必须是完整路径（现在填的是 {raw}）；相对路径可能指向别人能看到的目录"
+                    "SHANGXIAN_DATA_DIR 必须是完整路径（当前填写的是 {raw}）；相对路径可能指向其他人可访问的目录"
                 ),
             ));
         }
@@ -1031,7 +1031,7 @@ pub fn resolve_data_dir(
 
     Err(io::Error::new(
         io::ErrorKind::NotFound,
-        "环境变量 LOCALAPPDATA 和 APPDATA 都没有值，找不到放配置和密钥的地方；不能退回到相对目录（可能被别人看到）",
+        "环境变量 LOCALAPPDATA 和 APPDATA 均未设置，无法确定配置和密钥的存放位置；不能退回到相对目录（可能被其他人访问）",
     ))
 }
 
@@ -1077,7 +1077,7 @@ pub fn try_default_data_dir() -> io::Result<PathBuf> {
                 return Err(io::Error::new(
                     e.kind(),
                     format!(
-                        "便携模式：程序放在不能写的目录里（{}）。把程序挪到能写的文件夹，或者删掉 {PORTABLE_MARKER} 用普通模式。",
+                        "便携模式：程序位于不可写的目录（{}）。请将程序移动到可写的文件夹，或删除 {PORTABLE_MARKER} 使用普通模式。",
                         dir.display()
                     ),
                 ));
@@ -1087,7 +1087,7 @@ pub fn try_default_data_dir() -> io::Result<PathBuf> {
             fs::create_dir_all(&dir).map_err(|e| {
                 io::Error::new(
                     e.kind(),
-                    format!("环境变量指定的数据目录建不出来：{}（{e}）", dir.display()),
+                    format!("环境变量指定的数据目录无法创建：{}（{e}）", dir.display()),
                 )
             })?;
         }
@@ -1103,7 +1103,7 @@ pub fn data_dir_info() -> (PathBuf, DataDirKind) {
             if kind == DataDirKind::Portable {
                 if let Err(e) = fs::create_dir_all(&dir) {
                     panic!(
-                        "便携模式：程序放在不能写的目录里（{}）。把程序挪到能写的文件夹，或者删掉 {PORTABLE_MARKER} 用普通模式。（{e}）",
+                        "便携模式：程序位于不可写的目录（{}）。请将程序移动到可写的文件夹，或删除 {PORTABLE_MARKER} 使用普通模式。（{e}）",
                         dir.display()
                     );
                 }
@@ -1118,7 +1118,7 @@ pub fn data_dir_info() -> (PathBuf, DataDirKind) {
 fn attach_env_hint(err: io::Error) -> String {
     let msg = err.to_string();
     if msg.contains("LOCALAPPDATA") || msg.contains("APPDATA") {
-        format!("{msg}；请修好系统环境变量后再打开应用")
+        format!("{msg}；请修复系统环境变量后再打开应用")
     } else {
         msg
     }
@@ -1617,7 +1617,7 @@ mod tests {
 
         assert_eq!(
             err(serde_json::json!({"quietHours": {"enabled": false, "start": "22:00", "end": "08:00"}, "checkUpdateOnStart": true})),
-            "设置项不完整：少了 refreshIntervalMs，请整份设置一起提交"
+            "设置项不完整：缺少 refreshIntervalMs，请整份设置一起提交"
         );
         assert_eq!(
             err(serde_json::json!({"refreshIntervalMs": 499, "quietHours": {"enabled": false, "start": "22:00", "end": "08:00"}, "checkUpdateOnStart": true})),
@@ -1629,19 +1629,19 @@ mod tests {
         );
         assert_eq!(
             err(serde_json::json!({"refreshIntervalMs": 800, "quietHours": {"enabled": false, "start": "9:00", "end": "08:00"}, "checkUpdateOnStart": true})),
-            "静音时段要写 24 小时制的时间，例如 22:00"
+            "免打扰时段须填写 24 小时制时间，例如 22:00"
         );
         assert_eq!(
             err(serde_json::json!({"refreshIntervalMs": 800, "quietHours": {"enabled": true, "start": "08:00", "end": "08:00"}, "checkUpdateOnStart": true})),
-            "静音时段的开始和结束不能是同一个时间；不想静音就把开关关掉"
+            "免打扰时段的开始和结束不能相同；如不需要免打扰，请关闭该开关"
         );
         assert_eq!(
             err(serde_json::json!({"refreshIntervalMs": 800, "quietHours": {"enabled": false, "start": "22:00", "end": "08:00"}, "checkUpdateOnStart": true, "bogus": 1})),
-            "设置里有不认识的项：bogus"
+            "设置中包含无法识别的项：bogus"
         );
         assert_eq!(
             err(serde_json::json!({"refreshIntervalMs": 800, "quietHours": {"enabled": false, "start": "22:00", "end": "08:00", "x": 1}, "checkUpdateOnStart": true})),
-            "设置里有不认识的项：quietHours.x"
+            "设置中包含无法识别的项：quietHours.x"
         );
 
         assert_eq!(
@@ -1750,7 +1750,7 @@ mod tests {
         std::fs::write(&path, r#"{"version": 5, "servers": [{"#).unwrap();
 
         let err = AppConfig::load(&path).unwrap_err();
-        assert!(err.to_string().contains("格式不对"), "err={err}");
+        assert!(err.to_string().contains("格式不正确"), "err={err}");
         assert!(dir.join("config.json.bad").exists());
         assert!(!path.exists());
     }

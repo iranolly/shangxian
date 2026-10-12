@@ -1,4 +1,4 @@
-// 访问保护弹层（只出现在「访问保护」页）：专管门禁——网页访问密码 + IP 白名单。
+// 访问保护弹层（从隧道卡片的保护小牌或 ⋯ 菜单打开）：专管门禁——网页访问密码 + IP 白名单。
 // 规则：密码留空 = 保留原来的密码；保存成功后由页面接着打开「云端配置」作为下一步。
 // 注意：「密码是否开启」看 tunnel.access 里有没有 "password"，不用 hasPassword。
 //
@@ -67,13 +67,13 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
       const info = await getPublicIp();
       if (!info.ip) {
         setMyIp(null);
-        setIpError("没查到你的公网 IP。可以到搜索引擎里搜“IP”看自己的地址。");
+        setIpError("未能获取公网 IP。可到搜索引擎中搜索“IP”查看自己的地址。");
       } else {
         setMyIp(info.ip);
       }
     } catch (e) {
       setMyIp(null);
-      setIpError(`没查到：${errorText(e)}。可以到搜索引擎里搜“IP”看自己的地址。`);
+      setIpError(`查询失败：${errorText(e)}。可到搜索引擎中搜索“IP”查看自己的地址。`);
     } finally {
       setIpBusy(false);
     }
@@ -89,11 +89,11 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
     const finalIps = overrideIps ?? ips;
     // 只有这条隧道还没设过密码时才必须要新密码；已设过的留空就沿用。
     if (wantPassword && !password.trim() && !tunnel.hasPassword) {
-      setError("这条隧道要密码才能进，但还没设过密码：请填一条新密码");
+      setError("该隧道已启用密码保护，但尚未设置密码：请填写新密码");
       return;
     }
     if (wantIp && !finalIps.trim()) {
-      setError("勾了「只允许指定 IP」的话，要填至少一个 IP");
+      setError("勾选「只允许指定 IP」后，需填写至少一个 IP");
       return;
     }
 
@@ -144,9 +144,9 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
           <h2 className="modal-title">访问保护 · {tunnel.name}</h2>
           <p
             className="modal-sub"
-            title="这里的密码是别人打开网页时输的，不是「云端服务器」页里连服务器的登录密码。"
+            title="此密码是访客打开网页时输入的，不是「云端服务器」页中连接服务器的登录密码。"
           >
-            {tunnel.url ?? "还没填公网网址"}；这是网页访问密码。
+            {tunnel.url ?? "尚未填写公网网址"}；这是网页访问密码。
           </p>
         </div>
         <div className="modal-body">
@@ -164,11 +164,11 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
                   onChange={(e) => setWantPassword(e.target.checked)}
                 />
                 <div className="option-text">
-                  要密码才能进（推荐）
+                  密码保护（推荐）
                   <span className="option-hint hint">
                     {tunnel.hasPassword
-                      ? "已设过密码，不填新的就不换"
-                      : "还没设密码，需要填一条新的"}
+                      ? "已设置密码；不填写新密码则保持不变"
+                      : "尚未设置密码，需填写新密码"}
                   </span>
                 </div>
               </label>
@@ -186,15 +186,15 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
                 </div>
               </label>
             </div>
-            <p className="field-hint hint">两种可以同时开，都要满足才能进。</p>
+            <p className="field-hint hint">两项可同时开启，均满足后方可访问。</p>
             {!wantPassword && !wantIp && (
               <div className="danger-line">
-                ⚠ 两种保护都没开：任何人知道网址就能访问，不要放私人内容
+                ⚠ 两项保护均未开启：任何人知道网址即可访问，请勿放置私人内容
               </div>
             )}
             {(wantPassword || wantIp) && (
-              <p className="field-hint hint" title="只给证书续期用，别的地址照样要密码 / 白名单。">
-                保存后证书续期会自动放行一小块。
+              <p className="field-hint hint" title="仅用于证书续期，其他地址仍需密码 / 白名单。">
+                保存后，证书续期所需路径会自动放行。
               </p>
             )}
           </div>
@@ -212,18 +212,18 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
               <div className="field">
                 <label className="field-label">
                   新密码
-                  {tunnel.hasPassword ? "（留空 = 不换）" : ""}
+                  {tunnel.hasPassword ? "（留空 = 不修改）" : ""}
                 </label>
                 <input
                   className="input"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={tunnel.hasPassword ? "留空就不换密码" : "必须填"}
+                  placeholder={tunnel.hasPassword ? "留空则不修改密码" : "必填"}
                 />
                 <p
                   className="field-hint hint"
-                  title="保存时立刻在这台电脑上算好，只把加密结果写进服务器上的密码文件；连服务器用的登录密码在「云端服务器」页。"
+                  title="保存时在本机计算，仅将加密结果写入服务器上的密码文件；连接服务器使用的登录密码在「云端服务器」页。"
                 >
                   密码只在本机加密，不存明文。
                 </p>
@@ -247,18 +247,18 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
                   disabled={ipBusy}
                   onClick={() => void findMyIp()}
                 >
-                  {ipBusy ? "查询中…" : myIp ? "重新查" : "查公网 IP"}
+                  {ipBusy ? "查询中…" : myIp ? "重新查询" : "查公网 IP"}
                 </button>
                 {myIp ? (
                   <>
-                    <span className="ip-assist-result">你的公网 IP 是 {myIp}</span>
+                    <span className="ip-assist-result">本机公网 IP：{myIp}</span>
                     <button
                       className="link-btn"
                       disabled={myIpListed}
-                      title={myIpListed ? "已经在白名单里了" : undefined}
+                      title={myIpListed ? "已在白名单中" : undefined}
                       onClick={addMyIp}
                     >
-                      加进白名单
+                      加入白名单
                     </button>
                   </>
                 ) : null}
@@ -267,14 +267,14 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
               {myIp && (
                 <p
                   className="field-hint hint"
-                  title="换网络或重启宽带后可能就变了；加完还是进不来，可能是运营商共享 IP，改用密码保护更省心。"
+                  title="更换网络或重启宽带后可能变化；添加后仍无法访问，可能是运营商共享 IP，建议改用密码保护。"
                 >
-                  服务器看到你的上网 IP 是 {myIp}。
+                  服务器看到的访问 IP 是 {myIp}。
                 </p>
               )}
               {ips.trim() ? (
-                <p className="field-hint hint" title="变了以后白名单会把自己挡在外面，到时来这里把新 IP 加进去。">
-                  宽带 IP 会变，变了要回来加新的。
+                <p className="field-hint hint" title="IP 变化后白名单会将本机拦截，请返回此处添加新 IP。">
+                  宽带 IP 会变化，变化后需返回添加新 IP。
                 </p>
               ) : null}
             </div>
@@ -282,9 +282,9 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
 
           <p
             className="field-hint hint"
-            title="把新的几行贴到服务器面板里并重载 nginx，保护才算真的生效。想改名称、网址、云端端口，请到「发布隧道」页。"
+            title="将新增配置行粘贴到服务器面板并重载 nginx 后，保护才会生效。如需修改名称、网址、云端端口，请到「发布隧道」页。"
           >
-            保存后接着打开「云端配置」。
+            保存后将打开「云端配置」。
           </p>
         </div>
         <div className="modal-foot">
@@ -305,11 +305,11 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
 
       {lockConfirm !== null && (
         <ConfirmModal
-          title="这个 IP 不在白名单里"
-          body="保存后，你自己也可能打不开这条隧道（除非换网络）。"
+          title="该 IP 不在白名单中"
+          body="保存后，本机也可能无法访问这条隧道（除非更换网络）。"
           confirmLabel="保存"
           ack={{
-            label: `把我的 IP ${lockConfirm} 也加进去`,
+            label: `同时加入本机 IP ${lockConfirm}`,
             checked: ackAddMyIp,
             onChange: setAckAddMyIp,
           }}

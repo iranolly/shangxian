@@ -96,7 +96,7 @@ fn tcp_probe(port: u16, timeout: Duration) -> ProbeOutcome {
     match TcpStream::connect_timeout(&local_addr(port).into(), timeout) {
         Ok(_) => ProbeOutcome::TcpOpen,
         Err(err) => ProbeOutcome::Down {
-            error: format!("连不上本机端口 {port}：{err}"),
+            error: format!("无法连接本机端口 {port}：{err}"),
         },
     }
 }
@@ -109,7 +109,7 @@ fn http_probe(port: u16, timeout: Duration) -> ProbeOutcome {
         Ok(code) => (Some(code), None),
         Err(err) => match http_attempt(port, timeout, "GET") {
             Ok(code) => (Some(code), None),
-            Err(err2) => (None, Some(format!("{err}；改用 GET 再试：{err2}"))),
+            Err(err2) => (None, Some(format!("{err}；改用 GET 重试：{err2}"))),
         },
     };
     match got {
@@ -124,29 +124,29 @@ fn http_probe(port: u16, timeout: Duration) -> ProbeOutcome {
 /// 连不上 / 超时 / 一个字节都没读到返回 Err(人话)。
 fn http_attempt(port: u16, timeout: Duration, method: &str) -> Result<u16, String> {
     let mut stream = TcpStream::connect_timeout(&local_addr(port).into(), timeout)
-        .map_err(|err| format!("连不上本机端口 {port}：{err}"))?;
+        .map_err(|err| format!("无法连接本机端口 {port}：{err}"))?;
     stream
         .set_read_timeout(Some(timeout))
-        .map_err(|err| format!("设置读取超时失败:{err}"))?;
+        .map_err(|err| format!("设置读取超时失败：{err}"))?;
     stream
         .set_write_timeout(Some(timeout))
-        .map_err(|err| format!("设置写入超时失败:{err}"))?;
+        .map_err(|err| format!("设置写入超时失败：{err}"))?;
 
     let request = format!(
         "{method} / HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nUser-Agent: shangxian-probe\r\nConnection: close\r\n\r\n"
     );
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| format!("请求写不出去：{err}"))?;
+        .map_err(|err| format!("请求写入失败：{err}"))?;
     // 关上写方向，服务端才知道请求完了，会尽快回包。
     let _ = stream.shutdown(Shutdown::Write);
 
     let mut buf = [0u8; HTTP_READ_MAX];
     let read = stream
         .read(&mut buf)
-        .map_err(|err| format!("等响应超时或读失败:{err}"))?;
+        .map_err(|err| format!("等待响应超时或读取失败：{err}"))?;
     if read == 0 {
-        return Err("连上了但一个字节都没等到".into());
+        return Err("已连接但未收到任何字节".into());
     }
     Ok(parse_status_code(&buf[..read]).unwrap_or(0))
 }
@@ -243,6 +243,17 @@ impl ProbeSlot {
             }
             *self.last_error.lock().unwrap() = outcome.error().map(str::to_string);
         }
+    }
+
+    /// 立即定论为 down，跳过防抖（停止服务后用）。
+    /// 正常停止后端口马上释放，不能让界面等防抖窗口（约 6 秒）闪出「端口被占用」；
+    /// 真被残留进程或别的程序占着时，下一次探测成功会立刻恢复 up。
+    pub fn force_down(&self, reason: &str) {
+        self.checked.store(true, Ordering::SeqCst);
+        self.fail_streak
+            .store(PROBE_FAILS_BEFORE_DOWN, Ordering::SeqCst);
+        self.alive.store(false, Ordering::SeqCst);
+        *self.last_error.lock().unwrap() = Some(reason.to_string());
     }
 
     /// 同步探一次并写回；返回是否活。
@@ -425,6 +436,24 @@ mod tests {
         assert_eq!(slot.fail_streak(), 0);
         assert!(slot.alive());
         assert!(slot.last_ok_at().is_some());
+        assert_eq!(slot.last_error(), None);
+    }
+
+    #[test]
+    fn force_down_skips_debounce_and_recovers() {
+        let slot = ProbeSlot::new();
+        slot.feed(ProbeOutcome::TcpOpen);
+        assert!(slot.alive());
+
+        slot.force_down("你刚点了停止");
+        assert!(!slot.alive(), "停止后要立即判死，不等 3 次失败");
+        assert!(slot.ever_checked());
+        assert!(slot.is_down());
+        assert_eq!(slot.last_error().as_deref(), Some("你刚点了停止"));
+
+        slot.feed(ProbeOutcome::TcpOpen);
+        assert!(slot.alive(), "端口还有人听要立刻恢复 up");
+        assert_eq!(slot.fail_streak(), 0);
         assert_eq!(slot.last_error(), None);
     }
 

@@ -122,7 +122,7 @@ function remerge(nextLoading: boolean = state.loading): void {
       setPending(item.override.key, false);
     } else if (item.reason === "timeout" && isPending(item.override.key)) {
       toast.warn(
-        `操作没有回音：${nameForKey(merged.snapshot, item.override.key)} 可能没成功，等一下再看看`,
+        `操作无响应：${nameForKey(merged.snapshot, item.override.key)} 可能未成功，请稍后查看`,
         {
           key: `cmd-timeout:${item.override.key}`,
           action: { label: "刷新", run: () => refreshNow() },
@@ -248,7 +248,7 @@ async function tick(force: boolean): Promise<void> {
     emit();
     if (state.loading && failStreak >= FIRST_FAIL_TOAST_AFTER && !firstFailNotified) {
       firstFailNotified = true;
-      toast.error("连不上后台，界面上的状态可能不是最新的", {
+      toast.error("无法连接后台服务，界面显示的状态可能不是最新", {
         key: "snapshot-first-fail",
         durationMs: 12_000,
         action: { label: "重试", run: () => refreshNow() },

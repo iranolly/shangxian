@@ -1,5 +1,6 @@
-// 发布隧道页（D4 §3.8 重写）：
-// 列表工具条（搜索 / 筛选 / 排序 / 分组）+ 批量模式 + 卡片增强；数据一律从 store 读。
+// 发布隧道页（D4 §3.8 重写；2026-10-12 起「访问保护」页合并到本页）：
+// 列表工具条（搜索 / 筛选 / 排序 / 分组）+ 批量模式 + 卡片增强（含访问保护状态与「访问记录」）；
+// 数据一律从 store 读。
 //
 // 兼容说明：App.tsx（外壳 lane）仍然在传旧 props；这里接收但只借用 onNavigate，
 // 其余数据从 store 取（D4 §1.1 铁律：实体数据只从 store 读）。
@@ -9,12 +10,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ShellIntent } from "../App";
 import "../styles/lists.css";
 import type { ServerView, ServiceView, TunnelView } from "../api";
+import { AuditModal } from "../components/AuditModal";
 import { CloneTunnelModal } from "../components/CloneTunnelModal";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { EditTunnelModal } from "../components/EditTunnelModal";
 import { LogsModal, type LogTarget } from "../components/LogsModal";
 import { NewTunnelWizard } from "../components/NewTunnelWizard";
 import { NginxModal } from "../components/NginxModal";
+import { ProtectionModal } from "../components/ProtectionModal";
 import type { PageKey } from "../components/Sidebar";
 import { TunnelCard } from "../components/TunnelCard";
 import { BulkBar } from "../components/list/BulkBar";
@@ -75,7 +78,6 @@ interface Props {
   servers?: ServerView[];
   onStart?: (id: string) => void;
   onStop?: (id: string) => void;
-  onRestart?: (id: string) => void;
   onNavigate?: (page: PageKey) => void;
   onRefresh?: () => void;
   /** 外壳下发的意图：通知定位 / 打开向导 / 打开云端配置 / 打开日志 */
@@ -99,7 +101,9 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
   const [logsFor, setLogsFor] = useState<string | null>(null);
   const [logsTarget, setLogsTarget] = useState<LogTarget | null>(null);
   const [nginxFor, setNginxFor] = useState<string | null>(null);
+  const [protectFor, setProtectFor] = useState<string | null>(null);
   const [cloneFor, setCloneFor] = useState<string | null>(null);
+  const [auditFor, setAuditFor] = useState<string | null>(null);
   const [removeFor, setRemoveFor] = useState<string | null>(null);
 
   const openEdit = useCallback((id: string) => setEditFor(id), []);
@@ -107,7 +111,8 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
   const openNginx = useCallback((id: string) => setNginxFor(id), []);
   const openClone = useCallback((id: string) => setCloneFor(id), []);
   const askRemove = useCallback((id: string) => setRemoveFor(id), []);
-  const openProtection = useCallback(() => onNavigate?.("passwords"), [onNavigate]);
+  const openProtection = useCallback((id: string) => setProtectFor(id), []);
+  const openAudit = useCallback((id: string) => setAuditFor(id), []);
   const goServices = useCallback(() => onNavigate?.("services"), [onNavigate]);
 
   const exitBulk = useCallback(() => {
@@ -125,7 +130,7 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
     if (intent.kind === "locate" && intent.entity.type === "tunnel") {
       const id = intent.entity.id;
       if (!getState().byTunnelId[id]) {
-        toast.info("这条隧道已经不在了，可能刚被删掉");
+        toast.info("这条隧道已不存在，可能刚被删除");
       } else if (!focusCard(`tunnel-card-${id}`)) {
         // 被搜索 / 筛选 / 折叠挡住了：先清掉限制，再定位一次
         clearListFilters("tunnels");
@@ -171,7 +176,8 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
         onNginx={openNginx}
         onClone={openClone}
         onRemove={askRemove}
-        onOpenProtection={onNavigate ? openProtection : undefined}
+        onOpenProtection={openProtection}
+        onAudit={openAudit}
         onGoToServices={onNavigate ? goServices : undefined}
       />
     </div>
@@ -182,12 +188,12 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       <header className="page-head">
         <div>
           <h1 className="page-title">发布隧道</h1>
-          <p className="page-sub">把本机服务接到云端，别人用网址就能打开。</p>
+          <p className="page-sub">把本机服务接入云端；每条都可添加访问保护。</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
             className="btn btn-ghost"
-            title="一键检查：应用、网络、服务器、隧道、证书，哪里不对告诉你怎么办。"
+            title="一键检查应用、网络、服务器、隧道、证书，发现问题会给出处理建议。"
             onClick={() =>
               window.dispatchEvent(new CustomEvent("shangxian:open-doctor"))
             }
@@ -203,7 +209,7 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       {total === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有发布任何隧道</p>
-          <p className="empty-text">分享到公网，在外面用手机也能打开。</p>
+          <p className="empty-text">分享到公网后，在外部用手机也能打开。</p>
           <button className="btn btn-primary" title="发布第一条隧道" onClick={() => setWizard({})}>
             + 发布
           </button>
@@ -224,7 +230,7 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
           {visibleIds.length === 0 ? (
             <div className="empty">
               <p className="empty-title">没有符合条件的隧道</p>
-              <p className="empty-text">换个关键词，或者把筛选清掉。</p>
+              <p className="empty-text">请更换关键词，或清空筛选条件。</p>
               <button
                 className="btn btn-primary"
                 onClick={() => clearListFilters("tunnels")}
@@ -276,10 +282,24 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
         />
       ) : null}
       {logsFor ? <TunnelLogsHost id={logsFor} onClose={() => setLogsFor(null)} /> : null}
+      {auditFor ? <AuditHost id={auditFor} onClose={() => setAuditFor(null)} /> : null}
       {logsTarget ? (
         <LogsModal target={logsTarget} onClose={() => setLogsTarget(null)} />
       ) : null}
       {nginxFor ? <NginxHost id={nginxFor} onClose={() => setNginxFor(null)} /> : null}
+      {protectFor ? (
+        <ProtectionHost
+          id={protectFor}
+          onClose={() => setProtectFor(null)}
+          onSaved={() => {
+            const savedId = protectFor;
+            setProtectFor(null);
+            // 保存成功后直接打开云端配置：贴到服务器面板里才算真的生效。
+            setNginxFor(savedId);
+            refreshNow();
+          }}
+        />
+      ) : null}
       {cloneFor ? (
         <CloneTunnelModal
           sourceId={cloneFor}
@@ -354,10 +374,30 @@ function TunnelLogsHost({ id, onClose }: { id: string; onClose(): void }) {
   return <LogsModal id={id} name={tunnel.name} source="tunnel" onClose={onClose} />;
 }
 
+function AuditHost({ id, onClose }: { id: string; onClose(): void }) {
+  const tunnel = useTunnel(id);
+  if (!tunnel) return null;
+  return <AuditModal tunnelId={id} tunnelName={tunnel.name} onClose={onClose} />;
+}
+
 function NginxHost({ id, onClose }: { id: string; onClose(): void }) {
   const tunnel = useTunnel(id);
   if (!tunnel) return null;
   return <NginxModal id={id} name={tunnel.name} tunnel={tunnel} onClose={onClose} />;
+}
+
+function ProtectionHost({
+  id,
+  onClose,
+  onSaved,
+}: {
+  id: string;
+  onClose(): void;
+  onSaved(): void;
+}) {
+  const tunnel = useTunnel(id);
+  if (!tunnel) return null;
+  return <ProtectionModal tunnel={tunnel} onClose={onClose} onSaved={onSaved} />;
 }
 
 function RemoveTunnelConfirm({ id, onClose }: { id: string; onClose(): void }) {
@@ -366,7 +406,7 @@ function RemoveTunnelConfirm({ id, onClose }: { id: string; onClose(): void }) {
   return (
     <ConfirmModal
       title={`删除隧道「${tunnel.name}」？`}
-      body="别人立刻打不开，配置一起删；5 秒内可撤销。"
+      body="外部访客将立即无法访问，配置一并删除；5 秒内可撤销。"
       confirmLabel="删除"
       danger
       onConfirm={() => {

@@ -1,15 +1,10 @@
-// 左侧导航：五个目的地（本机服务 / 发布隧道 / 云端服务器 / 访问保护 / 设置）
+// 左侧导航：四个目的地（本机服务 / 发布隧道 / 云端服务器 / 设置）
 // 文案纪律：说人话，不用"反向隧道、端口转发、节点"等黑话。
 // 计数与状态徽标由侧栏自己订阅 store（D4 §3.8：避免整树重渲染）。
 
 import { useStore } from "../store/useStore";
 
-export type PageKey =
-  | "services"
-  | "tunnels"
-  | "servers"
-  | "passwords"
-  | "settings";
+export type PageKey = "services" | "tunnels" | "servers" | "settings";
 
 interface Counts {
   services: number;
@@ -67,15 +62,6 @@ function IconServers() {
   );
 }
 
-function IconPasswords() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden="true">
-      <circle cx="5.4" cy="8" r="2.6" {...stroke} />
-      <path d="M8 8h6M11.4 8v2.2M13.6 8v1.6" {...stroke} />
-    </svg>
-  );
-}
-
 function IconSettings() {
   return (
     <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -126,12 +112,12 @@ export function Sidebar({ current, onNavigate }: Props) {
             <span>发布隧道</span>
             {tunnelsTotal > 0 ? (
               <span className="nav-sub">
-                发布中 {tunnelsRunning} · 掉线 {tunnelsDown}
+                发布中 {tunnelsRunning} · 断开 {tunnelsDown}
               </span>
             ) : null}
           </span>
           {tunnelsDown > 0 ? (
-            <span className="nav-badge" title={`${tunnelsDown} 条掉线`}>
+            <span className="nav-badge" title={`${tunnelsDown} 条断开`}>
               {tunnelsDown}
             </span>
           ) : tunnelsTotal > 0 ? (
@@ -147,15 +133,6 @@ export function Sidebar({ current, onNavigate }: Props) {
           <IconServers />
           云端服务器
           {serversCount > 0 ? <span className="nav-count">{serversCount}</span> : null}
-        </button>
-
-        <button
-          className={`nav-item${current === "passwords" ? " active" : ""}`}
-          aria-current={current === "passwords" ? "page" : undefined}
-          onClick={() => onNavigate("passwords")}
-        >
-          <IconPasswords />
-          访问保护
         </button>
       </nav>
 

@@ -294,8 +294,11 @@ impl LocalRunner {
         self.reason = None;
         self.claim_deadline = None; // 用户停了就别再认领
         self.hang_handled = false;
+        // 停止后端口通常马上释放：立即定论，别让探测防抖（约 6 秒）把旧「在听」
+        // 在界面上闪成「端口被占用」；真被残留/外部进程占着会随下一次探测恢复。
+        self.probe.force_down("已按用户要求停止");
         // 用户主动停止不是失败：不发原因码、不记 lastFailure（D0 裁决）。
-        self.log_line("[服务] 已按你的要求停止");
+        self.log_line("[服务] 已按要求停止");
     }
 
     /// 界面「重启服务并轮转日志」：先按用户要求停，再立刻启动（下次 spawn 时轮转）。
@@ -330,7 +333,7 @@ impl LocalRunner {
             // 窗口里由 poll() 接着读探测结果；探到就认领，避免 autostart 再拉一个。
             if self.claim_deadline.is_none() {
                 self.claim_deadline = Some(Instant::now() + CLAIM_RETRY_WINDOW);
-                self.log_line("[服务] 端口还没在听，等它几秒再认领");
+                self.log_line("[服务] 端口尚未监听，请稍候再认领");
             }
             return false;
         }
@@ -347,7 +350,7 @@ impl LocalRunner {
         self.backoff = BACKOFF_BASE;
         self.claim_deadline = None;
         self.note_healthy();
-        self.log_line("[服务] 端口已经在监听，已认领（不会重复启动）");
+        self.log_line("[服务] 端口已在监听，已认领（不会重复启动）");
     }
 
     /// 周期调用：推进状态机。
@@ -386,7 +389,7 @@ impl LocalRunner {
                     return; // 还在窗口里：先不启动
                 }
                 self.claim_deadline = None;
-                self.log_line("[服务] 认领等待结束，端口一直没在听");
+                self.log_line("[服务] 认领等待结束，端口仍未监听");
             }
         }
 
@@ -403,19 +406,19 @@ impl LocalRunner {
                         .map(|c| c.to_string())
                         .unwrap_or_else(|| "未知".into());
                     self.log_line(&format!(
-                        "[看护] 进程退出了（退出码 {code_text}，活了 {} 秒）",
+                        "[看护] 进程已退出（退出码 {code_text}，运行 {} 秒）",
                         uptime.as_secs()
                     ));
                     self.note_failure_text(
                         ReasonCode::Exited,
-                        format!("程序退出了（退出码 {code_text}）：看护开着的话会自动拉起"),
+                        format!("程序已退出（退出码 {code_text}）：已开启看护时会自动重新启动"),
                     );
 
                     // 活不到 3 秒算失败（启动就崩），连续失败到上限就停手
                     if uptime < Duration::from_secs(3) {
                         self.fail_streak += 1;
                         if self.fail_streak >= MAX_FAILS {
-                            self.give_up_service("连续启动失败，已经停止自动重试");
+                            self.give_up_service("连续启动失败，已停止自动重试");
                             return;
                         }
                     } else {
@@ -478,7 +481,7 @@ impl LocalRunner {
             let was_listening = matches!(self.phase, Phase::Running);
             if was_listening && self.spec.watch && !self.user_stopped {
                 // 刚刚从“在听”变成“没在听”：它掉了 → 看护负责拉起来
-                self.log_line("[看护] 端口不通了（服务掉了），马上拉起来");
+                self.log_line("[看护] 端口不通（服务已断开），即将自动重新启动");
                 self.retry_at = Some(Instant::now());
                 self.phase = Phase::Starting;
             } else if was_listening {
@@ -502,7 +505,7 @@ impl LocalRunner {
                 self.retry_at = None;
                 self.phase = Phase::Running;
                 self.note_healthy();
-                self.log_line("[看护] 端口已经在监听，说明它已经在跑，不重复启动");
+                self.log_line("[看护] 端口已在监听，说明服务已运行，不重复启动");
                 return;
             }
             self.retry_at = None;
@@ -524,7 +527,7 @@ impl LocalRunner {
                         &format!("服务「{}」启动失败：{err}", self.spec.name),
                     );
                     if self.fail_streak >= MAX_FAILS {
-                        self.give_up_service("连续启动失败，已经停止自动重试");
+                        self.give_up_service("连续启动失败，已停止自动重试");
                     } else {
                         let wait = self.backoff;
                         self.retry_at = Some(Instant::now() + wait);
@@ -576,7 +579,7 @@ impl LocalRunner {
     /// 没进程的时候（自己退过或根本没启动）不记失败：退出那条已经记过 `exited` 了。
     fn note_probe_failure(&mut self) {
         if self.child.is_some() && self.probe.is_down() {
-            self.note_failure_text(ReasonCode::Hung, "进程活着但连续 3 次探不到端口".into());
+            self.note_failure_text(ReasonCode::Hung, "进程存活但连续 3 次未探测到端口".into());
         }
     }
 
@@ -595,9 +598,9 @@ impl LocalRunner {
         self.retry_at = None;
         self.note_failure_text(
             ReasonCode::CrashLoop,
-            "连续失败，已经停止自动重试；点启动可以再试一次".into(),
+            "连续失败，已停止自动重试；点击启动可再试一次".into(),
         );
-        self.log_line("[看护] 连续失败，停止自动重试（你可以点启动再试一次）");
+        self.log_line("[看护] 连续失败，已停止自动重试（点击启动可再试一次）");
         self.reporter.report(
             LogLevel::Warn,
             TAG_SERVICE,
@@ -610,11 +613,11 @@ impl LocalRunner {
             .spec
             .launch
             .as_ref()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "这台服务没有配置启动方式"))?;
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "这台服务未配置启动方式"))?;
         if spec.exe.trim().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::Other,
-                "这台服务没有填启动程序",
+                "这台服务未填写启动程序",
             ));
         }
 
@@ -651,7 +654,7 @@ impl LocalRunner {
                 LogLevel::Warn,
                 TAG_SERVICE,
                 &format!(
-                    "服务「{}」放进保活作业失败：停止时可能清不干净（{e}）",
+                    "服务「{}」加入保活作业失败：停止时可能无法彻底清理（{e}）",
                     self.spec.name
                 ),
             );
@@ -678,29 +681,29 @@ impl LocalRunner {
         self.fail_streak += 1;
         let secs = self.started_at.map(|t| t.elapsed().as_secs()).unwrap_or(0);
         self.log_line(&format!(
-            "[看护] 进程活着但端口一直不通（假死，已 {} 秒），连续第 {} 次",
+            "[看护] 进程存活但端口持续不通（无响应，已 {} 秒），连续第 {} 次",
             secs, self.fail_streak
         ));
         self.note_failure_text(
             ReasonCode::Hung,
-            "进程活着但端口不通（假死）".into(),
+            "进程存活但端口不通（无响应）".into(),
         );
 
         if self.spec.watch && !self.user_stopped {
             self.kill_child();
             if self.fail_streak >= MAX_FAILS {
-                self.give_up_service("连续假死，已经停止自动重试（你可以点启动再试一次）");
+                self.give_up_service("连续无响应，已停止自动重试（点击启动可再试一次）");
             } else {
                 let wait = self.backoff;
                 self.retry_at = Some(Instant::now() + wait);
                 self.phase = Phase::Starting;
-                self.log_line(&format!("[看护] 假死，先停掉它，{} 秒后重启", wait.as_secs()));
+                self.log_line(&format!("[看护] 无响应，先停止该进程，{} 秒后重新启动", wait.as_secs()));
                 self.backoff = std::cmp::min(self.backoff * 2, BACKOFF_MAX);
             }
         } else {
             // 看护没开：报警，但不自动动用户/我们起的进程
             self.phase = Phase::NotListening;
-            self.reason = Some("进程活着但端口不通（假死）；看护没开，可以点启动重试".into());
+            self.reason = Some("进程存活但端口不通（无响应）；未开启看护，可点击启动重试".into());
         }
     }
 
@@ -1237,18 +1240,18 @@ mod tests {
         // 只失败 1、2 次：不能当假死，更不能杀进程
         feed_down(&slot, 1);
         r.poll();
-        assert_eq!(r.fail_streak, 0, "1 次失败还不算假死");
+        assert_eq!(r.fail_streak, 0, "1 次失败还不算无响应");
         assert!(r.pid().is_some(), "防抖期间不能杀进程");
         feed_down(&slot, 1); // 累计 2 次
         r.poll();
-        assert_eq!(r.fail_streak, 0, "2 次失败还不算假死");
+        assert_eq!(r.fail_streak, 0, "2 次失败还不算无响应");
         assert!(r.pid().is_some());
 
         // 第 3 次：判假死，看护先停掉它再安排重启
         feed_down(&slot, 1); // 累计 3 次
         r.poll();
-        assert_eq!(r.fail_streak, 1, "假死要算一次失败");
-        assert!(r.pid().is_none(), "看护应该先停掉假死的进程");
+        assert_eq!(r.fail_streak, 1, "无响应要算一次失败");
+        assert!(r.pid().is_none(), "看护应该先停掉无响应的进程");
         assert!(r.retry_at.is_some(), "看护应该安排重启");
         assert!(matches!(r.phase, Phase::Starting));
         assert_eq!(
@@ -1274,10 +1277,10 @@ mod tests {
 
         feed_down(&slot, 3);
         r.poll();
-        assert_eq!(r.fail_streak, 1, "假死要算一次失败");
+        assert_eq!(r.fail_streak, 1, "无响应要算一次失败");
         assert!(r.pid().is_some(), "没勾看护不能自动杀它");
         assert_eq!(r.status_word(), "not_listening");
-        assert!(r.reason().unwrap().contains("假死"), "至少要有报警");
+        assert!(r.reason().unwrap().contains("无响应"), "至少要有报警");
         r.kill_child(); // 清理测试进程
     }
 

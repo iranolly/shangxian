@@ -34,10 +34,10 @@ export function BulkResultPanel({ result, onClose, onRetry, onUndoDeleted }: Pro
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title" id={titleId}>
-            有 {fail} 条没成功
+            有 {fail} 条未成功
           </h2>
           <p className="modal-sub">
-            {result.ok > 0 ? `另外 ${result.ok} 条已经处理好了。` : "这些条都没有处理成功。"}
+            {result.ok > 0 ? `另外 ${result.ok} 条已处理完成。` : "这些条目均未处理成功。"}
           </p>
         </div>
         <div className="modal-body">
@@ -62,7 +62,7 @@ export function BulkResultPanel({ result, onClose, onRetry, onUndoDeleted }: Pro
           {tokens.length > 0 && onUndoDeleted ? (
             <button
               className="btn btn-ghost"
-              title={`把刚才删掉的 ${tokens.length} 条恢复回来`}
+              title={`恢复刚才删除的 ${tokens.length} 条`}
               aria-label={`撤销删除，恢复 ${tokens.length} 条`}
               onClick={onUndoDeleted}
             >

@@ -138,7 +138,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
     if (intent.kind === "locate" && intent.entity.type === "service") {
       const id = intent.entity.id;
       if (!getState().byServiceId[id]) {
-        toast.info("这台本机服务已经不在了，可能刚被删掉");
+        toast.info("这台本机服务已不存在，可能刚被删除");
       } else if (!focusCard(`service-card-${id}`)) {
         // 被搜索 / 筛选挡住了：先清掉限制，再定位一次
         clearListFilters("services");
@@ -161,7 +161,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
         if (first.kind === "needsConfirm") {
           setStopFor({
             id,
-            who: first.exe ?? "一个不是本应用启动的程序",
+            who: first.exe ?? "不是本应用启动的程序",
             pid: first.pid ?? null,
           });
         }
@@ -212,7 +212,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       <header className="page-head">
         <div>
           <h1 className="page-title">本机服务</h1>
-          <p className="page-sub">记下端口和启动方式，帮你启动和看护。</p>
+          <p className="page-sub">记录端口和启动方式，用于启动与看护。</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
@@ -231,7 +231,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       {total === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有登记本机服务</p>
-          <p className="empty-text">第一次用？按下面三步走。</p>
+          <p className="empty-text">首次使用？请按以下三步操作。</p>
           <div className="empty-steps">
             <button type="button" className="card empty-step" onClick={() => onNavigate?.("servers")}>
               <span className={`empty-step-num${hasServers ? " done" : ""}`}>
@@ -239,16 +239,16 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
               </span>
               <span className="empty-step-main">
                 <span className="server-name">添加云端服务器</span>
-                <span className="server-meta">用哪台服务器转发访问。</span>
+                <span className="server-meta">选择用于转发访问的服务器。</span>
               </span>
-              <span className="link-btn">{hasServers ? "去看 →" : "去添加 →"}</span>
+              <span className="link-btn">{hasServers ? "去查看 →" : "去添加 →"}</span>
             </button>
 
             <button type="button" className="card empty-step" onClick={() => openAdd()}>
               <span className="empty-step-num">②</span>
               <span className="empty-step-main">
                 <span className="server-name">登记本机服务</span>
-                <span className="server-meta">要发布出去的程序：端口 + 启动方式。</span>
+                <span className="server-meta">需要发布出去的程序：端口 + 启动方式。</span>
               </span>
               <span className="link-btn">去添加 →</span>
             </button>
@@ -257,9 +257,9 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
               <span className="empty-step-num">③</span>
               <span className="empty-step-main">
                 <span className="server-name">发布隧道</span>
-                <span className="server-meta">把本机服务接到云端，生成公网网址。</span>
+                <span className="server-meta">把本机服务接入云端，生成公网网址。</span>
               </span>
-              <span className="link-btn">去看看 →</span>
+              <span className="link-btn">去查看 →</span>
             </button>
           </div>
         </div>
@@ -278,7 +278,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
           {visibleIds.length === 0 ? (
             <div className="empty">
               <p className="empty-title">没有符合条件的服务</p>
-              <p className="empty-text">换个关键词，或者把筛选清掉。</p>
+              <p className="empty-text">请更换关键词，或清空筛选条件。</p>
               <button
                 className="btn btn-primary"
                 onClick={() => clearListFilters("services")}
@@ -339,7 +339,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
 
       {stopFor ? (
         <ConfirmModal
-          title="这台服务不是你启动的"
+          title="这台服务不是本应用启动的"
           body={`正在监听的是 ${stopFor.who}${stopFor.pid != null ? `（PID ${stopFor.pid}）` : ""}。确定停止吗？`}
           confirmLabel="停止"
           danger
@@ -386,7 +386,7 @@ function ServiceModalHost({
           if (isUp) {
             setNotice(
               `service:${editId}`,
-              "启动方式已改；下次重启服务才生效。",
+              "启动方式已修改，重启服务后生效。",
             );
           }
         }
@@ -408,7 +408,7 @@ function RemoveServiceConfirm({ id, onClose }: { id: string; onClose(): void }) 
   return (
     <ConfirmModal
       title={`删除本机服务「${service.name}」？`}
-      body="有隧道在用它会被拦下；5 秒内可撤销。"
+      body="有隧道正在使用时将阻止删除；5 秒内可撤销。"
       confirmLabel="删除"
       danger
       onConfirm={() => {

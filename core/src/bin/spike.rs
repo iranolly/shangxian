@@ -38,7 +38,7 @@ fn main() {
     // 两条假的本机服务（真实 HTTP 应答，方便从"服务器"里 curl 验证）。
     let hits_a = spawn_fake_service(18081, "hi from local service A");
     let hits_b = spawn_fake_service(18082, "hi from local service B");
-    println!("[spike] 本机假服务已启动: 18081(A), 18082(B)");
+    println!("[spike] 本机模拟服务已启动：18081(A)、18082(B)");
 
     let mk = |name: &str, remote: u16, local: u16| {
         let target = TunnelTarget {
@@ -67,7 +67,7 @@ fn main() {
     let mut killed_b = false;
     let mut last_report = Instant::now();
 
-    println!("[spike] 开始看护；8 秒后强杀 A 的 ssh 进程模拟断线，24 秒后强杀 B。");
+    println!("[spike] 开始看护；8 秒后强制结束 A 的 ssh 进程以模拟断线，24 秒后强制结束 B。");
     loop {
         let now = Instant::now();
 
@@ -76,7 +76,7 @@ fn main() {
                 match e {
                     Event::Started { attempt, pid } => {
                         println!(
-                            "[{:>6.2}s] [{name}] 隧道已启动 (第 {attempt} 次, pid={pid})",
+                            "[{:>6.2}s] [{name}] 隧道已启动（第 {attempt} 次，pid={pid}）",
                             (now - start).as_secs_f32()
                         );
                     }
@@ -89,7 +89,7 @@ fn main() {
                         code: _,
                     } => {
                         println!(
-                            "[{:>6.2}s] [{name}] 隧道断开 (第 {attempt} 次退出, code={exit_code:?}, 存活 {:.1}s)，{:.0}s 后重试{}",
+                            "[{:>6.2}s] [{name}] 隧道断开（第 {attempt} 次退出，code={exit_code:?}，存活 {:.1}s），{:.0}s 后重试{}",
                             (now - start).as_secs_f32(),
                             uptime.as_secs_f32(),
                             retry_in.as_secs_f32(),
@@ -111,20 +111,20 @@ fn main() {
         // 模拟断线：强杀 ssh 进程（作业对象不会杀它，这是"崩溃"路径）。
         if !killed_a && now - start > Duration::from_secs(8) {
             if t_a.kill_child() {
-                println!("[{:>6.2}s] [A] === 已强杀 A 的 ssh 进程，等待自动重连 ===", (now - start).as_secs_f32());
+                println!("[{:>6.2}s] [A] === 已强制结束 A 的 ssh 进程，等待自动重连 ===", (now - start).as_secs_f32());
             }
             killed_a = true;
         }
         if !killed_b && now - start > Duration::from_secs(24) {
             if t_b.kill_child() {
-                println!("[{:>6.2}s] [B] === 已强杀 B 的 ssh 进程，等待自动重连 ===", (now - start).as_secs_f32());
+                println!("[{:>6.2}s] [B] === 已强制结束 B 的 ssh 进程，等待自动重连 ===", (now - start).as_secs_f32());
             }
             killed_b = true;
         }
 
         if now - last_report > Duration::from_secs(6) {
             println!(
-                "[{:>6.2}s] 状态：A={:?} pid={:?} / B={:?} pid={:?}（本地假服务共被访问 A:{} B:{} 次）",
+                "[{:>6.2}s] 状态：A={:?} pid={:?} / B={:?} pid={:?}（本地模拟服务共被访问 A:{} 次、B:{} 次）",
                 (now - start).as_secs_f32(),
                 t_a.phase(),
                 t_a.pid(),
@@ -137,7 +137,7 @@ fn main() {
         }
 
         if now - start > Duration::from_secs(45) {
-            println!("[spike] 45 秒到，收尾退出。");
+            println!("[spike] 已运行 45 秒，结束退出。");
             break;
         }
         thread::sleep(Duration::from_millis(120));
@@ -153,7 +153,7 @@ fn spawn_fake_service(port: u16, body: &'static str) -> Arc<AtomicU32> {
     let hits = Arc::new(AtomicU32::new(0));
     let hits_thread = hits.clone();
     thread::spawn(move || {
-        let listener = TcpListener::bind(("127.0.0.1", port)).expect("绑定假服务端口失败");
+        let listener = TcpListener::bind(("127.0.0.1", port)).expect("绑定模拟服务端口失败");
         for stream in listener.incoming() {
             let Ok(mut stream) = stream else { continue };
             hits_thread.fetch_add(1, Ordering::Relaxed);

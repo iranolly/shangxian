@@ -25,9 +25,9 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.failed) {
       return (
         <div className="page">
-          <h1 className="page-title">界面出了点问题</h1>
+          <h1 className="page-title">界面出现异常</h1>
           <p className="page-sub">
-            别担心：设置、服务、隧道都没事。点下面按钮重新加载界面就能接着用；还不行就退出应用重开一次。
+            设置、服务和隧道数据均未受影响。点击下方按钮重新加载界面即可继续使用；如仍无效，请退出应用后重新启动。
           </p>
           <button
             className="btn btn-primary"

@@ -189,7 +189,7 @@ impl ImportMode {
         match mode {
             "merge" => Ok(ImportMode::Merge),
             "replace" => Ok(ImportMode::Replace),
-            other => Err(format!("导入方式只支持 merge（合并）或 replace（整体替换），不认识 {other}")),
+            other => Err(format!("导入方式只支持 merge（合并）或 replace（整体替换），无法识别 {other}")),
         }
     }
 }
@@ -230,7 +230,7 @@ pub fn plan_import(
     mode: ImportMode,
 ) -> Result<(AppConfig, ImportSummary), String> {
     let root: Value = serde_json::from_str(doc)
-        .map_err(|e| format!("导入失败：这个文件不是一份 JSON（{e}）"))?;
+        .map_err(|e| format!("导入失败：该文件不是有效的 JSON（{e}）"))?;
     let (raw_config, version) = unwrap_document(&root)?;
 
     // 版本检查（D2 §11.2 / §13）
@@ -244,7 +244,7 @@ pub fn plan_import(
     // 让用户先用旧版应用打开并保存一次（迁移到新版本）再导出。
     if version < 5 {
         return Err(format!(
-            "导入失败：这份设置太旧了（版本 {version}）。先用旧版「上线助手」打开并保存一次，再用新保存的文件导入。"
+            "导入失败：此设置版本过旧（版本 {version}）。请先用旧版「上线助手」打开并保存一次，再用新保存的文件导入。"
         ));
     }
     let Some(raw_obj) = raw_config.as_object() else {
@@ -318,17 +318,17 @@ pub fn import_config(
         let text = match serde_json::to_string_pretty(current) {
             Ok(text) => text,
             Err(e) => {
-                return Err(format!("备份没写成：{e}；为了安全，导入没有继续"));
+                return Err(format!("备份失败：{e}；为了安全，导入未继续"));
             }
         };
         std::fs::write(&backup, text)
     };
     if let Err(e) = backup_result {
-        return Err(format!("备份没写成：{e}；为了安全，导入没有继续"));
+        return Err(format!("备份失败：{e}；为了安全，导入未继续"));
     }
 
     if let Err(e) = new_config.save(config_path) {
-        return Err(format!("保存没成功：{e}；你的原设置没有动"));
+        return Err(format!("保存失败：{e}；原有设置未改动"));
     }
 
     summary.dry_run = false;
@@ -374,7 +374,7 @@ fn unwrap_document(root: &Value) -> Result<(Value, u32), String> {
                     "导入失败：这份备份是更新版本的格式（formatVersion={other}），请先把「上线助手」升级到最新版"
                 ))
             }
-            None => return Err("导入失败：备份文件里没有 formatVersion，看不懂".to_string()),
+            None => return Err("导入失败：备份文件中没有 formatVersion，无法识别".to_string()),
         }
         let config = obj
             .get("config")
@@ -391,7 +391,7 @@ fn unwrap_document(root: &Value) -> Result<(Value, u32), String> {
             .get("version")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| {
-                "导入失败：文件里没有版本号（version），看不懂这是不是一份设置".to_string()
+                "导入失败：文件中没有版本号（version），无法判断这是否是一份设置".to_string()
             })?;
         Ok((root.clone(), version as u32))
     }
@@ -464,7 +464,7 @@ fn merge_into(
     // settings / notifyEnabled：出现在文件里才覆盖（settings 整份替换）
     if let Some(settings) = raw.get("settings") {
         result.settings = serde_json::from_value(settings.clone())
-            .map_err(|e| format!("导入失败：设置项读不出来（{e}）"))?;
+            .map_err(|e| format!("导入失败：设置项无法读取（{e}）"))?;
     }
     if let Some(notify) = raw.get("notifyEnabled") {
         result.notify_enabled = notify
@@ -486,12 +486,12 @@ fn replace_with(
 ) -> Result<AppConfig, String> {
     let servers: Vec<ServerConfig> = match raw.get("servers") {
         Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| format!("导入失败：服务器列表读不出来（{e}）"))?,
+            .map_err(|e| format!("导入失败：服务器列表无法读取（{e}）"))?,
         None => Vec::new(),
     };
     let services: Vec<LocalService> = match raw.get("services") {
         Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| format!("导入失败：本机服务列表读不出来（{e}）"))?,
+            .map_err(|e| format!("导入失败：本机服务列表无法读取（{e}）"))?,
         None => Vec::new(),
     };
     let tunnels: Vec<Tunnel> = match raw.get("tunnels") {
@@ -500,17 +500,17 @@ fn replace_with(
             for item in items {
                 let item = normalize_tunnel_value(item, warnings);
                 out.push(serde_json::from_value::<Tunnel>(item.clone()).map_err(|e| {
-                    format!("导入失败：隧道列表里有一条读不出来（{e}）")
+                    format!("导入失败：隧道列表中有条目无法读取（{e}）")
                 })?);
             }
             out
         }
-        Some(_) => return Err("导入失败：tunnels 得是一个列表".to_string()),
+        Some(_) => return Err("导入失败：tunnels 必须是一个列表".to_string()),
         None => Vec::new(),
     };
     let settings: Settings = match raw.get("settings") {
         Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| format!("导入失败：设置项读不出来（{e}）"))?,
+            .map_err(|e| format!("导入失败：设置项无法读取（{e}）"))?,
         None => Settings::default(),
     };
     let notify_enabled = match raw.get("notifyEnabled") {
@@ -591,10 +591,10 @@ fn check_duplicate_ids(items: &[Value], label: &str) -> Result<(), String> {
     let mut seen = std::collections::BTreeSet::new();
     for item in items {
         let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-            return Err(format!("导入失败：{label}列表里有一条没写 id"));
+            return Err(format!("导入失败：{label}列表中有条目未填写 id"));
         };
         if !seen.insert(id.to_string()) {
-            return Err(format!("导入失败：{label}列表里有两条用了同一个 id：{id}"));
+            return Err(format!("导入失败：{label}列表中有两条记录使用了同一个 id：{id}"));
         }
     }
     Ok(())
@@ -615,10 +615,10 @@ fn apply_merge(
 ) -> Result<(), String> {
     for item in imported {
         let Some(item_obj) = item.as_object() else {
-            return Err(format!("导入失败：{label}列表里有一条不是对象"));
+            return Err(format!("导入失败：{label}列表中有条目不是对象"));
         };
         let Some(id) = item_obj.get("id").and_then(|v| v.as_str()) else {
-            return Err(format!("导入失败：{label}列表里有一条没写 id"));
+            return Err(format!("导入失败：{label}列表中有条目未填写 id"));
         };
         let index = current_values
             .iter()
@@ -661,10 +661,10 @@ fn deserialize_list<T: serde::de::DeserializeOwned>(
         let id = value
             .get("id")
             .and_then(|v| v.as_str())
-            .unwrap_or("(没写 id)")
+            .unwrap_or("(未填写 id)")
             .to_string();
         let item = serde_json::from_value::<T>(value)
-            .map_err(|e| format!("导入失败：{label} {id} 读不出来（{e}）"))?;
+            .map_err(|e| format!("导入失败：{label} {id} 无法读取（{e}）"))?;
         out.push(item);
     }
     Ok(out)
@@ -684,7 +684,7 @@ fn normalize_tunnel_value(item: &Value, warnings: &mut Vec<String>) -> Value {
         if !config::is_known_preset(preset) {
             obj.insert("preset".into(), json!(config::DEFAULT_PRESET));
             warnings.push(
-                "有隧道的发布预设不认识，已经按网页（web）处理；想改的话打开这条隧道重选一次"
+                "有隧道的发布预设无法识别，已按网页（web）处理；如需修改，请打开这条隧道重新选择一次"
                     .to_string(),
             );
         }
@@ -694,7 +694,7 @@ fn normalize_tunnel_value(item: &Value, warnings: &mut Vec<String>) -> Value {
         let unknown = access_unknown_tokens(access);
         if !unknown.is_empty() {
             warnings.push(format!(
-                "有隧道的访问保护写法不认识（{}），已经忽略这几项",
+                "有隧道的访问保护写法无法识别（{}），已忽略这几项",
                 unknown.join("、")
             ));
         }
@@ -739,13 +739,13 @@ fn validate_config(cfg: &AppConfig, warnings: &mut Vec<String>) -> Result<(), St
     for tunnel in &cfg.tunnels {
         if cfg.service(&tunnel.service_id).is_none() {
             return Err(format!(
-                "导入失败：隧道「{}」指向的本机服务（{}）不在导入内容里；补上服务再导一次",
+                "导入失败：隧道「{}」指向的本机服务（{}）不在导入内容中；请补上服务后重新导入",
                 tunnel.name, tunnel.service_id
             ));
         }
         if cfg.servers.iter().all(|s| s.id != tunnel.server_id) {
             return Err(format!(
-                "导入失败：隧道「{}」指向的云端服务器（{}）不在导入内容里；补上服务器再导一次",
+                "导入失败：隧道「{}」指向的云端服务器（{}）不在导入内容中；请补上服务器后重新导入",
                 tunnel.name, tunnel.server_id
             ));
         }
@@ -757,7 +757,7 @@ fn validate_config(cfg: &AppConfig, warnings: &mut Vec<String>) -> Result<(), St
         let key = (tunnel.server_id.clone(), tunnel.remote_port);
         if let Some(other) = used.insert(key, tunnel.name.clone()) {
             return Err(format!(
-                "导入失败：云端端口 {} 被两条隧道同时用了（{} 和 {}），先改掉一个再导",
+                "导入失败：云端端口 {} 被两条隧道同时使用（{} 和 {}），请先修改其中一个再导入",
                 tunnel.remote_port, other, tunnel.name
             ));
         }
@@ -768,13 +768,13 @@ fn validate_config(cfg: &AppConfig, warnings: &mut Vec<String>) -> Result<(), St
     for service in &cfg.services {
         if service.local_port == 0 {
             return Err(format!(
-                "导入失败：本机服务「{}」的本机端口是 0，得填 1 到 65535",
+                "导入失败：本机服务「{}」的本机端口为 0，必须填写 1 到 65535",
                 service.name
             ));
         }
         if let Some(other) = local_ports.insert(service.local_port, service.name.clone()) {
             return Err(format!(
-                "导入失败：本机端口 {} 被两台服务同时用了（{} 和 {}），先改掉一个再导",
+                "导入失败：本机端口 {} 被两台服务同时使用（{} 和 {}），请先修改其中一个再导入",
                 service.local_port, other, service.name
             ));
         }
@@ -788,7 +788,7 @@ fn validate_config(cfg: &AppConfig, warnings: &mut Vec<String>) -> Result<(), St
         .count();
     if no_hash > 0 {
         warnings.push(format!(
-            "有 {no_hash} 条隧道设了访问密码，但手上没有密码；导入后请重新设置访问密码"
+            "有 {no_hash} 条隧道已设置访问密码，但未包含密码；导入后请重新设置访问密码"
         ));
     }
     Ok(())
@@ -802,10 +802,10 @@ where
     for item in items {
         let value = serde_json::to_value(item).unwrap_or(Value::Null);
         let Some(id) = value.get("id").and_then(|v| v.as_str()) else {
-            return Err(format!("导入失败：{label}列表里有一条没写 id"));
+            return Err(format!("导入失败：{label}列表中有条目未填写 id"));
         };
         if !seen.insert(id.to_string()) {
-            return Err(format!("导入失败：{label}列表里有两条用了同一个 id：{id}"));
+            return Err(format!("导入失败：{label}列表中有两条记录使用了同一个 id：{id}"));
         }
     }
     Ok(())
@@ -1259,7 +1259,7 @@ mod tests {
         .to_string();
         assert!(plan_import(&current, &doc, ImportMode::Merge)
             .unwrap_err()
-            .contains("本机端口是 0"));
+            .contains("本机端口为 0"));
 
         // 本机端口重复
         let doc = json!({
@@ -1288,7 +1288,7 @@ mod tests {
         })
         .to_string();
         let err = plan_import(&sample_config(), &ancient, ImportMode::Merge).unwrap_err();
-        assert!(err.contains("太旧了"), "err={err}");
+        assert!(err.contains("版本过旧"), "err={err}");
         assert!(err.contains("版本 3"), "err={err}");
         assert!(
             err.contains("先用旧版「上线助手」打开并保存一次"),
@@ -1329,7 +1329,7 @@ mod tests {
             assert_eq!(
                 err,
                 format!(
-                    "导入失败：这份设置太旧了（版本 {old}）。先用旧版「上线助手」打开并保存一次，再用新保存的文件导入。"
+                    "导入失败：此设置版本过旧（版本 {old}）。请先用旧版「上线助手」打开并保存一次，再用新保存的文件导入。"
                 ),
                 "v{old} 的文案要和 CLI 一致"
             );

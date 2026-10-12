@@ -26,7 +26,7 @@ const FIXED_STEP_TITLES = [
 ];
 
 const ADVICE_FALLBACK =
-  "照着上面的结果检查；不确定就导出诊断包。";
+  "请参考上述结果检查；如不确定，请导出诊断包。";
 
 // ---------- 会话内的体检结果缓存（doctorStore） ----------
 
@@ -73,31 +73,31 @@ function summaryView(report: DoctorReport): SummaryView {
   if (fail > 0) {
     return {
       tone: "error",
-      title: `有 ${fail} 项没通过`,
-      text: "先看第一处失败，照着「怎么办」做。",
+      title: `有 ${fail} 项未通过`,
+      text: "请先查看第一处失败，按「怎么办」处理。",
     };
   }
   if (warn > 0) {
     return {
       tone: "warn",
-      title: `有 ${warn} 项要留意`,
-      text: "不是坏事，但最好照着「怎么办」看一眼。",
+      title: `有 ${warn} 项需注意`,
+      text: "并非异常，但建议按「怎么办」查看。",
     };
   }
   if (pass > 0 && skip > 0) {
     return {
       tone: "warn",
-      title: `有 ${skip} 项跳过了`,
-      text: "想查得更全，切「深度检查」再跑一次。",
+      title: `有 ${skip} 项已跳过`,
+      text: "如需更全面检查，请切换到「深度检查」后重新执行。",
     };
   }
   if (pass > 0) {
-    return { tone: "ok", title: "体检全过了", text: `${pass} 项都正常。` };
+    return { tone: "ok", title: "体检全部通过", text: `${pass} 项均正常。` };
   }
   return {
     tone: "warn",
-    title: "体检没跑出结果",
-    text: "等一下再试；还不行就导出诊断包。",
+    title: "体检未生成结果",
+    text: "请稍后重试；如仍失败，请导出诊断包。",
   };
 }
 
@@ -138,13 +138,13 @@ export function DoctorModal({ autoRun, onClose }: Props) {
       } else if (next.summary.warn > 0) {
         toast.show({
           kind: "info",
-          text: `体检完成：${next.summary.pass} 项通过，${next.summary.warn} 项要留意`,
+          text: `体检完成：${next.summary.pass} 项通过，${next.summary.warn} 项需注意`,
         });
       } else if (next.summary.pass > 0) {
         toast.show({ kind: "success", text: T.doctorDone(next.summary.pass, 0) });
       }
     } catch (e) {
-      setError(String(e) || "体检没跑起来");
+      setError(String(e) || "体检未能启动");
     } finally {
       setRunning(false);
       setElapsed(Math.max(1, Math.round((Date.now() - startedAt) / 1000)));
@@ -176,7 +176,7 @@ export function DoctorModal({ autoRun, onClose }: Props) {
   const fixAction = (label: string): (() => void) | undefined => {
     if (label.includes("目录") || label.includes("文件夹")) {
       return () => {
-        void openDataDir().catch(() => toast.error("打不开数据目录，手动去文件夹里看看吧"));
+        void openDataDir().catch(() => toast.error("无法打开数据目录，请手动到文件夹中查找"));
       };
     }
     if (label.includes("诊断包")) return () => setDiagOpen(true);
@@ -190,7 +190,7 @@ export function DoctorModal({ autoRun, onClose }: Props) {
     }
     if (label.includes("复制")) {
       return () => {
-        void copyWithToast(JSON.stringify(report, null, 2), "已复制这段操作说明");
+        void copyWithToast(JSON.stringify(report, null, 2), "已复制该操作说明");
       };
     }
     if (label.includes("关闭")) return onClose;
@@ -210,8 +210,8 @@ export function DoctorModal({ autoRun, onClose }: Props) {
         <div className="modal doctor-modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">体检</h2>
-          <p className="modal-sub" title="检查应用、网络、服务器、隧道、证书，哪里不对告诉你怎么办。">
-            一键检查，哪里不对告诉你怎么办。
+          <p className="modal-sub" title="检查应用、网络、服务器、隧道、证书，如有问题会说明处理方式。">
+            一键检查，如有问题会说明处理方式。
           </p>
         </div>
         <div className="modal-body">
@@ -234,8 +234,8 @@ export function DoctorModal({ autoRun, onClose }: Props) {
                 深度检查
               </button>
             </div>
-            <span className="field-hint hint" title="会连服务器和公网，最多 1 分钟；快速模式只查本机。">
-              会连服务器和公网，最多 1 分钟。
+            <span className="field-hint hint" title="会连接服务器和公网，最长 1 分钟；快速模式仅检查本机。">
+              会连接服务器和公网，最长 1 分钟。
             </span>
           </div>
 
@@ -316,13 +316,13 @@ export function DoctorModal({ autoRun, onClose }: Props) {
                       …
                     </span>
                     <span className="doctor-step-title">{title}</span>
-                    <span className="doctor-step-status muted">正在检查…</span>
+                    <span className="doctor-step-status muted">检查中…</span>
                   </div>
                 </div>
               ))}
             </div>
           ) : (
-            <p className="doctor-empty">还没跑过体检。</p>
+            <p className="doctor-empty">尚未运行过体检。</p>
           )}
         </div>
         <div className="modal-foot">

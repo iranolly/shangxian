@@ -362,10 +362,10 @@ pub fn insert_restored(cfg: &AppConfig, rec: &TrashRecord) -> Result<AppConfig, 
     match rec.kind.as_str() {
         "tunnel" => {
             let mut tunnel: Tunnel = serde_json::from_value(rec.item.clone())
-                .map_err(|e| format!("撤销不了：记录里这条隧道读不出来（{e}）"))?;
+                .map_err(|e| format!("无法撤销：运行记录中这条隧道无法读取（{e}）"))?;
             if next.tunnels.iter().any(|t| t.id == tunnel.id) {
                 return Err(format!(
-                    "撤销不了：已经有一条 id 是 {} 的隧道了，先把同 id 的删掉再撤销",
+                    "无法撤销：已存在 id 为 {} 的隧道，请先删除同 id 的隧道再撤销",
                     tunnel.id
                 ));
             }
@@ -378,7 +378,7 @@ pub fn insert_restored(cfg: &AppConfig, rec: &TrashRecord) -> Result<AppConfig, 
             }
             if !missing.is_empty() {
                 return Err(format!(
-                    "撤销不了：这条隧道要用的{}不在了；先把它们补回来，或者重新建一条隧道",
+                    "无法撤销：这条隧道依赖的{}已不存在；请先补回它们，或重新创建隧道",
                     missing.join("、")
                 ));
             }
@@ -389,10 +389,10 @@ pub fn insert_restored(cfg: &AppConfig, rec: &TrashRecord) -> Result<AppConfig, 
         }
         "service" => {
             let service: LocalService = serde_json::from_value(rec.item.clone())
-                .map_err(|e| format!("撤销不了：记录里这台本机服务读不出来（{e}）"))?;
+                .map_err(|e| format!("无法撤销：运行记录中这台本机服务无法读取（{e}）"))?;
             if next.services.iter().any(|s| s.id == service.id) {
                 return Err(format!(
-                    "撤销不了：已经有一台 id 是 {} 的本机服务了，先把同 id 的删掉再撤销",
+                    "无法撤销：已存在 id 为 {} 的本机服务，请先删除同 id 的本机服务再撤销",
                     service.id
                 ));
             }
@@ -401,17 +401,17 @@ pub fn insert_restored(cfg: &AppConfig, rec: &TrashRecord) -> Result<AppConfig, 
         }
         "server" => {
             let server: ServerConfig = serde_json::from_value(rec.item.clone())
-                .map_err(|e| format!("撤销不了：记录里这台云端服务器读不出来（{e}）"))?;
+                .map_err(|e| format!("无法撤销：运行记录中这台云端服务器无法读取（{e}）"))?;
             if next.servers.iter().any(|s| s.id == server.id) {
                 return Err(format!(
-                    "撤销不了：已经有一台 id 是 {} 的云端服务器了，先把同 id 的删掉再撤销",
+                    "无法撤销：已存在 id 为 {} 的云端服务器，请先删除同 id 的服务器再撤销",
                     server.id
                 ));
             }
             next.servers.push(server);
             Ok(next)
         }
-        other => Err(format!("撤销不了：不认识的记录类型「{other}」")),
+        other => Err(format!("无法撤销：无法识别的记录类型「{other}」")),
     }
 }
 
@@ -441,7 +441,7 @@ impl StateResetReason {
 
     /// 人话（D2 §16 文案）。
     pub fn message(self) -> &'static str {
-        "运行记录重新开始了（不影响你的设置）"
+        "运行记录已重新开始（不影响现有设置）"
     }
 }
 
@@ -910,7 +910,7 @@ impl StateStore {
                 inner.last_error = None;
             }
             Err(e) => {
-                inner.last_error = Some(format!("运行记录没写下去：{e}"));
+                inner.last_error = Some(format!("运行记录无法写入：{e}"));
             }
         }
         result
@@ -1372,7 +1372,7 @@ mod tests {
 
         // 同 id 冲突拒绝
         let conflict = insert_restored(&next, &rec).unwrap_err();
-        assert!(conflict.contains("已经有一条"), "err={conflict}");
+        assert!(conflict.contains("已存在"), "err={conflict}");
 
         // 依赖缺失拒绝，并带上快照里的名字
         let mut broken = cfg.clone();
@@ -1395,7 +1395,7 @@ mod tests {
             kind: "banana".into(),
             ..rec.clone()
         };
-        assert!(insert_restored(&cfg, &bad).unwrap_err().contains("不认识的记录类型"));
+        assert!(insert_restored(&cfg, &bad).unwrap_err().contains("无法识别的记录类型"));
     }
 
     #[test]

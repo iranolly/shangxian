@@ -3,13 +3,14 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import type { ServiceStatus, TunnelStatus } from "../../copy/status";
+import type { ServiceStatus } from "../../copy/status";
 import {
   setServicePrefs,
   setTunnelPrefs,
   useServicePrefs,
   useTunnelPrefs,
   type ListPage,
+  type TunnelFilterKey,
 } from "./listPrefs";
 
 interface FilterOption {
@@ -36,8 +37,8 @@ interface Props {
 }
 
 const SEARCH_PLACEHOLDER: Record<ListPage, string> = {
-  tunnels: "搜名字、网址、端口…",
-  services: "搜名字、端口…",
+  tunnels: "搜索名称、网址、端口…",
+  services: "搜索名称、端口…",
 };
 
 export function ListToolbar({
@@ -54,7 +55,7 @@ export function ListToolbar({
   const servicePrefs = useServicePrefs();
   const query = page === "tunnels" ? tunnelPrefs.query : servicePrefs.query;
   const sort = page === "tunnels" ? tunnelPrefs.sort : servicePrefs.sort;
-  const selected: (TunnelStatus | ServiceStatus)[] | "all" =
+  const selected: string[] | "all" =
     page === "tunnels" ? tunnelPrefs.status : servicePrefs.status;
 
   const [text, setText] = useState(query);
@@ -94,7 +95,7 @@ export function ListToolbar({
 
   const isActive = (value: string) => {
     if (value === "all") return selected === "all";
-    return selected !== "all" && selected.includes(value as TunnelStatus & ServiceStatus);
+    return selected !== "all" && selected.includes(value);
   };
 
   const toggleFilter = (value: string) => {
@@ -108,7 +109,7 @@ export function ListToolbar({
       ? current.filter((v) => v !== value)
       : [...current, value];
     if (page === "tunnels") {
-      setTunnelPrefs({ status: next.length === 0 ? "all" : (next as TunnelStatus[]) });
+      setTunnelPrefs({ status: next.length === 0 ? "all" : (next as TunnelFilterKey[]) });
     } else {
       setServicePrefs({ status: next.length === 0 ? "all" : (next as ServiceStatus[]) });
     }

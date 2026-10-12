@@ -150,13 +150,13 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
         // 还没保存过：先把现在填的存下来，拿到 id 才能配免密
         const input = cleanInput();
         if (!input) {
-          setPwError("先填服务器地址和登录账号。");
+          setPwError("请先填写服务器地址和登录账号。");
           return;
         }
         // 写操作统一走 actions（写命令的警示 / 失败提示都在这条链上）
         const savedId = await actions.serverSave(input);
         if (!savedId) {
-          setPwError("没保存成功：等一下再试");
+          setPwError("保存失败：请稍后重试");
           return;
         }
         id = savedId;
@@ -211,7 +211,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
     if (intent.kind === "locate" && intent.entity.type === "server") {
       const id = intent.entity.id;
       if (!getState().byServerId[id]) {
-        toast.info("这台服务器已经不在了，可能刚被删掉");
+        toast.info("这台服务器已不存在，可能刚被删除");
       } else {
         focusCard(`server-card-${id}`);
       }
@@ -225,7 +225,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
     if (!editing) return;
     const input = cleanInput();
     if (!input) {
-      setError("先填服务器地址和登录账号。");
+      setError("请先填写服务器地址和登录账号。");
       return;
     }
     setBusy(true);
@@ -234,7 +234,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       const wasNew = !editing.id;
       const id = await actions.serverSave(input);
       if (!id) {
-        setError("没保存成功：等一下再试");
+        setError("保存失败：请稍后重试");
         return;
       }
       const backToWizard = returnToWizard;
@@ -264,7 +264,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
   const testConn = async (s: ServerView) => {
     setTest((m) => ({
       ...m,
-      [s.id]: { phase: "loading", text: "正在测试连接…" },
+      [s.id]: { phase: "loading", text: "连接测试中…" },
     }));
     try {
       const msg = await actions.serverTest(s.id);
@@ -295,7 +295,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       <header className="page-head">
         <div>
           <h1 className="page-title">云端服务器</h1>
-          <p className="page-sub">一直开着的电脑，帮你把访问转给本机。</p>
+          <p className="page-sub">长期开启的电脑，把外部访问转发到本机。</p>
         </div>
         <button
           className="btn btn-primary"
@@ -309,7 +309,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       {servers.length === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有云端服务器</p>
-          <p className="empty-text">先添加一台云服务器，才能发布隧道。</p>
+          <p className="empty-text">请先添加一台云服务器，才能发布隧道。</p>
           <button
             className="btn btn-primary"
             title="添加一台云端服务器"
@@ -332,13 +332,13 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                       {s.keyPath ? ` · 密钥 ${s.keyPath}` : " · 默认密钥"}
                     </div>
                     <div className="server-meta">
-                      站点目录：{s.vhostDir || "还没填（按默认找）"}
+                      站点目录：{s.vhostDir || "尚未填写（按默认目录查找）"}
                     </div>
                   </div>
                   <button
                     className="btn btn-ghost btn-sm"
                     disabled={test[s.id]?.phase === "loading"}
-                    title="测一下 SSH 能不能连上这台服务器"
+                    title="测试能否通过 SSH 连接这台服务器"
                     onClick={() => void testConn(s)}
                   >
                     {test[s.id]?.phase === "loading" ? "测试中…" : "测试连接"}
@@ -366,7 +366,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       {confirmDel && (
         <ConfirmModal
           title={`删除服务器「${confirmDel.name}」？`}
-          body="引用它的隧道会连不上；服务器上的文件不删，5 秒内可撤销。"
+          body="引用它的隧道将无法连接；服务器上的文件不会删除，5 秒内可撤销。"
           confirmLabel="删除"
           danger
           onClose={() => setConfirmDel(null)}
@@ -384,8 +384,8 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
             <h2 className="modal-title">
               {editing.id ? "编辑服务器" : "添加服务器"}
             </h2>
-            <p className="modal-sub" title="默认用 ~/.ssh 里的密钥">
-              密钥留空就用系统默认密钥。
+            <p className="modal-sub" title="默认使用 ~/.ssh 中的密钥">
+              密钥留空则使用系统默认密钥。
             </p>
           </div>
           <div className="modal-body">
@@ -442,7 +442,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
               <input
                 className="input mono"
                 value={editing.keyPath ?? ""}
-                placeholder="例如 C:\Users\你\.ssh\id_ed25519"
+                placeholder="例如 C:\Users\用户名\.ssh\id_ed25519"
                 onChange={(e) =>
                   setEditing({ ...editing, keyPath: e.target.value })
                 }
@@ -454,12 +454,12 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                 className="input mono"
                 value={editing.vhostDir ?? ""}
                 placeholder="例如 /www/server/panel/vhost"
-                title="留空就按默认目录找，例如 /www/server/panel/vhost。密码文件和「检查云端」也按这个目录找。"
+                title="留空则按默认目录查找，例如 /www/server/panel/vhost。密码文件和「检查云端」也按此目录查找。"
                 onChange={(e) =>
                   setEditing({ ...editing, vhostDir: e.target.value })
                 }
               />
-              <p className="hint">留空就按默认目录找。</p>
+              <p className="hint">留空则按默认目录查找。</p>
             </div>
 
             {/* 没有密钥也能用：填一次密码，助手帮你配好免密 */}
@@ -494,8 +494,8 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                     className="btn btn-ghost btn-sm"
                     title={
                       editing.id
-                        ? "填一次登录密码，助手帮你配好免密；密码不保存"
-                        : "会先保存这台服务器；填一次登录密码，助手帮你配好免密，密码不保存"
+                        ? "填一次登录密码，自动配置免密登录；密码不保存"
+                        : "将先保存这台服务器；填一次登录密码，自动配置免密登录，密码不保存"
                     }
                     onClick={() => setPwOpen(true)}
                   >
@@ -518,7 +518,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
             <button
               className="btn btn-primary"
               disabled={busy || !configTrusted}
-              title={!configTrusted ? "配置文件读不出来，先修好再改设置" : undefined}
+              title={!configTrusted ? "配置文件无法读取，请先修复后再修改设置" : undefined}
               onClick={save}
             >
               {busy ? "保存中…" : "保存"}

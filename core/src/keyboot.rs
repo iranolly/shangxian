@@ -53,18 +53,18 @@ impl Handler for HostKeyCheck {
             Ok(true) => Ok(()),
             // 第一次见这台服务器：记下指纹，放行
             Ok(false) => learn_known_hosts_path(&self.host, self.port, key, &self.store)
-                .map_err(|e| format!("记主机指纹失败（{}）：{e}", self.store.display())),
+                .map_err(|e| format!("记录主机指纹失败（{}）：{e}", self.store.display())),
             // 指纹和上次记录的不一样：明确拒绝
             Err(russh::keys::Error::KeyChanged { .. }) => Err(format!(
-                "服务器 {}:{} 的主机密钥和上次记录的不一样（记录文件：{}）。\n\
-                 这可能是服务器重装了或换了机器，也可能是有人在中间冒充。为了安全先停下。\n\
-                 确认没问题后，把那个文件里对应的一行删掉，再重新配置。",
+                "服务器 {}:{} 的主机密钥与上次记录的不一致（记录文件：{}）。\n\
+                 这可能是服务器重装或更换了机器，也可能是中间人冒充。为安全起见先停止连接。\n\
+                 确认无问题后，请删除该文件中对应行，再重新配置。",
                 self.host,
                 self.port,
                 self.store.display()
             )),
             Err(e) => Err(format!(
-                "读主机指纹记录失败（{}）：{e}",
+                "读取主机指纹记录失败（{}）：{e}",
                 self.store.display()
             )),
         };
@@ -107,7 +107,7 @@ pub fn bootstrap_key(
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
-        .map_err(|e| format!("内部错误（起不了网络运行时）：{e}"))?;
+        .map_err(|e| format!("内部错误（无法创建网络运行时）：{e}"))?;
     runtime.block_on(write_public_key(
         host,
         port,
@@ -118,7 +118,7 @@ pub fn bootstrap_key(
     ))?;
 
     if !verify_with_key(host, port, user, key_path)? {
-        return Err("公钥写进去了，但用密钥登录还是没成功。请检查服务器上 ~/.ssh 的权限（目录 700、authorized_keys 文件 600）".into());
+        return Err("公钥已写入，但使用密钥登录仍未成功。请检查服务器上 ~/.ssh 的权限（目录 700，authorized_keys 文件 600）".into());
     }
 
     Ok(Bootstrap {
@@ -137,7 +137,7 @@ fn ensure_key(key_path: &Path) -> Result<String, String> {
             .map_err(|e| format!("读公钥失败：{e}"));
     }
     if let Some(dir) = key_path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("建密钥目录失败：{e}"))?;
+        std::fs::create_dir_all(dir).map_err(|e| format!("创建密钥目录失败：{e}"))?;
     }
 
     let keygen = crate::ssh::default_ssh_exe().with_file_name("ssh-keygen.exe");
@@ -174,7 +174,7 @@ fn ensure_key(key_path: &Path) -> Result<String, String> {
 /// 生成的私钥只给当前 Windows 用户读：去掉继承来的权限，只保留当前用户可读。
 fn tighten_key_permissions(key_path: &Path) -> Result<(), String> {
     let user = std::env::var("USERNAME")
-        .map_err(|_| "读不到当前 Windows 用户名（USERNAME），没法收紧私钥权限".to_string())?;
+        .map_err(|_| "无法读取当前 Windows 用户名（USERNAME），无法收紧私钥权限".to_string())?;
     // 写死系统目录里的 icacls，避免从 PATH 里碰到同名程序
     let icacls = std::env::var_os("SystemRoot")
         .map(|root| PathBuf::from(root).join("System32").join("icacls.exe"))
@@ -191,7 +191,7 @@ fn tighten_key_permissions(key_path: &Path) -> Result<(), String> {
 
     if !out.status.success() {
         return Err(format!(
-            "新私钥的权限没收紧（icacls 退出码 {:?}）：{}。请手动执行：icacls \"{}\" /inheritance:r /grant:r {user}:R 然后重试",
+            "新私钥权限未收紧（icacls 退出码 {:?}）：{}。请手动执行：icacls \"{}\" /inheritance:r /grant:r {user}:R，然后重试",
             out.status.code(),
             out.stderr.trim(),
             key_path.display()
@@ -224,7 +224,7 @@ async fn write_public_key(
         Err(e) => {
             // 主机指纹不对时，把 check_server_key 里写好的原因原样给用户。
             let reason = reject.lock().ok().and_then(|slot| slot.clone());
-            return Err(reason.unwrap_or_else(|| format!("连不上服务器 {host}:{port}（{e}）")));
+            return Err(reason.unwrap_or_else(|| format!("无法连接服务器 {host}:{port}（{e}）")));
         }
     };
 
@@ -239,12 +239,12 @@ async fn write_public_key(
         let allowed = allowed_methods(&format!("{auth:?}"));
         let password_ok = allowed.contains("Password") || allowed.contains("KeyboardInteractive");
         return Err(if password_ok {
-            "密码不对，再试一次（或者检查一下登录账号）".into()
+            "密码不正确，请重试（或检查登录账号）".into()
         } else if allowed.is_empty() {
-            "服务器不接受密码登录。请在服务器上手动配好密钥，或者让管理员打开密码登录".into()
+            "服务器不接受密码登录。请在服务器上手动配置密钥，或让管理员开启密码登录".into()
         } else {
             format!(
-                "这台服务器不允许用密码登录（它接受的方式：{allowed}）。请在服务器上手动配好密钥"
+                "该服务器不允许密码登录（支持的方式：{allowed}）。请在服务器上手动配置密钥"
             )
         });
     }
@@ -256,7 +256,7 @@ async fn write_public_key(
     let mut channel = session
         .channel_open_session()
         .await
-        .map_err(|e| format!("打不开服务器会话：{e}"))?;
+        .map_err(|e| format!("无法打开服务器会话：{e}"))?;
     channel
         .exec(true, cmd)
         .await
@@ -284,7 +284,7 @@ async fn write_public_key(
     }
     if exit != Some(0) || !output.contains("shangxian-wrote") {
         return Err(format!(
-            "往服务器写公钥没成功（退出码 {exit:?}）：{}",
+            "向服务器写入公钥失败（退出码 {exit:?}）：{}",
             output.trim()
         ));
     }

@@ -44,7 +44,7 @@ export interface RunOptions<T> {
 export function errorText(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   const trimmed = text.trim().replace(/^Error:\s*/, "");
-  return trimmed || "出了点问题，等一下再试";
+  return trimmed || "出现问题，请稍后重试";
 }
 
 type EntityKind = "tunnel" | "service" | "server";
@@ -88,7 +88,6 @@ function actionLabel(opts: { failure?: CommandFailure; optimistic?: OptimisticSp
   if (patch.autostart !== undefined) return patch.autostart ? "开启自启" : "关闭自启";
   if (patch.status === "starting") return "启动";
   if (patch.status === "stopped") return "停止";
-  if (patch.status === "connecting") return "重连";
   if (patch.status === "paused") return "暂停";
   return "操作";
 }
@@ -97,7 +96,7 @@ function actionLabel(opts: { failure?: CommandFailure; optimistic?: OptimisticSp
 function toastFailureOutsideView(kind: EntityKind, id: string, action: string, reason: string): void {
   const name = entityName(kind, id);
   const page = kind === "tunnel" ? "tunnels" : kind === "service" ? "services" : "servers";
-  toast.warn(`「${name}」${action}没成功：${reason}`, {
+  toast.warn(`「${name}」${action}失败：${reason}`, {
     key: `cmd-fail:${kind}:${id}`,
     action: {
       label: "去看",
@@ -126,7 +125,7 @@ function startWatchdog(key: string): () => void {
     setPending(key, false);
     const target = splitEntityKey(key);
     const name = target ? entityName(target.kind, target.id) : "这项操作";
-    toast.warn(`操作没有回音：${name} 可能没成功，等一下再看看`, {
+    toast.warn(`操作无响应：${name} 可能未成功，请稍后查看`, {
       key: `cmd-timeout:${key}`,
       action: { label: "刷新", run: () => refreshNow() },
     });
@@ -140,13 +139,13 @@ function startWatchdog(key: string): () => void {
 export async function runCommand<T>(opts: RunOptions<T>): Promise<T | undefined> {
   const key = opts.key;
   if (!getState().app.configTrusted && !opts.allowUntrusted) {
-    const text = "配置文件读不出来，先修好再改设置";
+    const text = "配置文件无法读取，请先修复后再修改设置";
     if (opts.failure?.rethrow) throw new Error(text);
     setNotice(opts.failure?.inlineKey ?? key, text);
     return undefined;
   }
   if (isPending(key)) {
-    if (opts.failure?.rethrow) throw new Error("上一步还在处理，等一下再试");
+    if (opts.failure?.rethrow) throw new Error("上一步还在处理，请稍后重试");
     return undefined;
   }
 

@@ -104,16 +104,16 @@ pub struct ScriptInput<'a> {
 fn sanitize_remote_path(raw: &str, what: &str) -> Result<String, String> {
     let text = raw.trim();
     if text.is_empty() {
-        return Err(format!("{what}是空的，没法拼进检查脚本"));
+        return Err(format!("{what}为空，无法拼进检查脚本"));
     }
     if text.chars().count() > 512 {
-        return Err(format!("{what}太长了（超过 512 个字符）"));
+        return Err(format!("{what}过长（超过 512 个字符）"));
     }
     if text
         .chars()
         .any(|c| c == '\n' || c == '\r' || c == '`' || c == '\0')
     {
-        return Err(format!("{what}里有换行或反引号，为了安全不能拼进检查脚本"));
+        return Err(format!("{what}中包含换行或反引号，为安全起见无法拼进检查脚本"));
     }
     Ok(text.to_string())
 }
@@ -152,6 +152,7 @@ pub fn build_script(input: &ScriptInput<'_>) -> Result<String, String> {
 
     let mut out = String::new();
     out.push_str("echo SHANGXIAN-CHECK-V2\n");
+    out.push_str(SHX_EXPAND_FN);
     for section in input.mode.sections() {
         let tmpl = match *section {
             "ENV" => ENV_TMPL,
@@ -209,13 +210,56 @@ for f in /etc/nginx/nginx.conf /www/server/nginx/conf/nginx.conf /xp/panel/nginx
 done
 echo "WS_MAP=$ws""#;
 
+/// 站点配置展开函数：小皮 / 宝塔把证书、强制 HTTPS 写进被 `include` 的独立文件里，
+/// 检查脚本要跟着 include 把正文拼回来看——不然会误报「证书文件找不到」、也看不到 80 跳 443。
+/// 只读、限 3 层、只认绝对路径、去重防循环，读不到的引用文件安静跳过。放在脚本开头，CONF 与 HTTPS 两节共用。
+const SHX_EXPAND_FN: &str = r#"# 展开站点配置里的 include：先打印主文件正文，再按层追加引用到的文件
+_shx_expand_conf() {
+  _shx_root=$1
+  { [ -n "$_shx_root" ] && [ -f "$_shx_root" ]; } || return 0
+  cat -- "$_shx_root" 2>/dev/null
+  echo
+  _shx_seen=" $_shx_root "
+  _shx_level="$_shx_root"
+  _shx_depth=0
+  while [ "$_shx_depth" -lt 3 ] && [ -n "$_shx_level" ]; do
+    _shx_depth=$(( _shx_depth + 1 ))
+    _shx_next=''
+    for _shx_file in $_shx_level; do
+      _shx_includes=$(sed -n 's/^[[:space:]]*include[[:space:]]*//p' "$_shx_file" 2>/dev/null | sed 's/#.*$//' | cut -d';' -f1)
+      for _shx_item in $_shx_includes; do
+        _shx_item=$(printf '%s' "$_shx_item" | tr -d '"')
+        case "$_shx_item" in
+          /*) ;;
+          *) continue ;;
+        esac
+        case "$_shx_item" in
+          *'$'*) continue ;;
+        esac
+        for _shx_hit in $_shx_item; do
+          [ -f "$_shx_hit" ] || continue
+          case "$_shx_seen" in
+            *" $_shx_hit "*) continue ;;
+          esac
+          _shx_seen="$_shx_seen$_shx_hit "
+          cat -- "$_shx_hit" 2>/dev/null
+          echo
+          _shx_next="$_shx_next $_shx_hit"
+        done
+      done
+    done
+    _shx_level=$_shx_next
+  done
+}
+"#;
+
 const CONF_TMPL: &str = r#"echo "===SECTION:CONF==="
 d=@DOMAIN@; dir=@DIR@; f="$dir/nginx/$d.conf"
 if [ -f "$f" ]; then
   echo "CONF_FOUND=1"
   echo "CONF_PATH=$f"
   echo '===SHANGXIAN-CONF-BEGIN==='
-  head -c 65536 -- "$f" 2>/dev/null
+  _shx_expand_conf "$f" | head -c 65536
   echo
   echo '===SHANGXIAN-CONF-END==='
   echo CONF_FOUND
@@ -238,7 +282,8 @@ fi"#;
 const HTTPS_TMPL: &str = r#"echo "===SECTION:HTTPS==="
 d=@DOMAIN@; dir=@DIR@; f="$dir/nginx/$d.conf"; cert=''
 if [ -f "$f" ]; then
-  for c in $(sed -n 's/^[[:space:]]*ssl_certificate[[:space:]]*//p' "$f" | cut -d';' -f1); do
+  certs=$(_shx_expand_conf "$f" | sed -n 's/^[[:space:]]*ssl_certificate[[:space:]]*//p' | cut -d';' -f1)
+  for c in $certs; do
     c=$(printf '%s' "$c" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//')
     [ -f "$c" ] && { cert="$c"; break; }
   done
@@ -527,7 +572,7 @@ impl HttpsKeys {
             match raw.parse::<i64>() {
                 Ok(days) => out.cert_days_left = Some(days),
                 Err(_) => warnings.push(
-                    "检查结果里 CERT_DAYS_LEFT 没读懂（服务器日期格式可能不常见），已经忽略。"
+                    "检查结果中 CERT_DAYS_LEFT 无法解析（服务器日期格式可能不常见），已忽略。"
                         .into(),
                 ),
             }
@@ -610,7 +655,7 @@ impl PortCheck {
         if let (Some(reported), true) = (key_port, expected_port != 0) {
             if reported != expected_port {
                 warnings.push(format!(
-                    "检查脚本回报的云端端口是 {reported}，和应用里填的 {expected_port} 对不上，已经按应用里的端口核对。"
+                    "检查脚本回报的云端端口为 {reported}，与应用中填写的 {expected_port} 不一致，已按应用中的端口核对。"
                 ));
             }
         }
@@ -768,16 +813,16 @@ impl AccessAudit {
         let mut agg: Vec<(String, u64)> = Vec::new();
         for line in ip_lines {
             let Some((ip_raw, count_raw)) = line.rsplit_once(':') else {
-                warnings.push("日志里有一条被挡 IP 统计看不懂，已经跳过。".into());
+                warnings.push("日志中有一条被挡 IP 统计无法解析，已跳过。".into());
                 continue;
             };
             let Ok(count) = count_raw.trim().parse::<u64>() else {
-                warnings.push("日志里有一条被挡 IP 统计看不懂，已经跳过。".into());
+                warnings.push("日志中有一条被挡 IP 统计无法解析，已跳过。".into());
                 continue;
             };
             let ip = ip_raw.trim();
             if ip.parse::<IpAddr>().is_err() {
-                warnings.push("日志里有一条被挡 IP 统计看不懂，已经跳过。".into());
+                warnings.push("日志中有一条被挡 IP 统计无法解析，已跳过。".into());
                 continue;
             }
             if let Some(slot) = agg.iter_mut().find(|(k, _)| k == ip) {
@@ -799,7 +844,7 @@ impl AccessAudit {
             .map(|l| parse_access_entry(l))
             .collect();
         if truncated {
-            warnings.push("日志只统计了最近 2MB，更早的没算；下面的次数是大概值。".into());
+            warnings.push("日志仅统计最近 2MB，更早的内容未计入；下面的次数为近似值。".into());
         }
         AccessAudit {
             available,
@@ -951,7 +996,7 @@ pub fn parse_v2(output: &str, expected_port: u16) -> V2Output {
 
     if output.trim().is_empty() {
         out.warnings
-            .push("云端检查没有返回任何内容，可能连接被中断了。".into());
+            .push("云端检查未返回任何内容，连接可能已中断。".into());
         return out;
     }
 
@@ -969,7 +1014,7 @@ pub fn parse_v2(output: &str, expected_port: u16) -> V2Output {
             } else if !conf_overflow {
                 conf_overflow = true;
                 out.warnings
-                    .push("云端配置太长，只读了前面一部分。".into());
+                    .push("云端配置过长，仅读取了前面一部分。".into());
             }
             continue;
         }
@@ -985,7 +1030,7 @@ pub fn parse_v2(output: &str, expected_port: u16) -> V2Output {
                 continue;
             }
             out.warnings
-                .push("检查脚本版本老，部分结果没读出来。".into());
+                .push("检查脚本版本较旧，部分结果无法解析。".into());
         }
 
         if trimmed == CONF_BEGIN {
@@ -1064,7 +1109,7 @@ pub fn parse_v2(output: &str, expected_port: u16) -> V2Output {
             let value = value.trim();
             if value.chars().count() > MAX_VALUE_LEN {
                 out.warnings.push(format!(
-                    "检查结果里 {key} 的值太长，已经忽略（可能有脏数据）。"
+                    "检查结果中 {key} 的值过长，已忽略（可能存在异常数据）。"
                 ));
                 continue;
             }
@@ -1165,7 +1210,7 @@ fn parse_client_ip(keys: &HashMap<String, String>, warnings: &mut Vec<String>) -
     if raw.parse::<IpAddr>().is_ok() {
         Some(raw.to_string())
     } else {
-        warnings.push(format!("服务器回报的上网 IP「{raw}」不像一个 IP，已经忽略。"));
+        warnings.push(format!("服务器回报的上网 IP「{raw}」不是有效 IP，已忽略。"));
         None
     }
 }
@@ -1202,7 +1247,7 @@ fn key_num(keys: &HashMap<String, String>, name: &str, warnings: &mut Vec<String
     match raw.parse::<i64>() {
         Ok(n) => Some(n),
         Err(_) => {
-            warnings.push(format!("检查结果里 {name} 不是一个数字，已经忽略。"));
+            warnings.push(format!("检查结果中 {name} 不是数字，已忽略。"));
             None
         }
     }
@@ -1235,14 +1280,14 @@ pub fn analyze_https(conf: &str, domain: &str, keys: &HttpsKeys) -> HttpsCheck {
     let (selected, server_match) = selected_blocks(&blocks, domain);
     let mut warnings: Vec<String> = Vec::new();
     match server_match {
-        "single" => warnings.push("你的站点配置里只有一个 server 块，下面的 HTTPS 判断按它来。".into()),
+        "single" => warnings.push("站点配置中只有一个 server 块，下面的 HTTPS 判断将以它为准。".into()),
         "none" if !blocks.is_empty() => warnings.push(
-            "没找到 server_name 和网址对上的站点块，下面的 HTTPS 判断可能不准。".into(),
+            "未找到 server_name 与网址匹配的站点块，下面的 HTTPS 判断可能不准确。".into(),
         ),
         _ => {}
     }
     if blocks.is_empty() {
-        warnings.push("云端站点配置里没读到 server 块，HTTPS 判断跳过。".into());
+        warnings.push("云端站点配置中未读取到 server 块，HTTPS 判断跳过。".into());
     }
 
     let enabled = selected
@@ -1265,6 +1310,15 @@ pub fn analyze_https(conf: &str, domain: &str, keys: &HttpsKeys) -> HttpsCheck {
             None => {}
         }
     }
+    // 小皮面板把「强制 HTTPS」的 if 块放在被 include 的独立文件里；脚本把 include
+    // 的内容拼回文本后，这段会落在 server 块外面——这里兜一下根级的跳转 if。
+    // 块里面的 if 已经在 redirect_to_https() 里看过了。
+    if !redirect80 && !http_blocks.is_empty() {
+        if let Some(kind) = protection::root_if_https_redirect(conf) {
+            redirect80 = true;
+            temporary_redirect = kind == RedirectKind::Temporary;
+        }
+    }
     let plain_open = http_blocks
         .iter()
         .any(|b| b.has_proxy_pass && b.redirect_to_https().is_none());
@@ -1278,18 +1332,18 @@ pub fn analyze_https(conf: &str, domain: &str, keys: &HttpsKeys) -> HttpsCheck {
 
     if temporary_redirect {
         warnings.push(
-            "80 的跳转是临时的（302/307 或 rewrite），建议改成 301 永久跳转。".into(),
+            "80 的跳转是临时的（302/307 或 rewrite），建议改为 301 永久跳转。".into(),
         );
     }
     if keys.openssl_missing {
         warnings.push(
-            "服务器上没装 openssl，证书天数没算；不影响其它检查，自己去面板看证书到期时间。"
+            "服务器未安装 openssl，证书剩余天数未计算；不影响其他检查，请在面板中查看证书到期时间。"
                 .into(),
         );
     }
     if keys.cert_file_missing {
         warnings.push(
-            "配置里写的证书文件在服务器上找不到，可能续期后路径变了；去面板「SSL」页确认一下。"
+            "配置中写的证书文件在服务器上未找到，可能是续期后路径已变更；请在面板「SSL」页确认。"
                 .into(),
         );
     }
@@ -1375,51 +1429,51 @@ pub fn https_lights(
     if url_is_https && !https.enabled {
         red.push(LightItem::new(
             Light::Red,
-            "网址写的是 https，但服务器上没有找到 443 的站点。外面打不开，先回面板把证书和 https 开上。",
+            "网址写的是 https，但服务器上未找到 443 站点。外部无法访问，请先在面板中开启证书和 https。",
         ));
     }
     if https.plain_open && !https.redirect80 {
         if password_on {
             red.push(LightItem::new(
                 Light::Red,
-                "密码现在能用 http:// 明文提交，等于把密码写在明信片上。请到面板打开「强制 HTTPS」（80 跳 443）。",
+                "密码目前可通过 http:// 明文提交，相当于以明文传输密码。请在面板中打开「强制 HTTPS」（80 跳 443）。",
             ));
         } else if ip_on {
             yellow.push(LightItem::new(
                 Light::Yellow,
-                "网站用 http:// 打开时内容不加密。虽然只有白名单 IP 能进，还是建议在面板打开「强制 HTTPS」。",
+                "网站用 http:// 打开时内容不加密。虽然只有白名单中的 IP 能访问，仍建议在面板中打开「强制 HTTPS」。",
             ));
         } else {
             yellow.push(LightItem::new(
                 Light::Yellow,
-                "这个网站 http:// 和 https:// 都能开。建议在面板打开「强制 HTTPS」，让 http:// 自动跳到 https://。",
+                "这个网站 http:// 和 https:// 都能打开。建议在面板中打开「强制 HTTPS」，让 http:// 自动跳转到 https://。",
             ));
         }
     }
     match https.cert_days {
         Some(days) if days <= 0 => red.push(LightItem::new(
             Light::Red,
-            "证书已经过期了，网页会报警告。去面板点一下「续签证书」。",
+            "证书已过期，网页会显示警告。请在面板中点击「续签证书」。",
         )),
         Some(days) if days <= 7 => red.push(LightItem::new(
             Light::Red,
             format!(
-                "证书还剩 {days} 天，快到期了。去面板点一下「续签证书」；续期用的 /.well-known 那一小块要留着别删。"
+                "证书剩余 {days} 天，即将到期。请在面板中点击「续签证书」；续期用的 /.well-known 那一小块不要删除。"
             ),
         )),
         Some(days) if days <= 30 => yellow.push(LightItem::new(
             Light::Yellow,
-            format!("证书还剩 {days} 天，注意一下。面板一般会自动续，续不上会红。"),
+            format!("证书剩余 {days} 天，请注意。面板通常会自动续期，续期失败会显示红灯。"),
         )),
         Some(_) => {}
         None => match https.checkend30 {
             Some(true) => green.push(LightItem::new(
                 Light::Green,
-                "证书至少 30 天内没问题（具体剩多少天没算出来：服务器 date 命令不认这个日期格式）。",
+                "证书至少 30 天内有效（具体剩余天数未计算出：服务器 date 命令无法解析该日期格式）。",
             )),
             Some(false) => yellow.push(LightItem::new(
                 Light::Yellow,
-                "证书 30 天内到期（可能已经过期）。去面板看一眼到期时间。",
+                "证书 30 天内到期（可能已过期）。请在面板中查看到期时间。",
             )),
             None => {}
         },
@@ -1427,25 +1481,25 @@ pub fn https_lights(
     if https.openssl_missing {
         yellow.push(LightItem::new(
             Light::Yellow,
-            "服务器上没装 openssl，证书天数没算。不影响其它检查，自己去面板看证书到期时间。",
+            "服务器未安装 openssl，证书剩余天数未计算。不影响其他检查，请在面板中查看证书到期时间。",
         ));
     }
     if https.cert_file_missing {
         yellow.push(LightItem::new(
             Light::Yellow,
-            "配置里写的证书文件在服务器上找不到，可能续期后路径变了。去面板「SSL」页确认一下。",
+            "配置中写的证书文件在服务器上未找到，可能是续期后路径已变更。请在面板「SSL」页确认。",
         ));
     }
     if !url_is_https && https.enabled && https.redirect80 {
         yellow.push(LightItem::new(
             Light::Yellow,
-            "服务器已经支持 https 了，建议把网址改成 https:// 开头的地址。",
+            "服务器已支持 https，建议把网址改为以 https:// 开头的地址。",
         ));
     }
     if https.enabled && https.redirect80 && red.is_empty() && yellow.is_empty() {
         green.push(LightItem::new(
             Light::Green,
-            "HTTPS 正常：443 开着，http:// 会自动跳到 https://。",
+            "HTTPS 正常：443 端口已开启，http:// 会自动跳转到 https://。",
         ));
     }
 
@@ -1462,41 +1516,41 @@ pub fn env_banner(env: &CloudEnv) -> EnvBanner {
     match env.web.as_str() {
         "apache" => EnvBanner {
             level: Light::Red,
-            text: "这台服务器上跑的是 Apache，不是 nginx。这个应用生成的是 nginx 的配置片段，贴了不会生效。两个办法：① 在面板里新建站点时选 nginx（宝塔/小皮都支持）；② 先把片段留着，换成 nginx 再用。".into(),
+            text: "这台服务器运行的是 Apache，不是 nginx。本应用生成的是 nginx 配置片段，粘贴后不会生效。两个办法：① 在面板中新建站点时选择 nginx（宝塔/小皮都支持）；② 先保留片段，切换为 nginx 后再使用。".into(),
         },
         "both" => EnvBanner {
             level: Light::Yellow,
-            text: "这台机器上 nginx 和 Apache 都在。贴之前先确认你的站点是哪一个在管（面板里的网站列表一般会写 nginx 还是 Apache）。".into(),
+            text: "这台服务器上 nginx 和 Apache 都在。粘贴前请先确认站点由哪一个管理（面板的网站列表通常会标注 nginx 还是 Apache）。".into(),
         },
         "none" => EnvBanner {
             level: Light::Yellow,
-            text: "没找到 nginx，也没有 Apache。可能网站服务没装，或者装在特殊路径。这种情况先别贴片段。".into(),
+            text: "未找到 nginx，也没有 Apache。可能未安装网站服务，或安装在特殊路径。这种情况下先不要粘贴片段。".into(),
         },
         "unknown" => EnvBanner {
             level: Light::Yellow,
-            text: "没认出来这台服务器用的什么面板和网站服务（nginx 还是 Apache 都没找到）。先别贴片段，怕贴错地方；可以在服务器上执行 nginx -v 或 httpd -v 看看，再点「重新识别」。".into(),
+            text: "无法识别这台服务器使用的面板和网站服务（nginx 和 Apache 都未找到）。先不要粘贴片段，以免出错；可以在服务器上执行 nginx -v 或 httpd -v 查看，再点击「重新识别」。".into(),
         },
         _ => match env.panel.as_str() {
             "bt" => EnvBanner {
                 level: Light::Green,
                 text: format!(
-                    "云服务器认出来了：宝塔面板 + nginx。站点目录自动填成 {dir}，不对可以改。"
+                    "已识别云服务器：宝塔面板 + nginx。站点目录已自动填写为 {dir}，不正确可以修改。"
                 ),
             },
             "xp" => EnvBanner {
                 level: Light::Green,
                 text: format!(
-                    "云服务器认出来了：小皮面板 + nginx。站点目录自动填成 {dir}，不对可以改。"
+                    "已识别云服务器：小皮面板 + nginx。站点目录已自动填写为 {dir}，不正确可以修改。"
                 ),
             },
             "none" => EnvBanner {
                 level: Light::Yellow,
-                text: "这台服务器没发现面板，但装了 nginx。配置要自己改 nginx 的站点文件；下面给的片段还是能用的。".into(),
+                text: "这台服务器未发现面板，但已安装 nginx。需要自行修改 nginx 的站点配置文件；下面给出的片段仍然可以使用。".into(),
             },
             _ => EnvBanner {
                 level: Light::Yellow,
                 text: format!(
-                    "找到服务器上的 nginx，但没认出用的是什么面板。站点目录先按 {dir} 用，不对可以在服务器设置里改。"
+                    "已找到服务器上的 nginx，但无法识别使用的面板。站点目录先按 {dir} 使用，不正确可在服务器设置中修改。"
                 ),
             },
         },
@@ -1516,7 +1570,7 @@ pub fn port_lights(port: &PortCheck, tunnel_running: bool) -> Vec<LightItem> {
         "exposed" => vec![LightItem::new(
             Light::Red,
             format!(
-                "云端端口 {} 现在对所有网卡开放。发布本身只绑 127.0.0.1（回环地址＝只有服务器自己能连的地址），说明有别的程序也占着这个端口、还对外开着。请检查那个程序，或者用防火墙把这个端口关掉。",
+                "云端端口 {} 当前对所有网卡开放。发布本身只绑定 127.0.0.1（回环地址＝只有服务器自身能连接的地址），说明有其他程序也占用了这个端口、并且对外开放。请检查该程序，或用防火墙关闭这个端口。",
                 port.port
             ),
         )],
@@ -1525,7 +1579,7 @@ pub fn port_lights(port: &PortCheck, tunnel_running: bool) -> Vec<LightItem> {
                 vec![LightItem::new(
                     Light::Yellow,
                     format!(
-                        "云端没看到 {} 在监听。可能是转发没建起来（看隧道日志），也可能端口填错了。",
+                        "云端未看到 {} 在监听。可能是转发未建立（请查看隧道日志），也可能端口填写错误。",
                         port.port
                     ),
                 )]
@@ -1533,7 +1587,7 @@ pub fn port_lights(port: &PortCheck, tunnel_running: bool) -> Vec<LightItem> {
                 vec![LightItem::new(
                     Light::Yellow,
                     format!(
-                        "云端没看到 {} 在监听；隧道现在没在跑，先启动隧道再核对。",
+                        "云端未看到 {} 在监听；隧道当前未运行，请先启动隧道再核对。",
                         port.port
                     ),
                 )]
@@ -1541,11 +1595,11 @@ pub fn port_lights(port: &PortCheck, tunnel_running: bool) -> Vec<LightItem> {
         }
         "loopback" => vec![LightItem::new(
             Light::Green,
-            "端口只绑在本机口（127.0.0.1），外人连不上，符合预期。",
+            "端口只绑定在回环地址（127.0.0.1），外部无法连接，符合预期。",
         )],
         _ => vec![LightItem::new(
             Light::Yellow,
-            "服务器上没有 ss 也没有 netstat，回环检查跳过；不影响其它检查。",
+            "服务器上未安装 ss 和 netstat，回环检查跳过；不影响其他检查。",
         )],
     }
 }
@@ -1553,16 +1607,16 @@ pub fn port_lights(port: &PortCheck, tunnel_running: bool) -> Vec<LightItem> {
 /// 访问审计的摘要（大白话；次数是近似值）。
 pub fn audit_summary(audit: &AccessAudit) -> String {
     if !audit.available {
-        return "没找到访问日志（也可能日志只有 root 能看），这一步跳过。".into();
+        return "未找到访问日志（也可能日志仅 root 可读），本步骤跳过。".into();
     }
     let mut text = if audit.count401 == 0 && audit.count403 == 0 {
         format!(
-            "最近 {} 行日志里没有被挡的访问，看起来没人乱试。",
+            "最近 {} 行日志中没有被挡的访问。",
             audit.window
         )
     } else {
         let mut s = format!(
-            "最近 {} 行日志里，密码错误被挡了 {} 次，白名单被挡了 {} 次。",
+            "最近 {} 行日志中，密码错误被拦截 {} 次，白名单限制被拦截 {} 次。",
             audit.window, audit.count401, audit.count403
         );
         if let Some(top) = audit.top_ips.first() {
@@ -1573,22 +1627,22 @@ pub fn audit_summary(audit: &AccessAudit) -> String {
         }
         s
     };
-    text.push_str("这些记录只在你电脑上显示，不会上传到任何地方。");
+    text.push_str("这些记录仅在本地显示，不会上传到任何地方。");
     text
 }
 
 /// 公网 IP 助手的文案（D3 §9）。
 pub fn public_ip_message(ip: Option<&str>, already_listed: bool) -> String {
     let Some(ip) = ip else {
-        return "这次没读到你的上网 IP（服务器没给 $SSH_CONNECTION）；可以点「重新识别」再试。".into();
+        return "本次未读取到本机上网 IP（服务器未提供 $SSH_CONNECTION）；可点击「重新识别」再试。".into();
     };
     let listed = if already_listed {
-        "这个 IP 已经在白名单里了。"
+        "这个 IP 已在白名单中。"
     } else {
-        "想把它加进白名单点一下就行（只改你自己电脑上的配置）。"
+        "如需将该 IP 加入白名单，点击即可（仅修改本机配置）。"
     };
     format!(
-        "服务器看到的你的上网 IP 是 {ip}。{listed}注意：手机流量、公司网络、重启宽带之后这个 IP 可能会变；如果加完还是进不来，可能是运营商共享 IP，改用密码保护更省心。"
+        "服务器识别到的本机上网 IP 是 {ip}。{listed}注意：手机流量、公司网络、重启宽带后这个 IP 可能会变化；如果添加后仍无法访问，可能是运营商共享 IP，改用密码保护更省心。"
     )
 }
 
@@ -1775,7 +1829,7 @@ pub fn assemble_v2(output: &str, input: &CheckInput<'_>) -> CloudCheckResult {
     }
     if !wellknown_ok && (input.expected_password || input.expected_ip) {
         warnings.push(
-            "云端配置里没找到证书续期的豁免行。证书续期可能失败，建议按上面片段补上。".into(),
+            "云端配置中未找到证书续期的豁免行。证书续期可能失败，建议按上面片段补充。".into(),
         );
     }
 
@@ -1784,7 +1838,7 @@ pub fn assemble_v2(output: &str, input: &CheckInput<'_>) -> CloudCheckResult {
         (
             "error".to_string(),
             Some(
-                "这次云端检查没读全（脚本输出不认识）。已保留上次结果；可以再点一次「检查云端」。"
+                "本次云端检查未完整读取（无法识别脚本输出）。已保留上次结果；可以再点击一次「检查云端」。"
                     .to_string(),
             ),
         )
@@ -2065,7 +2119,7 @@ LOG|1.2.3.4 - - [12/Oct/2026:03:10:00 +0800] "GET / HTTP/1.1" 403 12
 
         assert!(out.client_ip.is_none());
         assert!(
-            out.warnings.iter().any(|w| w.contains("不像一个 IP")),
+            out.warnings.iter().any(|w| w.contains("不是有效 IP")),
             "非法 IP 要有警告：{:?}",
             out.warnings
         );
@@ -2088,7 +2142,7 @@ HTPASSWD_YES
         let out = parse_v2(legacy, 18080);
         assert!(!out.protocol_v2, "老脚本没有版本行");
         assert!(
-            out.warnings.iter().any(|w| w.contains("版本老")),
+            out.warnings.iter().any(|w| w.contains("版本较旧")),
             "要有版本警告：{:?}",
             out.warnings
         );
@@ -2152,7 +2206,7 @@ HTPASSWD_YES
         let out = parse_v2(&text, 1);
         assert_eq!(out.conf_path, None, "超长值要忽略");
         assert_eq!(out.conf_found, Some(true), "同一节里正常的值还要保留");
-        assert!(out.warnings.iter().any(|w| w.contains("太长")));
+        assert!(out.warnings.iter().any(|w| w.contains("过长")));
     }
 
     #[test]
@@ -2341,6 +2395,56 @@ server {
         assert_eq!(check.cert_path.as_deref(), Some("/etc/ssl/album.pem"));
     }
 
+    /// 小皮面板布局：脚本把 include 的文件拼回文本后，证书行和「强制 HTTPS」的
+    /// if 块都落在 server 块外面。这条要整体认出来，不能再误报。
+    const XP_MERGED_CONF: &str = r#"
+server {
+    listen 80;
+    listen 443 ssl http2;
+    server_name album.example.com;
+    auth_basic "要求密码";
+    auth_basic_user_file /xp/panel/vhost/album.example.com.htpasswd;
+    include /xp/panel/vhost/ssl/album.example.com/ssl.conf;
+    location /.well-known/ {
+        auth_basic off;
+        allow all;
+    }
+}
+    ssl_certificate /xp/panel/vhost/ssl/album.example.com/cert/fullchain.pem;
+    ssl_certificate_key /xp/panel/vhost/ssl/album.example.com/cert/privkey.key;
+    if ($server_port !~ 443) {
+        rewrite ^(/.*)$ https://$host$1 permanent;
+    }
+"#;
+
+    #[test]
+    fn analyze_https_reads_merged_include_layout() {
+        let keys = HttpsKeys {
+            ssl_cert_path: Some("/xp/panel/vhost/ssl/album.example.com/cert/fullchain.pem".into()),
+            cert_days_left: Some(78),
+            ..HttpsKeys::default()
+        };
+        let check = analyze_https(XP_MERGED_CONF, "album.example.com", &keys);
+        assert_eq!(check.server_match, "matched");
+        assert!(check.enabled, "listen 443 ssl 要认出来");
+        assert!(check.redirect80, "include 里的 80 跳 443 要认出来");
+        assert!(
+            !check.temporary_redirect,
+            "rewrite permanent 是 301，不该报临时跳转"
+        );
+        assert_eq!(check.cert_days, Some(78));
+        assert!(!check.cert_file_missing);
+        assert_eq!(
+            check.cert_path.as_deref(),
+            Some("/xp/panel/vhost/ssl/album.example.com/cert/fullchain.pem")
+        );
+        assert!(
+            check.warnings.iter().all(|w| !w.contains("证书文件")),
+            "不能再误报证书找不到：{:?}",
+            check.warnings
+        );
+    }
+
     #[test]
     fn analyze_https_plain_open_and_temporary_redirect() {
         let conf = r#"
@@ -2382,7 +2486,7 @@ server {
         let two = "server { server_name a.example.com; }\nserver { server_name b.example.com; }";
         let check = analyze_https(two, "album.example.com", &HttpsKeys::default());
         assert_eq!(check.server_match, "none");
-        assert!(check.warnings.iter().any(|w| w.contains("没找到 server_name")));
+        assert!(check.warnings.iter().any(|w| w.contains("未找到 server_name")));
     }
 
     #[test]
@@ -2419,7 +2523,7 @@ server {
         plain.enabled = false;
         let lights = https_lights(&plain, false, true, false);
         assert_eq!(lights[0].level, Light::Red);
-        assert!(lights[0].text.contains("明信片"));
+        assert!(lights[0].text.contains("明文传输"));
 
         // 白名单 + 明文：黄
         let lights = https_lights(&plain, false, false, true);
@@ -2464,7 +2568,7 @@ server {
 
         // 网址还是 http，但服务器已经支持 https
         let lights = https_lights(&base, false, true, false);
-        assert!(lights.iter().any(|l| l.text.contains("改成 https://")));
+        assert!(lights.iter().any(|l| l.text.contains("改为以 https://")));
     }
 
     #[test]
@@ -2591,9 +2695,9 @@ server {
     #[test]
     fn public_ip_messages_and_listing() {
         assert!(public_ip_message(Some("203.0.113.7"), false).contains("203.0.113.7"));
-        assert!(public_ip_message(Some("203.0.113.7"), false).contains("加进白名单"));
-        assert!(public_ip_message(Some("203.0.113.7"), true).contains("已经在白名单里"));
-        assert!(public_ip_message(None, false).contains("没读到"));
+        assert!(public_ip_message(Some("203.0.113.7"), false).contains("加入白名单"));
+        assert!(public_ip_message(Some("203.0.113.7"), true).contains("已在白名单"));
+        assert!(public_ip_message(None, false).contains("未读取到"));
 
         assert!(public_ip_already_listed("1.2.3.4", &["1.2.3.4".into()]));
         assert!(public_ip_already_listed("1.2.3.4", &["1.2.3.0/24".into()]));
@@ -2669,7 +2773,7 @@ server {
 
         let garbage = assemble_v2("完全不认识的输出\n", &input);
         assert_eq!(garbage.check.status, "error");
-        assert!(garbage.check.error.as_deref().unwrap().contains("没读全"));
+        assert!(garbage.check.error.as_deref().unwrap().contains("未完整读取"));
         assert!(garbage.check.cloud.is_none());
     }
 
@@ -2746,6 +2850,25 @@ server {
         assert!(audit.contains("===SECTION:AUDIT==="));
         assert!(audit.contains("AUDIT_WINDOW=1000") || audit.contains("AUDIT_WINDOW"));
         assert!(!audit.contains("===SECTION:NET==="));
+    }
+
+    #[test]
+    fn script_expands_site_includes() {
+        let full = build_script(&script_input(CheckMode::Full, "album.example.com", "/xp/panel/vhost"))
+            .unwrap();
+        assert!(
+            full.contains("_shx_expand_conf()"),
+            "要带上 include 展开函数：{full}"
+        );
+        assert_eq!(
+            full.matches("_shx_expand_conf \"$f\"").count(),
+            2,
+            "CONF 和 HTTPS 两节都要用它：{full}"
+        );
+        assert!(
+            full.contains("_shx_expand_conf \"$f\" | head -c 65536"),
+            "CONF 正文要用展开后的内容：{full}"
+        );
     }
 
     #[test]

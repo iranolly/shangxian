@@ -41,7 +41,7 @@ export async function copyText(text: string): Promise<boolean> {
 export async function copyWithToast(
   text: string,
   successText: string,
-  failText = "复制没成功，手动选中再复制吧",
+  failText = "复制失败，请手动选中后复制",
 ): Promise<boolean> {
   const ok = await copyText(text);
   if (ok) toast.success(successText);

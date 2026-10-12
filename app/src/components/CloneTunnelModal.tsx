@@ -95,20 +95,20 @@ function CloneForm({
     setError("");
     const trimmedName = name.trim();
     if (!trimmedName) {
-      setError("隧道名字不能为空");
+      setError("隧道名称不能为空");
       return;
     }
     const remotePort = Number(portText);
     if (!Number.isInteger(remotePort) || remotePort < 1 || remotePort > 65535) {
-      setError("云端端口要填 1~65535 的数字");
+      setError("云端端口需填写 1~65535 的数字");
       return;
     }
     if (wantPassword && !password.trim()) {
-      setError("这条隧道选了「要密码才能进」，请先填一条新密码");
+      setError("该隧道已启用密码保护，请先填写新密码");
       return;
     }
     if (wantIp && !ips.trim()) {
-      setError("选了「只允许指定 IP」，请先把允许访问的 IP 填上");
+      setError("已勾选「只允许指定 IP」，请先填写允许访问的 IP");
       return;
     }
 
@@ -155,16 +155,16 @@ function CloneForm({
           <h2 className="modal-title">克隆隧道 · {source.name}</h2>
           <p
             className="modal-sub"
-            title="复制一条设置差不多的隧道；建好后是暂停状态，检查好再开始发布。"
+            title="复制一条设置相近的隧道；创建后为暂停状态，确认无误后再开始发布。"
           >
-            照着这条复制一条，建好是暂停状态。
+            按该隧道复制；创建完成后为暂停状态。
           </p>
         </div>
         <div className="modal-body">
           {error ? <div className="error-line">{error}</div> : null}
 
           <div className="field">
-            <label className="field-label">隧道名字</label>
+            <label className="field-label">隧道名称</label>
             <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
@@ -195,14 +195,15 @@ function CloneForm({
           </div>
 
           <div className="field">
-            <label className="field-label">公网网址（可空）</label>
+            <label className="field-label">公网网址（可留空）</label>
             <input
               className="input"
               value={url}
               placeholder="例：album2.example.com"
               onChange={(e) => setUrl(e.target.value)}
             />
-            <p className="warn-line">原网址不能给两条隧道同时用；要填就换一个。</p>
+            <p className="warn-line">原网址不能同时用于两条隧道；如需填写请更换。
+            </p>
           </div>
 
           <div className="field">
@@ -228,7 +229,7 @@ function CloneForm({
                 checked={wantPassword}
                 onChange={(e) => setWantPassword(e.target.checked)}
               />
-              要密码
+              密码保护
             </label>
             <label className="switch" style={{ marginLeft: 16 }}>
               <input
@@ -242,9 +243,9 @@ function CloneForm({
               <>
                 <p
                   className="field-hint hint"
-                  title="原来的密码加密结果不能复制，所以这里要给新隧道设一条（可以和原来一样）。"
+                  title="原密码的加密结果无法复制，请为新的隧道设置密码（可与原密码相同）。"
                 >
-                  给新隧道设一条新密码。
+                  为新的隧道设置一条新密码。
                 </p>
                 <div className="field-row">
                   <div className="field">

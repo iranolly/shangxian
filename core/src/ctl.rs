@@ -24,7 +24,7 @@ pub const CTL_FILE_NAME: &str = "ctl.json";
 
 /// 应用没在运行时给调用方的统一提示。
 pub const APP_NOT_RUNNING: &str =
-    "『上线助手』没在运行（连不上它的控制通道）。先打开应用，或者运行：cli app start";
+    "『上线助手』未在运行（无法连接其控制通道）。请先打开应用，或运行：cli app start";
 
 /// ctl.json 里存的东西。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,15 +107,15 @@ pub fn request(info: &CtlInfo, method: &str, params: &Value) -> Result<Value, St
     stream
         .write_all(req.as_bytes())
         .and_then(|_| stream.write_all(b"\n"))
-        .map_err(|_| "跟『上线助手』说话失败（连接断了）".to_string())?;
+        .map_err(|_| "与『上线助手』通信失败（连接已断开）".to_string())?;
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
     reader
         .read_line(&mut line)
-        .map_err(|_| "『上线助手』没回话（可能刚退出）".to_string())?;
+        .map_err(|_| "『上线助手』未响应（可能刚退出）".to_string())?;
     let resp: Response =
-        serde_json::from_str(&line).map_err(|e| format!("看不懂它的回话：{e}"))?;
+        serde_json::from_str(&line).map_err(|e| format!("无法解析它的响应：{e}"))?;
     if resp.ok {
         Ok(resp.result)
     } else {

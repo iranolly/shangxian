@@ -55,13 +55,13 @@ export function ImportModal({ onClose, onDone }: Props) {
       setDoc(text);
       setFileName(file.name);
     } catch (e) {
-      setError(`读不出这个文件：${errorText(e)}`);
+      setError(`无法读取该文件：${errorText(e)}`);
     }
   };
 
   const dryRun = async () => {
     if (!doc.trim()) {
-      setError("先选一个配置文件，或者把内容粘贴到下面");
+      setError("请先选择配置文件，或将内容粘贴到下方");
       return;
     }
     setBusy(true);
@@ -79,7 +79,7 @@ export function ImportModal({ onClose, onDone }: Props) {
 
   const doImport = async () => {
     if (!doc.trim()) {
-      setError("先选一个配置文件，或者把内容粘贴到下面");
+      setError("请先选择配置文件，或将内容粘贴到下方");
       return;
     }
     setBusy(true);
@@ -127,7 +127,7 @@ export function ImportModal({ onClose, onDone }: Props) {
     try {
       const added = await importServices(selected);
       if (added === 0) {
-        setScriptError("这些服务已经在列表里了，不用重复导入。");
+        setScriptError("这些服务已在列表中，无需重复导入。");
         setScriptBusy(false);
         return;
       }
@@ -163,7 +163,7 @@ export function ImportModal({ onClose, onDone }: Props) {
           {tab === "config" ? (
             <>
               <div className="field">
-                <label className="field-label">选一个配置文件</label>
+                <label className="field-label">选择配置文件</label>
                 <input
                   className="input import-file"
                   type="file"
@@ -174,7 +174,7 @@ export function ImportModal({ onClose, onDone }: Props) {
               </div>
 
               <div className="field">
-                <label className="field-label">或者把内容粘贴到这里</label>
+                <label className="field-label">或将内容粘贴到此处</label>
                 <textarea
                   className="input"
                   rows={4}
@@ -183,14 +183,14 @@ export function ImportModal({ onClose, onDone }: Props) {
                     setDoc(e.target.value);
                     setSummary(null);
                   }}
-                  placeholder="把导出文件的内容整个粘进来也行"
+                  placeholder="也可将导出文件的内容全部粘贴到此处"
                 />
               </div>
 
               <div className="import-mode">
                 <label
                   className="switch"
-                  title="按 id 对上的只改文件里出现的字段，其它保持不动"
+                  title="按 id 匹配，仅修改文件中出现的字段，其他保持不变"
                 >
                   <input
                     type="radio"
@@ -201,12 +201,12 @@ export function ImportModal({ onClose, onDone }: Props) {
                       setSummary(null);
                     }}
                   />
-                  合并（推荐）：只改文件里提到的
+                  合并（推荐）：仅修改文件中提到的内容
                 </label>
                 <label
                   className="switch"
                   style={{ marginTop: 6 }}
-                  title="会先自动备份现在的配置"
+                  title="替换前会自动备份当前配置"
                 >
                   <input
                     type="radio"
@@ -217,19 +217,19 @@ export function ImportModal({ onClose, onDone }: Props) {
                       setSummary(null);
                     }}
                   />
-                  整体替换：文件里有什么就是什么
+                  整体替换：以文件内容为准
                 </label>
               </div>
 
               {summary && (
                 <div className="import-summary" style={{ marginTop: 12 }}>
-                  {summary.dryRun ? "检查结果（还什么都没改）：" : "导入结果："}
+                  {summary.dryRun ? "检查结果（尚未做任何修改）：" : "导入结果："}
                   <br />
                   新增：<strong>{countsText(summary.added)}</strong>
                   <br />
                   更新：<strong>{countsText(summary.updated)}</strong>
                   <br />
-                  没变化：<strong>{countsText(summary.unchanged)}</strong>
+                  未变化：<strong>{countsText(summary.unchanged)}</strong>
                   {summary.warnings.map((w, i) => (
                     <div key={i}>⚠ {w}</div>
                   ))}
@@ -242,10 +242,10 @@ export function ImportModal({ onClose, onDone }: Props) {
               {error && <div className="error-line">{error}</div>}
             </>
           ) : items === null ? (
-            <p className="field-hint hint">正在扫描旧的启动脚本…</p>
+            <p className="field-hint hint">扫描旧的启动脚本中…</p>
           ) : items.length === 0 ? (
             <p className="field-hint hint">
-              没找到旧脚本，可以直接加本机服务。
+              未找到旧脚本，可直接添加本机服务。
             </p>
           ) : (
             <>
@@ -275,9 +275,9 @@ export function ImportModal({ onClose, onDone }: Props) {
               </div>
               <p
                 className="field-hint hint"
-                title="停掉旧的启动脚本，再到「发布隧道」页点「开始发布」完成接管。"
+                title="停止旧的启动脚本，再到「发布隧道」页点击「开始发布」完成接管。"
               >
-                导入后隧道是暂停状态，确认后到「发布隧道」页启动。
+                导入后隧道为暂停状态，确认后请到「发布隧道」页启动。
               </p>
               {scriptError && <div className="error-line">{scriptError}</div>}
             </>
@@ -295,7 +295,7 @@ export function ImportModal({ onClose, onDone }: Props) {
                 disabled={busy || !doc.trim()}
                 onClick={() => void dryRun()}
               >
-                {busy ? "检查中…" : "先检查一下"}
+                {busy ? "检查中…" : "预检查"}
               </button>
               <button
                 className="btn btn-primary"
@@ -319,8 +319,8 @@ export function ImportModal({ onClose, onDone }: Props) {
 
       {confirmReplace && (
         <ConfirmModal
-          title="要整体替换现在的配置吗？"
-          body="文件里没有的东西会没了（会先自动备份）。"
+          title="确认整体替换当前配置？"
+          body="文件中没有的内容将被删除（替换前会自动备份）。"
           confirmLabel="整体替换"
           danger
           onConfirm={() => {

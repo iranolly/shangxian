@@ -615,6 +615,17 @@ body {
   flex: 1;
 }
 
+/* 保存失败的原因要显示在保存按钮旁边：弹窗很长，错误只放顶部会被滚过去的用户漏掉 */
+.modal-foot .foot-error {
+  margin: 0;
+  min-width: 0;
+  max-width: 62%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
 .steps {
   display: flex;
   gap: 6px;

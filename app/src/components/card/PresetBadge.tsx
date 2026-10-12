@@ -11,7 +11,7 @@ export function PresetBadge({ preset }: Props) {
     return (
       <span
         className="chip preset-badge"
-        title="这条隧道用了云端配置预设，改动后要重新贴一次云端配置才生效"
+        title="该隧道使用了云端配置预设，改动后需重新粘贴一次云端配置才会生效"
       >
         预设：WebSocket
       </span>
@@ -21,7 +21,7 @@ export function PresetBadge({ preset }: Props) {
     return (
       <span
         className="chip preset-badge"
-        title="这条隧道用了云端配置预设，改动后要重新贴一次云端配置才生效"
+        title="该隧道使用了云端配置预设，改动后需重新粘贴一次云端配置才会生效"
       >
         预设：大文件上传
       </span>

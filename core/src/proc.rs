@@ -23,7 +23,7 @@ pub const DEFAULT_OUTPUT_LIMIT: usize = 256 * 1024;
 pub const SPAWN_ERROR_PREFIX: &str = "无法启动命令：";
 
 /// 输出被截断时在文本尾部补的一行说明。
-const TRUNCATED_NOTE: &str = "（输出太多，后面被截断了）";
+const TRUNCATED_NOTE: &str = "（输出过多，后续内容已截断）";
 
 /// 主循环轮询间隔。
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -109,7 +109,7 @@ pub fn run_capture(
                     let _ = out_rx.recv_timeout(RECV_TIMEOUT);
                     let _ = err_rx.recv_timeout(RECV_TIMEOUT);
                     return Err(format!(
-                        "命令超时（{} 秒），已经把它结束。",
+                        "命令超时（{} 秒），已将其结束。",
                         secs_text(timeout)
                     ));
                 }
@@ -168,7 +168,7 @@ fn spawn_reader<R: Read + Send + 'static>(
             let result = read_stream(&mut pipe, limit_bytes);
             let _ = tx.send(result);
         })
-        .map_err(|e| format!("内部错误：起不了子进程输出读取线程（{e}）"))
+        .map_err(|e| format!("内部错误：无法创建子进程输出读取线程（{e}）"))
 }
 
 /// 收一条读线程的结果；等不到（极端情况）就当空输出，不 join 卡死。

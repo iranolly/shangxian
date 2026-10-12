@@ -77,6 +77,8 @@ export function ServiceModal({
 }: Props) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   useModalA11y(dialogRef, onClose);
+  /** 疑似密钥警告区：点保存被拦时滚到它，用户能看见要勾的地方 */
+  const warningRef = useRef<HTMLDivElement | null>(null);
   const configTrusted = useStore((s) => s.app.configTrusted);
   const [name, setName] = useState(service?.name ?? "");
   const [nameEdited, setNameEdited] = useState(Boolean(service));
@@ -241,7 +243,7 @@ export function ServiceModal({
     } catch (e) {
       if (seq !== inspectSeq.current) return;
       setWarnings([
-        { code: "readFailed", text: `没能自动读取启动方式：${String(e)}` },
+        { code: "readFailed", text: `无法自动读取启动方式：${String(e)}` },
       ]);
     } finally {
       if (seq === inspectSeq.current) setInspecting(false);
@@ -318,13 +320,19 @@ export function ServiceModal({
 
   const save = async () => {
     setError("");
+    // 参数疑似含密钥且没勾确认：点保存给出提示并滚到勾选框，不做静默拦
+    if (sensitive && !ackSensitive) {
+      setError("启动参数疑似包含密钥：请先勾选上方的「确认仍然保存」，再点击保存。");
+      warningRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
     const port = Number(localPort);
     if (!name.trim()) {
-      setError("名字不能为空，填一个好认的（比如 pi-web）");
+      setError("名称不能为空，请填写易于识别的名称（例如 pi-web）");
       return;
     }
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      setError("本机端口要填 1~65535 的数字");
+      setError("本机端口需填写 1~65535 的数字");
       return;
     }
     // 编辑时改动启动方式：保存后旧进程照旧跑，界面提示「下次重启才生效」
@@ -347,7 +355,7 @@ export function ServiceModal({
         note: note.trim() || null,
       });
       if (!savedId) {
-        setError("没保存成功：等一下再试");
+        setError("保存失败：请稍后重试");
         return;
       }
       onSaved(launchChanged, savedId);
@@ -369,9 +377,9 @@ export function ServiceModal({
           </h2>
           <p
             className="modal-sub"
-            title="本机服务就是这台电脑上的程序：填好端口和启动方式，才能帮你启动、看护。"
+            title="本机服务即这台电脑上的程序：填写端口和启动方式后，才能启动和看护。"
           >
-            这台电脑上的程序，填好端口和启动方式。
+            这台电脑上的程序，填写端口和启动方式。
           </p>
         </div>
 
@@ -381,7 +389,7 @@ export function ServiceModal({
           <div className="field-row">
             <div className="field">
               <label className="field-label">
-                名字
+                名称
                 {autoFilled.name && (
                   <span className="auto-tag">自动读取 · 未验证</span>
                 )}
@@ -396,7 +404,7 @@ export function ServiceModal({
                   unmark("name");
                 }}
               />
-              <p className="field-hint hint">这个名字只有你自己看得到。</p>
+              <p className="field-hint hint">该名称仅本机可见。</p>
             </div>
             <div className="field">
               <label className="field-label">
@@ -415,27 +423,27 @@ export function ServiceModal({
                   unmark("localPort");
                 }}
               />
-              <p className="field-hint hint">就是这台程序的门牌号。</p>
+              <p className="field-hint hint">即该程序监听的本机端口。</p>
             </div>
           </div>
 
           <div className="field">
             <label className="field-label">
-              本机正在监听的端口（点一下就自动填好）
+              本机正在监听的端口（点击即可自动填写）
             </label>
             {!service && (
               <p
                 className="field-hint hint"
-                title="端口已经登记在别的服务名下时会标出「已登记」，点它直接跳到那台服务的编辑界面，不会重复登记。"
+                title="端口已登记在其他服务名下时会标出「已登记」，点击可直接跳转到该服务的编辑界面，不会重复登记。"
               >
-                点一下自动填；已登记的会跳到那条服务。
+                点击自动填写；已登记的会跳转到对应服务。
               </p>
             )}
             {ports === null ? (
-              <p className="field-hint hint">正在读取…</p>
+              <p className="field-hint hint">读取中…</p>
             ) : ports.length === 0 ? (
               <p className="field-hint hint">
-                没读到端口；先把程序跑起来再回来点。
+                未读取到端口；请先启动程序后再返回点击。
               </p>
             ) : (
               <div className="port-picker">
@@ -450,13 +458,13 @@ export function ServiceModal({
                       onClick={() => pick(p)}
                       title={
                         owner
-                          ? `这个端口已经登记在「${owner.name}」名下，点一下去编辑它`
-                          : "点一下自动填端口和启动方式"
+                          ? `该端口已登记在「${owner.name}」名下，点击可编辑`
+                          : "点击自动填写端口和启动方式"
                       }
                     >
                       <span className="mono">{p.port}</span>
                       <span className="port-proc">
-                        {p.process ? p.process : "读不到程序名"}
+                        {p.process ? p.process : "无法读取程序名"}
                       </span>
                       {owner && (
                         <span className="port-owner">已登记：{owner.name}</span>
@@ -470,12 +478,13 @@ export function ServiceModal({
               </div>
             )}
             {inspecting && (
-              <p className="field-hint hint">正在读取这台程序的启动方式…</p>
+              <p className="field-hint hint">读取该程序的启动方式中…</p>
             )}
           </div>
 
           {warnings.length > 0 && (
             <div
+              ref={warningRef}
               className={`launch-warnings${sensitive ? " sensitive" : ""}`}
             >
               {warnings.map((w, i) => (
@@ -490,7 +499,7 @@ export function ServiceModal({
               {sensitive && (
                 <label
                   className="switch warn-check"
-                  title="参数里有疑似密钥，我确认仍然保存"
+                  title="参数疑似包含密钥，确认仍然保存"
                 >
                   <input
                     type="checkbox"
@@ -503,7 +512,7 @@ export function ServiceModal({
               {rawInfo?.argsDropped && (
                 <div className="raw-cmd">
                   <p className="raw-cmd-label">
-                    原始命令行（只读，参数没填进去）：
+                    原始命令行（只读，参数未填写）：
                   </p>
                   <p className="raw-cmd-text mono" title={rawInfo.text}>
                     {rawInfo.text}
@@ -515,7 +524,7 @@ export function ServiceModal({
 
           <div className="field">
             <label className="field-label">
-              启动程序（可留空 = 只监控不启动）
+              启动程序（可留空 = 仅监控，不启动）
               {autoFilled.launchExe && (
                 <span className="auto-tag">自动读取 · 未验证</span>
               )}
@@ -537,7 +546,7 @@ export function ServiceModal({
             />
             {!launchExe.trim() && (
               <p className="field-hint hint">
-                留空只能看状态，启动、看护、自启用不上。
+                留空则只能查看状态，启动、看护、开机自启均无法使用。
               </p>
             )}
           </div>
@@ -585,7 +594,7 @@ export function ServiceModal({
                 }}
               />
               <p className="field-hint hint">
-                程序从哪个文件夹开始跑（读到的是它现在的工作目录）。
+                程序启动时使用的工作目录（读取到的是当前工作目录）。
               </p>
             </div>
           </div>
@@ -595,7 +604,7 @@ export function ServiceModal({
               <label className="field-label">看护</label>
               <label
                 className="switch"
-                title={noLaunch ? "没填启动程序，用不了" : undefined}
+                title={noLaunch ? "未填写启动程序，无法使用" : undefined}
               >
                 <input
                   type="checkbox"
@@ -603,14 +612,14 @@ export function ServiceModal({
                   disabled={noLaunch}
                   onChange={(e) => setWatch(e.target.checked)}
                 />
-                程序掉了自动拉起来
+                程序停止后自动重新启动
               </label>
             </div>
             <div className="field">
               <label className="field-label">开机自启</label>
               <label
                 className="switch"
-                title={noLaunch ? "没填启动程序，用不了" : undefined}
+                title={noLaunch ? "未填写启动程序，无法使用" : undefined}
               >
                 <input
                   type="checkbox"
@@ -618,19 +627,19 @@ export function ServiceModal({
                   disabled={noLaunch}
                   onChange={(e) => setAutostart(e.target.checked)}
                 />
-                应用启动后帮我跑起来
+                应用启动后自动启动该程序
               </label>
               <p
                 className="field-hint hint"
-                title="两个都开，开机后才会自动把这条服务跑起来。"
+                title="两项都开启后，开机时才会自动启动该服务。"
               >
-                设置里也要开「开机自动启动」。
+                设置中也需开启「开机自动启动」。
               </p>
             </div>
           </div>
           {noLaunch && (
             <p className="hint-danger">
-              没填启动程序：看护和自启用不上。
+              未填写启动程序：看护和开机自启无法使用。
             </p>
           )}
 
@@ -638,7 +647,7 @@ export function ServiceModal({
             <label className="field-label">备注（可留空）</label>
             <input
               className="input"
-              placeholder="例如 平时最常用的控制台"
+              placeholder="例如 常用控制台"
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />
@@ -650,10 +659,22 @@ export function ServiceModal({
             取消
           </button>
           <span className="grow" />
+          {error ? (
+            <span className="error-line foot-error" title={error}>
+              {error}
+            </span>
+          ) : !configTrusted ? (
+            <span
+              className="error-line foot-error"
+              title="配置文件无法读取，请先修复后再修改设置"
+            >
+              配置文件无法读取，请先修复后再修改设置
+            </span>
+          ) : null}
           <button
             className="btn btn-primary"
-            disabled={busy || (sensitive && !ackSensitive) || !configTrusted}
-            title={!configTrusted ? "配置文件读不出来，先修好再改设置" : undefined}
+            disabled={busy || !configTrusted}
+            title={!configTrusted ? "配置文件无法读取，请先修复后再修改设置" : undefined}
             onClick={() => void save()}
           >
             {busy ? "保存中…" : "保存"}
@@ -664,8 +685,8 @@ export function ServiceModal({
 
       {overwriteAsk ? (
         <ConfirmModal
-          title="启动程序 / 启动参数 / 工作目录里已经有内容了。"
-          body="用读到的内容覆盖？取消就保留你填的。"
+          title="启动程序 / 启动参数 / 工作目录已有内容。"
+          body="是否用读取到的内容覆盖？取消将保留已填写的内容。"
           confirmLabel="覆盖"
           onConfirm={confirmOverwrite}
           onClose={() => setOverwriteAsk(null)}

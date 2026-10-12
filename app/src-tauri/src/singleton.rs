@@ -108,7 +108,7 @@ pub fn acquire(data_dir: &Path) -> Singleton {
                 // 两个都拿不到：记录一笔，继续启动（不卡死用户）。
                 shangxian_core::log::log_warn(
                     shangxian_core::log::TAG_SESSION,
-                    "独占锁拿不到（系统策略或目录权限），这次不拦第二个实例",
+                    "未能获取独占锁（系统策略或目录权限），本次不会阻止重复启动",
                 );
                 Singleton::Acquired(SingletonToken::detached())
             }
@@ -149,7 +149,7 @@ pub fn show_same_session_dialog() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW,
         };
-        let text = "上线助手已经在运行了：看看右下角托盘里的图标（可能收在箭头里）。";
+        let text = "上线助手已在运行：请查看右下角托盘中的图标（可能已收起在箭头中）。";
         let text_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let caption_w: Vec<u16> = "上线助手"
             .encode_utf16()
@@ -173,8 +173,8 @@ pub fn show_already_running_dialog() {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             MB_ICONWARNING, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW,
         };
-        let text = "它已经在另一个 Windows 会话里运行了（比如另一个远程桌面）。\
-                   请到那边操作；要在这个会话里用，先在那边的托盘里退出。";
+        let text = "它已在另一个 Windows 会话中运行（例如另一个远程桌面）。\
+                   请到该会话中操作；如需在当前会话中使用，请先在该会话的托盘中退出。";
         let text_w: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let caption_w: Vec<u16> = "上线助手"
             .encode_utf16()

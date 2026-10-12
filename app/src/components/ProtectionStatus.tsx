@@ -1,4 +1,4 @@
-// 访问保护状态（「访问保护」页每行下面用）：
+// 访问保护状态（隧道卡片上用）：
 // - 持久黄标「待核对」：从快照的 protectionCheck 读（unknown / 超过 24 小时 / drift）；
 // - 漂移黄条：云端配置和设置对不上时给「打开云端配置 / 暂时不管」；
 // - HTTPS 红黄灯：从检查结果的 protectionCheck.extra 读（D3 §4）。
@@ -50,27 +50,36 @@ export function protectionSummary(t: TunnelView): {
   if (password && ip) {
     return {
       tone: t.hasPassword ? "ok" : "warn",
-      label: t.hasPassword ? "密码 + IP 白名单" : "密码 + IP 白名单（还没设密码）",
+      label: t.hasPassword ? "密码 + IP 白名单" : "密码 + IP 白名单（尚未设置密码）",
     };
   }
   if (password) {
     return t.hasPassword
-      ? { tone: "ok", label: `要密码（用户名 ${t.accessUser ?? "shangxian"}）` }
-      : { tone: "warn", label: "选了要密码，但还没设" };
+      ? { tone: "ok", label: `已加密（用户名 ${t.accessUser ?? "shangxian"}）` }
+      : { tone: "warn", label: "已启用密码保护，但尚未设置密码" };
   }
   if (ip) {
     const n = countIps(t.accessDetail);
     return n > 0
       ? { tone: "ok", label: `仅白名单 IP（${n} 个）` }
-      : { tone: "warn", label: "仅白名单 IP（还没填 IP）" };
+      : { tone: "warn", label: "仅白名单 IP（尚未填写 IP）" };
   }
   return { tone: "warn", label: "无访问保护" };
+}
+
+/** 待核对 = 没查过 / unknown / 上次核对超过 24 小时（和旧「访问保护」页口径一致） */
+export function protectionPending(t: TunnelView): boolean {
+  const p = t.protectionCheck;
+  if (!p || p.status === "unknown") return true;
+  if (p.status !== "ok") return false;
+  if (typeof p.ts !== "number") return true;
+  return Date.now() - p.ts > FRESH_MS;
 }
 
 /** 云端实际保护的说法（云端检查结果里用）。 */
 export function cloudLabel(c: AccessCheck): string {
   if (c.passwordOn && c.ipOn) return "密码 + IP 白名单";
-  if (c.passwordOn) return "要密码";
+  if (c.passwordOn) return "已加密";
   if (c.ipOn) return `仅白名单 IP（${c.allowIps.length} 个）`;
   return "无访问保护";
 }
@@ -88,8 +97,8 @@ export function cloudCheck(
   if (!c.confFound) {
     return {
       tone: "warn",
-      text: "云端没找到站点配置",
-      hint: "可能还没在面板里建站；建好后再检查一次",
+      text: "云端未找到站点配置",
+      hint: "可能尚未在面板中建站；建站后再检查一次",
       htpasswdMissing,
     };
   }
@@ -109,7 +118,7 @@ export function cloudCheck(
   return {
     tone: same ? "ok" : "warn",
     text: same ? `云端已生效：${cloudLabel(c)}` : `云端实际是：${cloudLabel(c)}`,
-    hint: same ? undefined : "设置还没生效，请重新复制云端配置贴到面板里",
+    hint: same ? undefined : "设置尚未生效，请重新复制云端配置并粘贴到面板",
     htpasswdMissing,
   };
 }
@@ -185,49 +194,49 @@ export function httpsLight(
     return {
       level: "red",
       text: "网址是 https，但服务器上没有 443 站点",
-      hint: "外面打不开；先回面板把证书和 https 开上",
+      hint: "外部（访客）无法访问；请先到面板启用证书和 https",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 0) {
     return {
       level: "red",
-      text: "证书已经过期了",
-      hint: "网页会报警告；去面板点一下「续签证书」",
+      text: "证书已过期",
+      hint: "浏览器会提示警告；请到面板点击「续签证书」",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 7) {
     return {
       level: "red",
-      text: `证书还剩 ${https.certDays} 天，快到期了`,
-      hint: "去面板点「续签证书」；续期用的 /.well-known 那一小块要留着别删",
+      text: `证书还剩 ${https.certDays} 天，即将到期`,
+      hint: "请到面板点击「续签证书」；续期使用的 /.well-known 路径不要删除",
     };
   }
   if (password && plainOpen) {
     return {
       level: "red",
-      text: "密码能用 http:// 明文提交",
-      hint: "等于把密码写在明信片上；请到面板打开「强制 HTTPS」（80 跳 443）",
+      text: "密码可通过 http:// 明文提交",
+      hint: "等同明文传输密码；请到面板启用「强制 HTTPS」（80 跳转 443）",
     };
   }
   if (ip && plainOpen) {
     return {
       level: "yellow",
       text: "http:// 打开时内容不加密",
-      hint: "虽然只有白名单 IP 能进，还是建议在面板打开「强制 HTTPS」",
+      hint: "虽然仅白名单 IP 可访问，仍建议在面板启用「强制 HTTPS」",
     };
   }
   if (!password && !ip && plainOpen) {
     return {
       level: "yellow",
-      text: "http:// 和 https:// 都能开",
-      hint: "建议在面板打开「强制 HTTPS」，让 http:// 自动跳到 https://",
+      text: "http:// 和 https:// 均可访问",
+      hint: "建议在面板启用「强制 HTTPS」，将 http:// 自动跳转到 https://",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 30) {
     return {
       level: "yellow",
       text: `证书还剩 ${https.certDays} 天`,
-      hint: "注意一下；面板一般会自动续，续不上会红",
+      hint: "请注意；面板通常会自动续期，续期失败会显示红灯",
     };
   }
   return null;
@@ -236,16 +245,16 @@ export function httpsLight(
 // ---------- 漂移字段 → 人话 ----------
 
 const DRIFT_TEXT: Record<string, string> = {
-  conf: "云端没找到这条隧道的站点配置",
-  password: "密码开关不一样",
-  ip: "IP 白名单开关不一样",
-  allowIps: "白名单里的 IP 不一样",
+  conf: "云端未找到这条隧道的站点配置",
+  password: "密码开关不一致",
+  ip: "IP 白名单开关不一致",
+  allowIps: "白名单中的 IP 不一致",
   htpasswd: "服务器上还没有密码文件",
 };
 
 function driftText(fields: string[]): string {
   const list = fields.map((f) => DRIFT_TEXT[f] ?? f).join("、");
-  return list || "云端和设置对不上";
+  return list || "云端与设置不一致";
 }
 
 function timeText(at: number): string {
@@ -262,9 +271,11 @@ interface Props {
   tunnel: TunnelView;
   /** 打开这条隧道的「云端配置」弹层（漂移条的按钮） */
   onOpenNginx?: (tunnel: TunnelView) => void;
+  /** 点门禁小牌：打开「访问保护」弹层改密码 / 白名单 */
+  onEdit?: (tunnel: TunnelView) => void;
 }
 
-export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
+export function ProtectionStatus({ tunnel, onOpenNginx, onEdit }: Props) {
   const [state, setState] = useState<CheckState | null>(null);
   const [driftHidden, setDriftHidden] = useState(false);
   const summary = protectionSummary(tunnel);
@@ -329,28 +340,44 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
     chipLabel = `✓ ${summary.label}`;
   } else if (checkStatus === "error") {
     chipTone = "warn";
-    chipLabel = `${summary.label} · 核不上`;
+    chipLabel = `${summary.label} · 核对失败`;
   } else {
     chipTone = "warn";
     chipLabel = `${summary.label} · 待核对`;
   }
   const chipTitle =
-    checkTs === null
-      ? "还没核对过云端，点「检查云端」才算数"
-      : `上次核对：${timeText(checkTs)}`;
+    !password && !ip
+      ? onEdit
+        ? "当前无访问保护；点击可添加访问保护"
+        : "这条隧道当前无访问保护"
+      : checkTs === null
+        ? "尚未核对云端，请点击「检查云端」"
+        : `上次核对：${timeText(checkTs)}`;
 
   const result = state?.phase === "done" ? cloudCheck(tunnel, state.actual) : null;
   const showDrift = checkStatus === "drift" && !driftHidden;
 
+  const chipClass = `chip${onEdit ? " chip-btn" : ""} ${
+    chipTone === "danger" ? "danger" : chipTone
+  }`;
+
   return (
     <div>
       <div className="protect-row">
-        <span
-          className={`chip ${chipTone === "danger" ? "danger" : chipTone}`}
-          title={chipTitle}
-        >
-          {chipLabel}
-        </span>
+        {onEdit ? (
+          <button
+            type="button"
+            className={chipClass}
+            title={chipTitle}
+            onClick={() => onEdit(tunnel)}
+          >
+            {chipLabel}
+          </button>
+        ) : (
+          <span className={chipClass} title={chipTitle}>
+            {chipLabel}
+          </span>
+        )}
         <button
           className="link-btn"
           disabled={state?.phase === "loading"}
@@ -372,7 +399,7 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
         {result?.htpasswdMissing && (
           <span
             className="protect-result warn"
-            title="密码可能进不去，去云端配置里重新生成"
+            title="密码可能无法使用，请在云端配置中重新生成"
           >
             ⚠ 服务器上还没有密码文件
           </span>
@@ -385,9 +412,9 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
       {showDrift && (
         <div className="drift-bar">
           <span
-            title={`${driftText(check?.driftFields ?? [])}；重新贴一次云端配置就能修好`}
+            title={`${driftText(check?.driftFields ?? [])}；重新粘贴一次云端配置即可修复`}
           >
-            云端和设置对不上
+            云端与设置不一致
           </span>
           {onOpenNginx && (
             <button className="link-btn" onClick={() => onOpenNginx(tunnel)}>
@@ -395,19 +422,19 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
             </button>
           )}
           <button className="link-btn" onClick={() => setDriftHidden(true)}>
-            暂时不管
+            暂不处理
           </button>
         </div>
       )}
 
       {checkStatus === "error" && (
         <div className="drift-bar">
-          <span title={check?.error ?? "不知道原因"}>云端核不上</span>
+          <span title={check?.error ?? "原因未知"}>云端核对失败</span>
           <button className="link-btn" onClick={() => void run()}>
             再检查一次
           </button>
           <button className="link-btn" onClick={() => setDriftHidden(true)}>
-            暂时不管
+            暂不处理
           </button>
         </div>
       )}
@@ -423,7 +450,7 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
             <>
               {" "}
               <button className="link-btn" onClick={() => onOpenNginx(tunnel)}>
-                看怎么办
+                查看解决方法
               </button>
             </>
           )}
@@ -437,7 +464,7 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
                   setHttpsDismissed(true);
                 }}
               >
-                我暂时不管
+                暂不处理
               </button>
             </>
           )}
