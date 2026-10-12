@@ -670,7 +670,7 @@ pub struct AppConfig {
 
 | 位置 | 职责 |
 |---|---|
-| `app/src-tauri/src/ctl.rs` | 控制通道方法表（61 条）+ 分发；doctor / diag / 导出导入 / 撤销 / 云端检查的接线；脱敏（配置、状态、日志文本） |
+| `app/src-tauri/src/ctl.rs` | 控制通道方法表（60 条）+ 分发；doctor / diag / 导出导入 / 撤销 / 云端检查的接线；脱敏（配置、状态、日志文本） |
 | `app/src-tauri/src/lib.rs` | Tauri 命令层、启动自检、更新检查、托盘、通知 |
 | `app/src-tauri/src/mainwindow.rs` | 延迟建窗、窗口记忆（`window-state.json`） |
 | `app/src-tauri/src/singleton.rs` | 全局单实例（`Global\Shangxian.App.v1` + `app.lock` 回落） |

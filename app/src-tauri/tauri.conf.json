@@ -26,6 +26,10 @@
     "externalBin": [
       "binaries/cli"
     ],
+    "resources": {
+      "../../docs/AGENTS.md": "AGENTS.md",
+      "../../skills/shangxian/SKILL.md": "SKILL.md"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

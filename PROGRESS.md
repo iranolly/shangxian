@@ -39,7 +39,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 
 1. （可选）接管 viewer 的实战演练；nginx 片段目前按设计“人工应用”
 2. 第二台电脑（203.0.113.10）部署：导入 comfyui(18188)、409piweb(13042)
-3. 文档已随 v0.5 全景修复更新（README / DESIGN / PROGRESS / 使用手册 / AI-AGENT / SKILL，见下节）
+3. 文档已随 v0.5 全景修复更新（README / DESIGN / PROGRESS / 使用手册 / AGENTS.md / SKILL，见下节）
 
 ## 自绘标题栏（2026-10-11 晚完成）
 
@@ -164,7 +164,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **前端（app/）**：点监听端口行先照旧填端口/程序/名字，再自动读取启动方式；读不可靠（`pidMatched=false` 或 `multipleOwners`/`processGone`/`portOwnerChanged`）就不覆盖任何字段，只在警告区说明；`sensitiveArgs` 红字 + 勾选框，不勾不能保存；自动填的字段带「自动读取 · 未验证」，一编辑就消失；工作目录 hint 改成「读到的是现在的工作目录」；启动参数改两行 textarea；参数下方显示只读的「实际会执行的命令行」预览；已登记端口标「已登记：名字」，点击跳到那台服务编辑并自动补全；停止外部进程前弹人话确认框（程序名 + PID），确认后才 `killForeign=true`。
 - **CLI**：`service stop` 默认只停应用自己启动的；`needsConfirm` 时退出码 1 并提示 `--force`（`--force` 传 `killForeign=true`、省略 `expectedPid`）；`service restart` 遇 `needsConfirm` 提示先手动停。
 - **ctl.rs**：方法表更新 `service_stop` 参数/返回，新增 `inspect_process_launch_info`、`preview_launch_command`（当时共 34 条；后续 v0.5 新增 `test_server`，现为 36 条）；`lib.rs` 注册新命令（inspect 走 async + spawn_blocking）。
-- **文档**：AI-AGENT.md（方法表 + 输出样例 + 自动读取纪律）、使用手册.md（字段文案与交互说明）、DESIGN.md §11（实现记录与已知边界：环境变量不捕获、workdir=当前目录、参数近似还原、32/64 位与权限边界）、skills/shangxian/SKILL.md（停止语义）。
+- **文档**：AGENTS.md（方法表 + 输出样例 + 自动读取纪律）、使用手册.md（字段文案与交互说明）、DESIGN.md §11（实现记录与已知边界：环境变量不捕获、workdir=当前目录、参数近似还原、32/64 位与权限边界）、skills/shangxian/SKILL.md（停止语义）。
 - **验证（含审查修复后复验）**：`cd app && npm run build` 通过；`cargo check --workspace --all-targets` 通过；core 单测 25 项 + `env_checks` 7 项 + 真机集成 `proc_features` 7 项 + `stop_foreign` 10 项全过（49 passed / 0 failed / 6 ignored），测试后无孤儿进程。
 - **独立审查修复**：审查提出 1 P1 + 4 P2 已修复并复验 PASS ——（1）停止时先停自家进程整棵树再轮询端口，包装脚本（.bat/.ps1）起的孙进程监听不再被误判成外部、不再弹假确认框；（2）只监控服务一律拒绝停止（无论 --force 与否），CLI 不再提示必然失败的 --force；（3）编辑模式点端口取消后启动程序/参数/工作目录三个字段原样保留；（4）参数因换行/超长被丢弃时在界面上展示只读的原始命令行；另有告警条件与文案对齐、service_stop 改异步等小修。
 
@@ -175,12 +175,12 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **core（已落地）**：`Guardian::stop_all_for_exit() -> (usize, usize)`（已停止 / 没能停）：先停应用自己本次启动的进程整棵树，再对仍在监听的认领进程按程序路径核对归属，核对通过才结束；核对不过的（如配置是包装脚本、实际监听者是子进程）不硬杀、计入没能停。本地服务改用保活作业对象（不设 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`）；首次 `poll` 按端口探测认领（**不做归属核对**），认领后 `user_stopped=false`，看护（watch）对认领进程照常拉起。`ssh.exe` 仍是 kill-on-close 作业。
 - **app**：托盘新增「退出并停止全部本地服务」（id `quit_stop_services`）：`guardian.lock().stop_all_for_exit()` 后先弹结果通知（如「已停止 N 个本地服务；M 个没能停（可能是脚本启动的服务，需要手动处理）」；通知发不出去则写应用日志 `logs/app.log`），再 `app.exit(0)`；普通「退出」保持只退应用、不杀服务。编辑运行中的服务、且启动方式（launchExe/launchArgs/launchWorkdir）有变化时，卡片提示「启动方式已改；正在跑的程序没有动，改动会在下次重启服务时生效」（点「启动」后清除）；认领来的进程停止时先弹确认（复用 `needsConfirm` 流程）。
 - **CLI**：检查无退出应用命令（只有 `app start` / `app status`），无需改语义；停止认领进程与外部进程同路径（`needsConfirm` → `--force`）。
-- **文档**：使用手册新增「退出和重启应用时，本地服务会继续跑」+ 托盘菜单三行；DESIGN.md §11.4（认领不做归属核对、退出停全部语义、包装脚本/首轮认领/只停监听者三条边界）；AI-AGENT.md 铁律 5 / service stop / 离线行为 / 已知坑 11；SKILL.md 铁律 5、8。
+- **文档**：使用手册新增「退出和重启应用时，本地服务会继续跑」+ 托盘菜单三行；DESIGN.md §11.4（认领不做归属核对、退出停全部语义、包装脚本/首轮认领/只停监听者三条边界）；AGENTS.md 铁律 5 / service stop / 离线行为 / 已知坑 11；SKILL.md 铁律 5、8。
 - **验证**：`cd app && npm run build` 通过；`cargo check -p app -p shangxian-cli` 通过，`cargo check --workspace --all-targets` 通过。core 测试 81 passed / 0 failed / 8 ignored（lib 49、env_checks 9、keep_alive 6、proc_features 7、stop_foreign 10；8 项 ignored 均按设计跳过：Docker 靶机 3、真机探针 1、真机对照 1、辅助进程在各测试二进制中共 3），测试后无孤儿进程。
 
 ## v0.5 全景修复 + 文档同步（2026-10-12）
 
-52 条审查发现全部修完，行为定稿。详细梳理见 DESIGN.md §11.5；文档（README / DESIGN / PROGRESS / docs/使用手册.md / docs/AI-AGENT.md / skills/shangxian/SKILL.md）以这批行为为准重排：
+52 条审查发现全部修完，行为定稿。详细梳理见 DESIGN.md §11.5；文档（README / DESIGN / PROGRESS / docs/使用手册.md / docs/AGENTS.md / skills/shangxian/SKILL.md）以这批行为为准重排：
 
 - **密码**：访问密码改**本机 bcrypt**（`$2y$12$…`），服务器不用装 openssl；明文不进命令行、不落盘。
 - **站点目录**：服务器 `vhostDir` → `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`；配置 `<目录>/nginx/<域名>.conf`、密码文件 `<目录>/<域名>.htpasswd`。
@@ -195,7 +195,7 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 
 ## v0.6 可靠性 / 生命周期改造 + 文档同步（2026-10-12）
 
-本轮落地约 60 项改造（版本号 `0.6.0`，即 `cli 0.6.0`；设计底稿 `.setup/design-v2/D0-arbitration.md` ~ `D5-lifecycle.md`，D0 裁决优先，行为以代码为准。架构与数据模型定稿见 **DESIGN.md §12**，Agent 文档见 **docs/AI-AGENT.md（本版对应 ctl 61 条方法 / 配置 v6）**，助手技能见 **skills/shangxian/SKILL.md**（并同步到本机 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`）。
+本轮落地约 60 项改造（版本号 `0.6.0`，即 `cli 0.6.0`；设计底稿 `.setup/design-v2/D0-arbitration.md` ~ `D5-lifecycle.md`，D0 裁决优先，行为以代码为准。架构与数据模型定稿见 **DESIGN.md §12**，Agent 文档见 **docs/AGENTS.md（本版对应 ctl 61 条方法 / 配置 v6）**，助手技能见 **skills/shangxian/SKILL.md**（并同步到本机 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`）。
 
 ### 本轮改造要点（按模块）
 
@@ -215,11 +215,11 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - 集成测试：**43 项**（`env_checks` / `guardian_docker` / `keep_alive` / `proc_features` / `proc_probe` / `stop_foreign` 等；部分需靶机的按设计 `#[ignore]`）。
 - `cargo test -p shangxian-cli`：**17 项通过**。
 - `app` 前端：`npx tsc --noEmit` **0 错误**（`npm run build` 通过）。
-- 说明：以上为本轮验收时的口径；本次文档同步（AI-AGENT / SKILL / DESIGN / PROGRESS）只改文档、不跑应用、不跑 git，数字沿用本轮测试记录。
+- 说明：以上为本轮验收时的口径；本次文档同步（AGENTS.md / SKILL / DESIGN / PROGRESS）只改文档、不跑应用、不跑 git，数字沿用本轮测试记录。
 
 ### 文档同步记录（本次）
 
-- `docs/AI-AGENT.md`：方法表补齐到实现里的 61 条；新增 `stats`/`doctor`/`diag`/`undo`/`config export|import`/`app stop-all|update-check`/`tunnel forget-key`/`--preset` 用法；铁律新增「basic auth 必须配 HTTPS」「云端配置由人粘贴、不装软件、不动全局 nginx.conf」「撤销窗口」「体检/诊断包只读」；配方 1/3/5 补验收（https 打开一次、`cli doctor --deep`、`tunnel check`）；配置章节升级为 v6 + `state.json` + `events.jsonl` + 原因码；附录换成 `cli guide` 原文。
+- `docs/AGENTS.md`：方法表补齐到实现里的 61 条；新增 `stats`/`doctor`/`diag`/`undo`/`config export|import`/`app stop-all|update-check`/`tunnel forget-key`/`--preset` 用法；铁律新增「basic auth 必须配 HTTPS」「云端配置由人粘贴、不装软件、不动全局 nginx.conf」「撤销窗口」「体检/诊断包只读」；配方 1/3/5 补验收（https 打开一次、`cli doctor --deep`、`tunnel check`）；配置章节升级为 v6 + `state.json` + `events.jsonl` + 原因码；附录换成 `cli guide` 原文。
 - `skills/shangxian/SKILL.md`：同步铁律、命令表、验收与排查配方，保持自包含；改完原样拷贝到 `C:/Users/cgt/.pi/agent/skills/shangxian/SKILL.md`，`diff` 验证一致。
 - `DESIGN.md`：HEADER 增加 v0.6 变更；修正 SQLite 等过时表述；新增 **§12 架构与数据模型**（模块清单、数据文件、安全模型、生命周期、明确不做）。
 - `PROGRESS.md`：本节。
@@ -237,3 +237,22 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **文件**：删 `pages/Passwords.tsx`、`components/card/ProtectionBadge.tsx`、`components/card/CloudDriftBar.tsx`；新增 `components/AuditModal.tsx`；改 `App` / `Sidebar` / `Tunnels` / `TunnelCard` / `CardMenu` / `ProtectionStatus` / `ListToolbar` / `listPrefs` / `selectors`。
 - **验证**：`npx tsc --noEmit` 0 错误；`npm run build` 通过。
 - **文档**：DESIGN.md §4.2 / §9.6、docs/使用手册.md（3.2 / 3.4 / 3.7 弹层表 / 排查表）、README.md 文件树同步。
+
+---
+
+## 文档改名与完善：AI-AGENT.md → docs/AGENTS.md（2026-10-13）
+
+给 AI 的说明书改名并重写开头，目标是「完全不懂的 agent 一读就懂用途、知道怎么用、缺信息先问」。
+
+- **改名**：`docs/AI-AGENT.md` → `docs/AGENTS.md`（`git mv`）；全文、README、使用手册、release-notes 里的引用同步改指新名字。
+- **开头重写**：标题下补「这是什么 / 解决什么问题 / 什么时候用」+ 建议阅读顺序（铁律 → 配方 → §4 参考）；版本说明（方法数、配置 v6、日期）挪到文末「文档版本」。
+- **新增「第一步：先找到 cli.exe」**：三种安装形态（安装版 / 便携版 / 源码）的查找脚本；找不到就停下、问用户要路径；点明安装目录同时带 `AGENTS.md` 和 `SKILL.md`，以较新者为准。
+- **铁律**：新增铁律 0「缺信息先问用户」（参数只来自用户或命令输出；示例值全是占位、禁止照抄自编；缺域名 / 云端端口 / 服务器地址账号 / 登录密码 / 访问用户名密码 / 本机端口 / 启动命令 / 要动哪条隧道任一项时，先停下、一次问清）；铁律 1 的「pi-web」改通用表述（本仓库环境举例）；铁律 9 补「`--yes` 只是跳过 y/N，不等于用户同意」。
+- **命令参考**：§4.4 新增 `cli server test <服务器id>` 小节（真连 SSH 最长 15 秒；成功看 `result.message`；失败人话；应用没跑退出码 3；底层 `cli call test_server` 仍可用），`setup-key` 补「先 test 再配免密」；§4.3 `tunnel add` 参数表补 `--url`（公网发布必填、只填纯域名；为空会生成「你的域名」占位、后续核对无意义）、`--access-user`（不填默认 `shangxian`，应显式问用户并传参）、`--remote-port`（来源是用户云端规划；同机同端口只给一条隧道；避开 80 / 443；不确定先问）。
+- **配方**：配方 1 重排为 ports 找端口 / PID → `inspect_process_launch_info` 读启动方式（有警告就停手问用户；拿不到只登记端口）→ servers / server add → server test → setup-key → service add → tunnel add → nginx 片段人工粘贴 → https 验收 → 核对体检（交叉引用 §5.10）；配方 2 / 3 与 §9 开头补「占位值全是示例、值来自用户、禁止照抄」。
+- **引用同步**：README.md（正文链接与目录树改 AGENTS.md，加一句「安装好后 `cli.exe` 旁边带 AGENTS.md 与 SKILL.md」）；docs/使用手册.md（第九节命令行清单加 `cli server test` + 配免密前先 test；安装目录带两份给 AI 的文档；结尾引用改 AGENTS.md）；.setup/release-notes.md（链接改 AGENTS.md，安装体验小节加「安装目录附带 AGENTS.md 与 SKILL.md」）。
+- **本轮另线同步**：`skills/shangxian/SKILL.md` 的内外链接改指 `docs/AGENTS.md`（并把「与安装目录不一致时以较新者为准」写进前言）；`app/src-tauri/tauri.conf.json` 的 `resources` 把 `docs/AGENTS.md` 与 `skills/shangxian/SKILL.md` 随安装包装到程序目录（随同批落地；便携包也已同步携带：build-release.sh 第④步把两份文档拷进便携包、与 exe 同层）。
+- **CLI 与打包**：`cli server test <服务器id>` 子命令落地（`cli server --help` 的说明补「测试连接」；`cli guide` 三处更新：常用命令 / 离线退出码 3 清单 / 底层兜底写法；新增单测，`cargo test -p shangxian-cli` 22 项全过）。安装包两条线都携带 `AGENTS.md` 与 `SKILL.md`（NSIS 经 `resources` 落 `$INSTDIR`；便携 zip 由 `build-release.sh` 第④步拷入，均与 exe 同层）；随后重建 cli release / sidecar / setup.exe / 便携 zip / SHA256SUMS，并用 7z 解包 + md5 复核包内文档与源文件一致。
+- **方法数更正（61→60）**：早前「界面合并与文案规范」（提交 4cb0a3e）移除了 `tunnel_restart`，但 `AGENTS.md` / `SKILL.md` / `DESIGN.md` 里的「61 条方法」未同步；本次统一更正为 **60 条**（PROGRESS 历史条目保持原样）。
+- **附录同步**：AGENTS.md 附录里的 `cli guide` 原文已用新版实际输出整体替换（含新增的 `server test` 行与「完整文档在哪」小节）。
+- **验证**：文档事实逐条对源码核对；CLI 经构建、单测（22 项）与退出码实测（1 / 2 / 3）；安装包与便携包经解包与 md5 复核；全程不跑应用、不做 git 操作；`grep -rn "AI-AGENT" README.md PROGRESS.md docs/ .setup/release-notes.md` 里只剩本节和 AGENTS.md「文档版本」两处对改名的历史记录（不再引用旧文件名作为文档地址），全部文档也没有把不存在的子命令（例如隧道级 restart）当成可用命令；关键事实逐条对着 `cli/src/main.rs`（`server test` 子命令与 15 秒超时）、`app/src-tauri/src/ctl.rs`（`test_server` 方法）、`core/src/nginx.rs`（`--access-user` 默认 `shangxian`、`--url` 留空用「你的域名」占位）、`app/src-tauri/src/lib.rs`（`run_server_test` 返回「连接成功，用时 X 秒」）核对。

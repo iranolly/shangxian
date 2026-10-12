@@ -1,6 +1,6 @@
 ---
 name: shangxian
-description: 上线助手（Shangxian）——把本机服务一键发布到公网：管理 SSH 反向隧道、云端 nginx 配置与访问保护。当用户要发布/暂停/重启本机服务到公网，查看隧道/服务/服务器状态，排查隧道掉线，跑体检或打诊断包，撤销误删，备份/恢复配置，设置访问密码或 IP 白名单，配置免密登录，生成 nginx 配置片段，查看本机监听端口时使用。触发词：上线、发布、公网、隧道、端口转发、内网穿透、掉线、nginx、免密、上线助手、shangxian、tunnel、体检、诊断、撤销。工具 = 托盘应用 + cli.exe 遥控器。GitHub 仓库：https://github.com/iranolly/shangxian
+description: 上线助手（Shangxian）——把本机服务一键发布到公网：管理 SSH 反向隧道、云端 nginx 配置与访问保护。当用户要发布/暂停/重新发布到公网，查看隧道/服务/服务器状态，排查隧道掉线，跑体检或打诊断包，撤销误删，备份/恢复配置，设置访问密码或 IP 白名单，配置免密登录，生成 nginx 配置片段，查看本机监听端口时使用。触发词：上线、发布、公网、隧道、端口转发、内网穿透、掉线、nginx、免密、上线助手、shangxian、tunnel、体检、诊断、撤销。工具 = 托盘应用 + cli.exe 遥控器。GitHub 仓库：https://github.com/iranolly/shangxian
 compatibility: Windows；需要先安装并运行「上线助手」桌面应用（自带 cli.exe）
 ---
 
@@ -10,12 +10,14 @@ compatibility: Windows；需要先安装并运行「上线助手」桌面应用�
 
 - **GitHub 仓库**（源码 / 文档 / Releases 下载安装包和便携包）：
   https://github.com/iranolly/shangxian
-- **完整 agent 文档**（全部字段表、61 个底层方法、已知坑、离线行为）：
-  https://github.com/iranolly/shangxian/blob/main/docs/AI-AGENT.md
+- **完整 agent 文档（`AGENTS.md`）**（全部字段表、60 个底层方法、已知坑、离线行为）：
+  https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
 - 给人看的使用手册：仓库里 `docs/使用手册.md`
 
 **前提**：电脑上已安装「上线助手」（Windows 桌面应用）。没装的话，先让用户去
 Releases 下载安装包或便携包：https://github.com/iranolly/shangxian/releases
+
+**版本口径**：本技能（`SKILL.md`）和完整文档 `AGENTS.md` 随安装包分发（安装目录里、`cli.exe` 旁边）。加载到的技能副本如果和安装目录 / 仓库里的不一致，**以较新的那份为准**（拿不准就对照仓库 main 分支）。本文件只是速查卡；完整字段表、全部方法和已知坑以 `AGENTS.md` 为准。
 
 ## 第一步：找到 cli.exe
 
@@ -41,20 +43,21 @@ echo "$CLI"
 
 ## 铁律（先读，别踩）
 
-1. **不动正在被使用的服务 / 隧道**：停或重启任何东西前先问自己——用户是不是正在用它？特别是**可能承载你与用户当前连接的通道**（网页面板、会话入口这类），碰它等于立刻断线。用户或项目文档里标注的「不许碰」清单永远优先。拿不准就先问。
-2. **暂停隧道 = 别人立刻访问不了**；不确定要不要停，先问用户。
-3. **删除前先查引用**：删本机服务 / 服务器前，先看有没有隧道在用。应用会拒绝并告诉你先删哪几条——**不要绕过**（别手改 config.json 硬删）。
-4. **密码尽量不进命令行**：配免密、算哈希都走标准输入（`echo '密码' | ...`，交互输也不回显）；访问密码的加密（bcrypt）在**本机**算，服务器上不用装东西。`tunnel add/edit --access-password` 会把密码短暂带进本机命令行，介意就用 `server hash-password` 拿哈希再 `cli call add_tunnel/update_tunnel` 带 `accessHash`。密码不写进配置文件、日志和文档。
-5. **访问密码（basic auth）必须配 HTTPS**：只有 80 端口的站点**不算发布完成**。发布完成的验收 = 用 `https://<域名>/` 打开一次（业务页、401 密码框、403 白名单拦截都算线路通），并且 `http://` 会跳 `https://`。发现没证书 / 没强制跳转，让用户去面板处理，别宣告完成。
-6. **云端配置一律人工粘贴**：**永远不要自动写服务器配置、不要装 fail2ban（或任何软件）、不要动全局 `nginx.conf`**。应用只生成片段和文案，`nginx -t`、reload、面板保存都由用户自己来。要动 `http{}` 的东西（如 `limit_req`）默认不生成，只出强警告；防爆破先推 IP 白名单。
-7. **应用退出 = 所有隧道停止；本机服务保活**：本地服务不会跟着应用退，下次打开应用会按端口探测认领（**不做归属核对**，路径核对只在杀进程时做）；不要把「杀掉应用」当重启手段。想连本地服务一起停，用托盘的「退出并停止全部本地服务」或 `cli app stop-all --yes`（升级/卸载前用；**只停运行、不改设置**，升级后原来开着的隧道会按原设置自己连回来）。
-8. **建隧道必须显式写访问保护**：`--access password` 或 `--access ip`（可重复/逗号分隔；两个都写 = 两个条件都要满足）；命令行默认 `none`（谁都能进），只有用户明确要求开放才用。`--access` 写别的值会**直接报错**（不会静默变成无保护）；成功提示会回显最终保护状态。
-9. **改云端端口或改访问保护后**：nginx 片段要重新贴到云端面板才生效（应用不自动下发）。贴完用 `tunnel check <隧道id> --json` 核对云端是不是真的生效（这条命令和界面「检查云端」同一套判定，最长约 30 秒）。
-10. **停止不是应用启动的进程要用户点头**：`service stop` 对端口上不是应用这次启动的进程会先拒绝（`needsConfirm`，应用重启后认领来的旧进程也算），要用户明确同意后才加 `--force`；不要为了“停干净”自己绕过。只监控（没配启动方式）的服务绝不接管，`--force` 也必然失败——先补全启动方式再说。
-11. **删除 / 暂停 / 重置指纹 / 停全部 / 导入配置先确认**：`tunnel stop|remove`、`service remove`、`server remove`、`tunnel forget-key`、`app stop-all`、`config import` 在交互终端会问 y/N；非交互（管道 / 脚本 / agent）**必须加 `--yes`**，不加会直接拒绝、什么都不动。`config import --dry-run` 例外：只检查、不用确认。
-12. **误删有 10 分钟反悔期**：`cli undo`（最近一次）/ `cli undo list` / `cli undo und-xxxxxxxx`；隧道恢复后是**暂停**状态，服务不会自动启动。超过 10 分钟或 20 条就找不回。
-13. **体检 / 诊断包只读**：`cli doctor` / `cli diag` 不改任何配置；诊断包已脱敏（不含密码哈希、密钥、通行证），但含域名/路径，**不要公开贴到网上**。
-14. **所有命令一律加 `--json`**（机器格式好判读）。成功是 `{"ok":true,"result":...}`，失败是 `{"ok":false,"error":"..."}`；退出码 `0` 成功、`1` 出错（含 `doctor --strict` 有没过、undo 过期）、`2` 命令写法错、`3` 这个命令需要应用在跑但没在跑（`app stop-all` 是例外，没在跑也退 0）。
+1. **缺信息先问，不许猜**：所有参数只来自用户的话或命令输出；文档里的 `<域名>`、`<端口>`、示例值都只是占位，不是能照抄的默认值。缺域名、端口、服务器 host/user/密码、访问用户名/密码、本机服务的启动命令时，**先问用户**，问清楚再动手——宁可多问一句，不要编一个凑数。
+2. **不动正在被使用的服务 / 隧道**：停或重启任何东西前先问自己——用户是不是正在用它？特别是**可能承载你与用户当前连接的通道**（网页面板、会话入口这类），碰它等于立刻断线。用户或项目文档里标注的「不许碰」清单永远优先。拿不准就先问。
+3. **暂停隧道 = 别人立刻访问不了**；不确定要不要停，先问用户。
+4. **删除前先查引用**：删本机服务 / 服务器前，先看有没有隧道在用。应用会拒绝并告诉你先删哪几条——**不要绕过**（别手改 config.json 硬删）。
+5. **密码尽量不进命令行**：配免密、算哈希都走标准输入（`echo '密码' | ...`，交互输也不回显）；访问密码的加密（bcrypt）在**本机**算，服务器上不用装东西。`tunnel add/edit --access-password` 会把密码短暂带进本机命令行，介意就用 `server hash-password` 拿哈希再 `cli call add_tunnel/update_tunnel` 带 `accessHash`。密码不写进配置文件、日志和文档。
+6. **访问密码（basic auth）必须配 HTTPS**：只有 80 端口的站点**不算发布完成**。发布完成的验收 = 用 `https://<域名>/` 打开一次（业务页、401 密码框、403 白名单拦截都算线路通），并且 `http://` 会跳 `https://`。发现没证书 / 没强制跳转，让用户去面板处理，别宣告完成。
+7. **云端配置一律人工粘贴**：**永远不要自动写服务器配置、不要装 fail2ban（或任何软件）、不要动全局 `nginx.conf`**。应用只生成片段和文案，`nginx -t`、reload、面板保存都由用户自己来。要动 `http{}` 的东西（如 `limit_req`）默认不生成，只出强警告；防爆破先推 IP 白名单。
+8. **应用退出 = 所有隧道停止；本机服务保活**：本地服务不会跟着应用退，下次打开应用会按端口探测认领（**不做归属核对**，路径核对只在杀进程时做）；不要把「杀掉应用」当重启手段。想连本地服务一起停，用托盘的「退出并停止全部本地服务」或 `cli app stop-all --yes`（升级/卸载前用；**只停运行、不改设置**，升级后原来开着的隧道会按原设置自己连回来）。
+9. **建隧道必须显式写访问保护**：`--access password` 或 `--access ip`（可重复/逗号分隔；两个都写 = 两个条件都要满足）；命令行默认 `none`（谁都能进），只有用户明确要求开放才用。`--access` 写别的值会**直接报错**（不会静默变成无保护）；成功提示会回显最终保护状态。
+10. **改云端端口或改访问保护后**：nginx 片段要重新贴到云端面板才生效（应用不自动下发）。贴完用 `tunnel check <隧道id> --json` 核对云端是不是真的生效（这条命令和界面「检查云端」同一套判定，最长约 30 秒）。
+11. **停止不是应用启动的进程要用户点头**：`service stop` 对端口上不是应用这次启动的进程会先拒绝（`needsConfirm`，应用重启后认领来的旧进程也算），要用户明确同意后才加 `--force`；不要为了“停干净”自己绕过。只监控（没配启动方式）的服务绝不接管，`--force` 也必然失败——先补全启动方式再说。
+12. **删除 / 暂停 / 重置指纹 / 停全部 / 导入配置先确认**：`tunnel stop|remove`、`service remove`、`server remove`、`tunnel forget-key`、`app stop-all`、`config import` 在交互终端会问 y/N；非交互（管道 / 脚本 / agent）**必须加 `--yes`**，不加会直接拒绝、什么都不动。`config import --dry-run` 例外：只检查、不用确认。
+13. **误删有 10 分钟反悔期**：`cli undo`（最近一次）/ `cli undo list` / `cli undo und-xxxxxxxx`；隧道恢复后是**暂停**状态，服务不会自动启动。超过 10 分钟或 20 条就找不回。
+14. **体检 / 诊断包只读**：`cli doctor` / `cli diag` 不改任何配置；诊断包已脱敏（不含密码哈希、密钥、通行证），但含域名/路径，**不要公开贴到网上**。
+15. **所有命令一律加 `--json`**（机器格式好判读）。成功是 `{"ok":true,"result":...}`，失败是 `{"ok":false,"error":"..."}`；退出码 `0` 成功、`1` 出错（含 `doctor --strict` 有没过、undo 过期）、`2` 命令写法错、`3` 这个命令需要应用在跑但没在跑（`app stop-all` 是例外，没在跑也退 0）。
 
 ## 常用命令
 
@@ -84,8 +87,9 @@ echo "$CLI"
 "$CLI" app stop-all --yes           # 升级/卸载前停全部隧道和服务（只停运行、不改设置；没在跑也退 0）
 "$CLI" app update-check             # 查新版（只查，不下载、不安装）
 "$CLI" guide                        # 内置速查（应用没跑也能看）
-"$CLI" methods --json               # 全部底层方法（61 个）
-"$CLI" call test_server '{"serverId":"<服务器id>"}'   # 真连一次这台服务器（agent 可用的测试连接）
+"$CLI" methods --json               # 全部底层方法（60 个）
+"$CLI" server test <服务器id>        # 真连一次这台服务器（最长约 15 秒；新版本 cli 的连接测试）
+"$CLI" call test_server '{"serverId":"<服务器id>"}'   # 老版本 cli 用它测连接（同一条 SSH 测试，也是 agent 兜底写法）
 "$CLI" call check_tunnel_cloud '{"id":"<隧道id>"}' --json  # 完整云端检查：HTTPS/证书/端口/审计
 "$CLI" call <方法> '{"参数":...}'    # 万能口：直接调底层方法（加 --json 才有 {"ok":true,"result":...} 信封）
 ```
@@ -122,16 +126,19 @@ echo "$CLI"
 "$CLI" app status --json                 # 1. 应用在跑吗
 "$CLI" ports --json                      # 2. 找本机端口 + 进程（用户说了端口就直接用）
 "$CLI" services --json                   # 3. 拿服务 id；没有就先登记（见配方 3）
-"$CLI" servers --json                    # 4. 拿服务器 id；没有就先 server add + 配免密
+"$CLI" servers --json                    # 4. 拿服务器 id；没有就先 server add（见配方 3）
+"$CLI" server test <服务器id>            # 5. 先测 SSH 连不连得通（最长约 15 秒）；连不上先解决，别硬建隧道
+#    老版本 cli 没有 server test，用 "$CLI" call test_server '{"serverId":"<服务器id>"}' --json
+#    还没配免密就先 echo '<服务器登录密码>' | "$CLI" server setup-key <服务器id>，然后重测
 "$CLI" tunnel add --service <服务id> --server <服务器id> --remote-port <云端端口> \
        --url <域名> --access password --access-user <用户名> --access-password '<密码>' --json
 # 两个门都要（密码 + 白名单）就再加：--access ip --access-ips "1.2.3.4"
-"$CLI" nginx <新隧道id>                  # 5. 把片段 + 步骤交给用户贴到云端面板
-# 6. 用户贴完后做验收（三项都要）：
+"$CLI" nginx <新隧道id>                  # 6. 把片段 + 步骤交给用户贴到云端面板
+# 7. 用户贴完后做验收（三项都要）：
 "$CLI" tunnel check <新隧道id> --json    #    云端实际生效的保护和设置一致
 "$CLI" doctor --deep                     #    云端配置 / 公网访问（https）/ 域名解析 都 pass
 #    再用 https://<域名>/ 打开一次（业务页 / 401 / 403 都算线路通）
-"$CLI" tunnels --json                    # 7. status = running
+"$CLI" tunnels --json                    # 8. status = running
 "$CLI" logs <新隧道id> --lines 20        #    看到 remote forward success 就是通了
 ```
 
@@ -234,5 +241,5 @@ echo '服务器登录密码' | "$CLI" server setup-key <服务器id>
 ## 深入细节
 
 - 完整字段表、全部方法、已知坑、离线行为、`state.json`/`events.jsonl` 结构：
-  https://github.com/iranolly/shangxian/blob/main/docs/AI-AGENT.md
+  https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
 - 仓库地址：https://github.com/iranolly/shangxian

@@ -8,7 +8,12 @@
 # 出来的东西（都在 target/release/bundle/nsis/ 下）：
 #   Shangxian_<版本>_x64-setup.exe   安装包
 #   shangxian-v<版本>-portable.zip   便携包：app.exe + cli.exe + shangxian.portable + 说明.txt
+#                                    + AGENTS.md + SKILL.md（给 AI 助手看的说明，与 exe 同层）
 #   SHA256SUMS                       上面两个文件的 SHA256 校验和
+#
+# 安装包和便携包都会带上给 AI 助手看的 docs/AGENTS.md 与 skills/shangxian/SKILL.md：
+# 安装包走 app/src-tauri/tauri.conf.json 的 bundle.resources（落在 exe 同层），
+# 便携包走下面第 ④ 步的 cp。
 set -e
 cd "$(dirname "$0")"
 
@@ -43,10 +48,12 @@ if [ ! -f "$SETUP" ]; then
   exit 1
 fi
 
-echo "④ 打便携包（app.exe + cli.exe + shangxian.portable 空文件 + 说明.txt）…"
+echo "④ 打便携包（app.exe + cli.exe + AGENTS.md + SKILL.md + shangxian.portable 空文件 + 说明.txt）…"
 rm -rf "$OUT/portable"
 mkdir -p "$OUT/portable"
 cp target/release/app.exe target/release/cli.exe "$OUT/portable/"
+# 给 AI 助手看的文档，放根层与 exe 同层（安装包里同名文件由 bundle.resources 带上，见文件头说明）
+cp docs/AGENTS.md skills/shangxian/SKILL.md "$OUT/portable/"
 # 便携标记按 D1 §12：exe 旁边有这个文件 → 数据全放 <程序目录>\data，拷走即搬家
 : > "$OUT/portable/shangxian.portable"
 sed "s/<版本>/${VER}/g" packaging/说明.txt > "$OUT/portable/说明.txt"

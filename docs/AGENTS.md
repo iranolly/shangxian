@@ -1,9 +1,16 @@
-# 上线助手 · AI Agent 文档
+# 上线助手 · AI Agent 文档（文件名：`AGENTS.md`）
 
-> 写给 AI agent / 自动化脚本。文中每一条命令、每一个字段，都能在 `cli/src/main.rs`、`core/src/*.rs`（含 `state.rs` / `events.rs` / `doctor.rs` / `cloudcheck.rs` / `reason.rs` / `probe.rs` / `wake.rs` / `log.rs` / `logfile.rs` / `proc.rs`）、`app/src-tauri/src/ctl.rs` 的源码或 `cli.exe` 的实际输出里核对到。
-> 人类用户请读 [使用手册.md](使用手册.md)。
->
-> 本版对应 2026-10-12 的全景修复 + 可靠性/生命周期改造：ctl 底层方法 **61 条**（见第 5 节）、CLI 新增 `stats` / `doctor` / `diag` / `undo` / `config export|import` / `app stop-all|update-check` / `tunnel forget-key`，配置文件升到 **v6**（新增 `settings` 与隧道 `preset`），运行状态存 `state.json`，事件流存 `events.jsonl`。
+**这是什么**：给 AI agent / 自动化脚本看的说明书。读完这份，你会知道怎么用 `cli.exe` 遥控「上线助手」桌面应用，把用户电脑上的服务发布到公网（SSH 隧道 + 云端 nginx + 访问保护）。
+
+**解决什么问题**：不用猜命令、不用先读源码，就能查状态、建隧道、设访问保护、排查掉线、配免密、体检、备份配置；文中每一条命令和字段都能在源码或 `cli.exe` 的真实输出里核对到。
+
+**什么时候用**：用户说「上线 / 发布到公网 / 隧道掉了 / 打不开 / 配免密 / 帮我体检一下 / 删错了想恢复」时读这份。只想了解这个软件给人怎么用，读 [使用手册.md](使用手册.md)。
+
+**建议阅读顺序**：第 1 节「铁律」（安全红线，先读）→ 第 9 节「常用配方」（照着做就能完成整件事）→ 需要查参数 / 字段时再翻第 4 节「命令参考」和第 5 节「底层方法表」。
+
+> 这份文档随安装包一起分发：安装目录里也有 `AGENTS.md` 和 `SKILL.md`（内容与这里一致）；两处不一致时，以较新的那份为准。
+> 文中命令、字段的出处：`cli/src/main.rs`、`core/src/*.rs`（含 `state.rs` / `events.rs` / `doctor.rs` / `cloudcheck.rs` / `reason.rs` / `probe.rs` / `wake.rs` / `log.rs` / `logfile.rs` / `proc.rs`）、`app/src-tauri/src/ctl.rs`，或 `cli.exe` 的实际输出。
+> 本版对应的内容清单（ctl 60 条方法 / 配置 v6 / 日期）见文末「文档版本」。
 
 ---
 
@@ -18,13 +25,41 @@
 
 所以：**要改东西，先确认应用在跑。**
 
+### 第一步：先找到 `cli.exe`（确认软件装没装）
+
+下面的查找脚本以 Git Bash / bash 为例；能跑通就用找到的路径：
+
+```bash
+CLI=""
+for c in "$(command -v cli 2>/dev/null)" \
+         "$LOCALAPPDATA/Shangxian/cli.exe" \
+         "$LOCALAPPDATA/Programs/Shangxian/cli.exe" \
+         "$PROGRAMFILES/Shangxian/cli.exe" \
+         "./target/release/cli.exe" \
+         "./target/debug/cli.exe"; do
+  if [ -f "$c" ]; then CLI="$c"; break; fi
+done
+echo "$CLI"
+```
+
+三种安装形态：
+
+1. **安装版（推荐给用户）**：应用和 `cli.exe` 装在同一个文件夹。找不到时，让用户在开始菜单搜「上线助手」→ 右键 →「打开文件位置」，把那个文件夹里 `cli.exe` 的完整路径告诉你。
+2. **便携版**：`cli.exe` 就在解压出来的文件夹里（和 `app.exe`、`data\` 放在一起）。让用户告诉你解压到了哪。
+3. **源码运行**：如果你正待在源码仓库目录里，用 `./target/release/cli.exe`（或 `target/debug/cli.exe`）。
+
+**找不到任何 `cli.exe`（或不确定用户装没装）就停下，直接问用户**：请他找到「上线助手」的安装位置，把 `cli.exe` 的完整路径发给你。**不要**猜路径、不要自己下载、不要改用手工 ssh 命令代替。
+
+安装目录里同时带 `AGENTS.md`（本文档）和 `SKILL.md`（给 agent 的技能文件），随安装包一起分发；两份内容不一致时，**以较新的那份为准**。
+
 ---
 
 ## 1. 铁律（先读，再动手）
 
 | # | 规则 | 为什么 / 后果 |
 |---|---|---|
-| 1 | **绝不暂停 / 重启 / 删除 pi-web 本机服务和它的隧道**（以及任何标注为「用户正在用」的东西） | 那是用户当前会话正在走的通道，动它 = 立刻断掉用户会话 |
+| 0 | **缺信息先问用户，不要照抄示例、不要自己编**。每一项参数只有两个合法来源：用户明确说的，或命令输出里查到的。示例里的域名、端口、账号、密码、路径**全是占位**。缺以下任何一项就先停下、一次问清，拿到答复再动手：① 域名（`--url`）② 云端端口（`--remote-port`）③ 服务器地址 / 登录账号 / 配免密时要用的登录密码 ④ 访问用户名 / 访问密码 ⑤ 本机端口 ⑥ 服务的启动命令（程序 / 参数 / 工作目录）⑦ 这次要动的具体是哪条隧道 / 服务 / 服务器 | 自编参数会把用户的服务内容发到公网、占错端口、改乱配置，最后都要人收拾。问清楚是最省事的路 |
+| 1 | **绝不暂停 / 重启 / 删除「用户正在用」的本机服务和它的隧道**——包括承载你与用户当前会话的通道，以及项目文档里标注「不许碰」的清单（本仓库长期环境里那条叫 `pi-web`，但重点是「谁在用」，不是名字） | 用户当前会话正走这条通道，动它 = 立刻断线。名字对不上也要按「可能正在用」处理；拿不准先问 |
 | 2 | 删除本机服务 / 服务器前，先看有没有隧道引用 | 应用会拒绝并列出是哪几条。**不要绕过**（不要手改 config.json 硬删） |
 | 3 | 访问密码只在「设置时」出现一次，只存加密结果（bcrypt `$2y$…`）；加密在**本机**算好，服务器不用装任何东西；配免密的登录密码只在内存里用一次 | 密码不落盘、不进日志。不要把明文密码写进 config.json、日志、`cli call` 的参数里；传给命令行时优先走标准输入（`echo 密码 \| cli server hash-password ...`） |
 | 4 | 云端只做「普通 sshd + nginx」，而且**只动站点配置** | 不替用户装任何软件（包括 fail2ban）、不改服务器 sshd 配置；**永不碰全局 `nginx.conf`**（要改 `http{}` 的东西，比如 `limit_req_zone`/`limit_req`，默认只出文案和强警告，不生成、不自动下发）。应用也永远不会自动写服务器上的 nginx 配置或自动 reload——片段一律由人粘贴 |
@@ -32,7 +67,7 @@
 | 6 | 隧道 `paused` = 别人访问不了 | 不确定要不要停，先问 |
 | 7 | 端口写死、冲突报错，不自动漂移 | 改了云端端口必须重新贴 nginx 配置，否则 nginx 还指向老端口 |
 | 8 | 只读命令可以随时跑；写命令（add/edit/start/stop/remove/setup-key）先想清楚再跑 | 写命令会立刻改用户的真实配置并落盘 |
-| 9 | 删除 / 暂停类命令要确认：`tunnel stop` / `tunnel remove` / `service remove` / `server remove` / `tunnel forget-key` / `app stop-all` / `config import` | 交互终端会问 y/N；非交互（管道 / 脚本 / agent）**必须加 `--yes`**，不加直接拒绝、什么都不改（退出码 1） |
+| 9 | 删除 / 暂停类命令要确认：`tunnel stop` / `tunnel remove` / `service remove` / `server remove` / `tunnel forget-key` / `app stop-all` / `config import` | 交互终端会问 y/N；非交互（管道 / 脚本 / agent）**必须加 `--yes`**，不加直接拒绝、什么都不改（退出码 1）。**`--yes` 只是替人回答 y/N，不等于用户同意**：加 `--yes` 前必须先在对话里说清「要动哪个对象、会发生什么」，并拿到用户明确的同意（「可以 / 好 / 确认」这类），没表态就不做 |
 | 10 | 输出和退出码要按约定判读 | 成功（含只读命令、`--json`）是 `{"ok":true,"result":...}`；失败是 `{"ok":false,"error":"..."}`。退出码：0 成功、1 出错、2 命令写法错、**3 = 这个命令需要应用在跑、但它没在跑**（不只是 `app status`；`app stop-all` 是唯一例外：没在跑也退 0）。`cli doctor --strict` 的 1 不是命令跑错，是「检查没过」 |
 | 11 | **basic auth（访问密码）必须配 HTTPS**；只有 80 端口的站点**不算发布完成** | 在 `http://` 上输密码等于明文传密码。发布完成的验收 = 用 `https://<域名>/` 打开一次（看到业务页、401 密码框或 403 白名单拦截都算「线路通」），并且 `http://` 会跳 `https://`。`cli doctor --deep` 的「云端配置 / 公网访问 / 域名解析」三步和更全的 `cli call check_tunnel_cloud`（`tunnel check` 的升级版，多了 HTTPS/证书/端口/审计）都会检查；网址写 `https://` 但云端没开 443、或密码开着却能明文 `http://` 提交，都要让用户去面板打开证书 /「强制 HTTPS」 |
 | 12 | 撤销窗口只有 10 分钟（最多 20 条） | `tunnel remove` / `service remove` / `server remove` 成功后，人话输出会提示「10 分钟内可以撤销：cli undo last」。已删的对象各存一条墓碑（`state.json` 的 `trash`）：`cli undo`（最近一次）/ `cli undo list` / `cli undo und-xxxxxxxx`。**隧道撤销后一律是暂停状态**，想继续发布要再 `cli tunnel start`；服务只恢复登记信息、不启动进程；同 id 已存在或依赖不在（隧道引用的服务/服务器被删了）会拒绝并说明 |
@@ -48,7 +83,7 @@
 ./target/debug/cli.exe status --json         # 一次看全：应用+服务+隧道+服务器
 ./target/debug/cli.exe doctor                # 一键体检（不连服务器；--deep 才连）
 ./target/debug/cli.exe guide                 # 内置速查（人话）
-./target/debug/cli.exe methods --json        # 全部底层方法（61 个）
+./target/debug/cli.exe methods --json        # 全部底层方法（60 个）
 ```
 
 拿到一个陌生环境，先跑 `status --json` + `doctor`，再决定下一步。
@@ -90,7 +125,7 @@ undo      撤销删除（删除后 10 分钟内有效；找不到就退出码 1�
 nginx     生成 nginx 配置片段（人工贴到面板上）
 service   本机服务：新增/编辑/启停/删除
 tunnel    发布隧道：新增/编辑/启停/删除/核对云端保护
-server    云端服务器：新增/编辑/删除/配免密
+server    云端服务器：新增/编辑/删除/测试连接/配免密
 app       应用自己：启动、看状态、停全部服务、查更新
 config    配置备份：导出 / 导入
 methods   列出所有可调用的底层方法（给 agent 看）
@@ -466,16 +501,18 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 |---|---|---|
 | `--service` | 是 | 本机服务 id（不是名字） |
 | `--server` | 是 | 云端服务器 id（不是名字） |
-| `--remote-port` | 是 | 云端端口（写死，不自动漂） |
+| `--remote-port` | 是 | 云端端口（写死，不自动漂）。**值来自用户的云端规划，不要自己挑**：同一台服务器上同一个端口只能给一条隧道（重复会报「云端端口 xxx 已被这个服务器上的其他隧道占用」）；要避开 80 / 443（网页端口，nginx 在用）；用户没给或不确定 → 先问 |
 | `--name` | 否 | 不填 = `<服务名> 发布` |
-| `--url` | 否 | 公网网址，可空 |
+| `--url` | 否 | 公网要用的域名：**只要对外发布就该填**（只填纯域名，不要 `http://`、不要端口和路径）。留空、或写得不合规范时，nginx 片段会用「你的域名」占位并给警告——后续核对、检查云端都没有意义。用户没给域名 → 先问 |
 | `--access` | 否 | `none`（默认）/ `password` / `ip`。**可重复，也支持逗号分隔**：`--access password --access ip` 或 `--access password,ip` = 两个条件都要满足（nginx 默认 satisfy all）。**默认不传 = none = 谁都能进，建隧道时务必显式传值**。写别的值（比如 `passwrod`）会**直接报错**，不会静默变成无保护 |
-| `--access-user` | 否 | 访问用户名（选了 `password` 用） |
+| `--access-user` | 否 | 访问用户名（选了 `password` 用）。不填时生成的 htpasswd 默认用户名是 `shangxian`——**不要默认**：应显式问用户想用什么用户名，并通过 `--access-user` 传进去 |
 | `--access-password` | 否 | 访问密码。加密（bcrypt `$2y$…`）在**本机**算好再写进配置，密码本身不落盘、不碰到服务器（不要服务器装任何东西）。但会短暂出现在本机命令行；介意就用 `hash-password` 拿哈希再 `cli call add_tunnel` |
 | `--access-ips` | 否 | IP 白名单，逗号分隔（选了 `ip` 用） |
 | `--preset` | 否 | nginx 片段预设：`web`（默认，普通网站）/ `ws`（WebSocket）/ `upload`（传大文件）。写别的值直接报错 |
 
 行为：新增后 `enabled: true`，应用立刻开始发布。
+
+> 建隧道前用铁律 0 逐项检查参数来源：`--service` / `--server` 必须用 `cli services --json` / `cli servers --json` 查出来的真实 id（不是名字）；`--url`、`--remote-port`、`--access-user`、`--access-password` 必须来自用户。
 
 人话输出：
 
@@ -491,10 +528,10 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 { "ok": true, "result": { "id": "tun-4d5e6f" } }
 ```
 
-失败例子（云端端口冲突，实测）：
+失败例子（云端端口冲突）：
 
 ```
-✗ 云端端口 19103 已经被这个服务器上的其他隧道用了
+✗ 云端端口 19103 已被这个服务器上的其他隧道占用
 ```
 
 #### `cli tunnel edit`
@@ -590,11 +627,37 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 有隧道引用会拒绝：`✗ 还有隧道挂在这台服务器上，先处理它们`。**要确认**：交互终端问 y/N，非交互必须 `server remove <id> --yes`。
 `--json`：`{ "ok": true, "result": { "ok": true } }`
 
+#### `cli server test <服务器id>`
+
+先敲门再进屋：真连一次 SSH，确认这台服务器现在到底能不能连上。
+
+| 项 | 说明 |
+|---|---|
+| 作用 | 真连一次这台服务器的 SSH（在服务器上跑一句 `echo` 看能不能回话） |
+| 参数 | `<id>`：服务器 id |
+| 前提 | 应用在跑（没在跑退出码 **3**） |
+| 耗时 | 最长 **15 秒**；连不上也会在 15 秒内返回，不会一直等 |
+| 只读 | 只跑一句 `echo`，不改服务器上任何东西 |
+
+人话输出（成功）：
+
+```
+连接成功，用时 0.8 秒
+```
+
+`--json`：`{ "ok": true, "result": { "message": "连接成功，用时 0.8 秒" } }`（成功看 `result.message`，里面是用时）。
+
+失败时是 `{"ok":false,"error":"..."}`、退出码 1，人话形如：`✗ 无法连接 api.example.com（端口 22）：登录被服务器拒绝了：账号或密钥不正确，也可能服务器已禁用这种登录方式。原始报错：Permission denied (publickey).`——原因翻译和隧道掉线同一套，照着人话处理，不要重试硬刷。
+
+> 底层等价方法仍可用：`cli call test_server '{"serverId":"<服务器id>"}' --json`（返回 `{"message":"..."}`）。`cli server test` 就是它的包一层。
+> **配免密前先跑这一步**：先确认连得上，再 `cli server setup-key`；连都连不上时配免密只会白费一次密码。
+
 #### `cli server setup-key <服务器id>`
 
 | 项 | 说明 |
 |---|---|
 | 作用 | 用密码登录一次，自动配好免密（生成密钥 → 写公钥 → 用密钥验证） |
+| 建议先做 | 先 `cli server test <服务器id>` 确认能连上，再配免密；配完可以再 test 一次，确认换成密钥后也连得上 |
 | 密码输入 | **从标准输入读一行**（不进命令行、不进历史）。例：`echo 密码 \| cli server setup-key srv-7a8b9c` |
 | 前提 | 应用在跑；服务器允许密码登录；服务器上 `~/.ssh` 权限正常 |
 | 副作用 | 生成 `<配置文件夹>\keys\<服务器id>_ed25519`（+ `.pub`），并把服务器的 `keyPath` 指向它 |
@@ -620,6 +683,8 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 ```
 
 常见失败（源码里的原话）：`密码不对，再试一次（或者检查一下登录账号）`、`这台服务器不允许用密码登录（它接受的方式：...）`、`公钥写进去了，但用密钥登录还是没成功。请检查服务器上 ~/.ssh 的权限（目录 700、authorized_keys 文件 600）`。
+
+> 顺序建议：`cli server test <id>`（能连）→ `cli server setup-key <id>`（配免密）→ 再 `cli server test <id>` 一次（确认换成密钥后也能连）。
 
 #### `cli server hash-password <服务器id>`
 
@@ -849,9 +914,9 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 
 ## 5. 底层方法表（`cli methods` 的真实内容）
 
-`cli call <方法> '<参数JSON>'` 能调的全部方法，**共 61 条**（源码 `app/src-tauri/src/ctl.rs` 的 `METHODS` 常量；`cli methods` 打印的就是这张表）。
+`cli call <方法> '<参数JSON>'` 能调的全部方法，**共 60 条**（源码 `app/src-tauri/src/ctl.rs` 的 `METHODS` 常量；`cli methods` 打印的就是这张表）。
 
-> 数量说明：设计稿（`.setup/design-v2/D2-contracts.md` §15.2）冻结的是「36 旧 + 12 新 + 4 云端 = 52」，实现时又追加了生命周期与管理类（`stop_all`、恢复状态三件套、免打扰两件套、`restart_service_rotate_logs`、`forget_host_key` 等），所以以源码的 61 条为准。
+> 数量说明：设计稿（`.setup/design-v2/D2-contracts.md` §15.2）冻结的是「36 旧 + 12 新 + 4 云端 = 52」，实现时又追加了生命周期与管理类（`stop_all`、恢复状态三件套、免打扰两件套、`restart_service_rotate_logs`、`forget_host_key` 等），所以以源码的 60 条为准（旧的 61 条含已被移除的 `tunnel_restart`）。
 
 ### 5.1 数据与日志
 
@@ -1392,39 +1457,61 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 
 ## 9. 常用配方
 
-> 下面例子里 `<...>` 是占位符，用 `cli services --json` / `cli servers --json` / `cli tunnels --json` 查真实 id。
+> 下面例子里 `<...>`、域名、端口、账号、密码、IP、路径**全是占位**：每一项都必须来自用户或命令输出（见铁律 0），**禁止照抄示例、自己编**。id 用 `cli services --json` / `cli servers --json` / `cli tunnels --json` 查真值。
 
 ### 配方 1：把本机 8188 发布到公网（从零开始）
 
+> 本配方里的 `comfy.example.com`、`13000`、`me`、`你的访问密码`、`D:\AI\ComfyUI-aki-v1.7\...`、`srv-7a8b9c` **全是占位**；缺域名 / 云端端口 / 服务器地址账号 / 访问用户名密码 / 启动命令时，先按铁律 0 问用户，别照抄。
+
 ```bash
-# 0. 确认应用在跑
+# 0. 确认应用在跑（退出码 3 = 没在跑；先 cli app start，或请用户手动打开应用）
 cli app status --json
 
-# 1. 登记本机服务（如果还没有）
+# 1. 看本机在听哪个端口、是哪个进程在听（记下端口和 pid）
+cli ports --json
+# → [{"port":8188,"pid":4108,"process":"python.exe","exe":"D:\\AI\\ComfyUI-aki-v1.7\\python\\python.exe"}]
+
+# 2. 让应用读出这个进程的启动方式（专用方法，详见 5.10）
+cli call inspect_process_launch_info '{"port":8188,"expectedPid":4108}' --json
+# → 拿到 exe / args / workdir；先看 warnings：
+#   · warnings 非空（multipleOwners / processGone / portOwnerChanged）或 pidMatched=false
+#     → 这份信息不可靠：**停下来，把 warnings 转告用户并问清楚启动命令**，不要拿它登记服务
+#   · 读不到启动方式 → 只登记端口（不填 --exe，纯监控），并告诉用户「只能看状态、不能帮你启动」
+#   · warnings 里有 sensitiveArgs（参数疑似带密钥）→ 保存前必须让用户明确确认
+
+# 3. 登记本机服务（已登记过就跳过；纯监控就不填 --exe/--args/--workdir）
 cli service add --name comfyui --port 8188 \
-  --exe "D:\AI\ComfyUI-aki-v1.7\python\python.exe" \
-  --args "main.py" --workdir "D:\AI\ComfyUI-aki-v1.7" \
+  --exe "<步骤 2 读到的程序路径>" \
+  --args "<步骤 2 读到的参数>" --workdir "<步骤 2 读到的工作目录>" \
   --watch --json
 # → {"ok":true,"result":{"id":"svc-1a2b3c"}}
 
-# 2. 看服务器 id（没有就先 cli server add / cli server setup-key）
+# 4. 找服务器 id；没有就先新增（host / user 必须由用户提供，别猜）
 cli servers --json
+cli server add --name 香港-1 --host <服务器地址> --user <登录账号> --json
 
-# 3. 建隧道并开始发布（显式要求密码，别用默认的 none）
+# 5. 先确认服务器连得上，再配免密
+cli server test <服务器id> --json
+# → {"ok":true,"result":{"message":"连接成功，用时 0.8 秒"}}
+echo '服务器登录密码' | cli server setup-key <服务器id>   # 密码走 stdin，不进命令行、不进历史
+cli server test <服务器id> --json                        # 确认换成密钥后也能连
+
+# 6. 建隧道并开始发布（显式要求密码，别用默认的 none；url / remote-port / access-user 都来自用户）
 cli tunnel add --service svc-1a2b3c --server srv-7a8b9c \
-  --remote-port 13000 --url comfy.example.com \
-  --access password --access-user me --access-password '你的访问密码' --json
+  --remote-port <用户规划的云端端口，避开 80/443> \
+  --url <用户给的域名，只填纯域名> \
+  --access password --access-user <用户给的用户名> --access-password '用户的访问密码' --json
 # 两个门都要（密码 + 白名单）就再加：--access ip --access-ips "1.2.3.4"
 # → {"ok":true,"result":{"id":"tun-4d5e6f"}}
 
-# 4. 生成云端 nginx 配置（复制粘贴到小皮面板 → 站点 → 配置修改 → 重载）
+# 7. 生成云端 nginx 配置（把片段交给用户，让他自己贴：面板 → 站点 → 配置修改 → 重载）
 cli nginx tun-4d5e6f
 
-# 5. 人工把片段贴进面板后，用 https:// 打开一次（验收必须做这一步）
+# 8. 用户贴完并重载后，请他用 https:// 打开一次（验收必须做这一步，agent 不能代宣告完成）
 #    看到业务页 / 401 密码框 / 403 白名单拦截都算线路通；
-#    如果网址写的是 https 但打不开，先回面板把证书和 HTTPS 开上。
+#    网址写的是 https 但打不开 → 回面板把证书和「强制 HTTPS」开上。
 
-# 6. 核对与体检（三项都过才算发布完成）
+# 9. 核对与体检（三项都过才算发布完成）
 cli tunnels --json                    # status 是不是 "running"
 cli logs tun-4d5e6f --lines 20        # 看有没有 "remote forward success"
 cli tunnel check tun-4d5e6f --json    # 云端实际生效的保护和设置对不对得上
@@ -1434,6 +1521,8 @@ cli doctor --deep                     # 云端配置 / 公网访问（https）/ 
 **发布完成的定义**：`tunnels --json` 里 `status = "running"`、`tunnel check` 不报不一致、`doctor --deep` 的「云端配置 / 公网访问 / 域名解析」不报 `fail`、**用 `https://` 打开过一次**。只有 80 端口的站点不算发布完成（**basic auth 必须配 HTTPS**）。
 
 ### 配方 2：看某条隧道为什么掉线
+
+> `<隧道id>` / `<服务id>` 用 `cli tunnels --json` / `cli services --json` 查真值；示例里的域名、端口、IP、密码都是占位，**值来自用户，禁止照抄**。诊断命令都是只读的，只能看不能改。
 
 ```bash
 cli tunnels                    # 人话列表里坏状态会带 "↳ 原因"
@@ -1457,6 +1546,8 @@ cli doctor                     # 一步到位看九项；--deep 才连云端和�
 | `retryInSecs` 有值 | 正在退避重试，别干扰；等它自己连，实在不想等就先停后启（`tunnel stop <id> --yes` → `tunnel start <id>`） |
 
 ### 配方 3：给隧道加 / 换访问密码（也可以加 IP 白名单，两个能一起开）
+
+> 下面 `me`、`新密码`、`1.2.3.4`、`<隧道id>` 全是占位：用户名 / 密码必须由用户给，白名单 IP 由用户给（可以先用「公网 IP 助手」查到真实出口 IP），隧道 id 用 `cli tunnels --json` 查。**禁止照抄示例值**。
 
 方式 A（简单，密码会短暂出现在本机命令行里）：
 
@@ -1532,7 +1623,7 @@ cli doctor --deep
 cli tunnel remove <老隧道id> --yes
 ```
 
-⚠️ 涉及 pi-web 的隧道**任何情况下都不要动**。
+⚠️ 涉及「用户正在用」的隧道（本仓库环境里那条叫 pi-web）**任何情况下都不要动**。
 
 ### 配方 6：应用没在跑
 
@@ -1623,7 +1714,7 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
 
 | # | 事项 | 说明 |
 |---|---|---|
-| 1 | **pi-web 红线** | 本机 pi-web 服务 + 它的隧道是用户正在用的通道。任何时候不暂停、不重启、不删除 |
+| 1 | **不动用户正在用的东西** | 本仓库环境里用户正在用的是 pi-web 服务 + 它的隧道；其它环境按「谁在用」判断（用户当前会话依赖的通道、网页入口这类）。任何时候不暂停、不重启、不删除，拿不准先问 |
 | 2 | `tunnel add --access` 默认 `none` | 界面向导默认 `password`，命令行默认**无保护**。agent 建隧道必须显式传 `--access password` 或 `--access ip`（可重复/逗号分隔，两个都传 = 两个条件都要满足） |
 | 3 | `hash-password` 在本机算 | 用 bcrypt（`$2y$12$…`），**不连服务器、不需要服务器装任何东西**；只要服务器 id 存在于配置里就能算。密码超过 72 字节会被拒绝 |
 | 4 | `tunnel add/edit --access-password` 也是本机算哈希 | 不依赖服务器；但密码会短暂出现在本机命令行，介意就用配方 3 的方式 B。`--access` 写错、`--access-password` 配不上 `--access password` 都会直接报错（不会静默丢掉保护） |
@@ -1667,105 +1758,121 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
 这个命令行是「上线助手」桌面应用的遥控器。应用才是真正看护隧道的那个，
 它常驻在系统托盘里；命令行只负责查询和改配置。
 
-## 三条铁律（别踩）
-1. **不许碰 pi-web**：本机 pi-web 服务 + 它的隧道是用户正在用的通道，暂停/重启它会直接断掉会话。
-2. 隧道暂停后别人就访问不了了；不确定要不要停就先问。
-3. 删除本机服务/服务器前，先看它有没有被隧道引用（有引用时应用会拒绝并告诉你）。
+## 三条铁律（务必遵守）
+1. **严禁操作 pi-web**：本机 pi-web 服务及其隧道是用户正在使用的通道，暂停/重启会直接中断会话。
+2. 隧道暂停后外部将无法访问；不确定是否要停止时，请先询问。
+3. 删除本机服务/服务器前，请先查看它是否被隧道引用（存在引用时应用会拒绝并给出说明）。
 
-## 危险操作（删除 / 暂停 / 重置指纹 / 导入配置）要确认
-- 交互终端（人敲命令）：先打印要动哪个对象，再问你 y/N；回车 = 什么都不做。
+## 危险操作（删除 / 暂停 / 重置指纹 / 导入配置）需要确认
+- 交互终端（人工输入命令）：先打印将要操作的对象，再询问 y/N；回车 = 不执行任何操作。
 - 非交互（管道 / 脚本 / AI agent）：必须显式加 --yes，否则拒绝执行并报错。
       cli tunnel stop <隧道id> --yes
       cli tunnel remove <隧道id> --yes
       cli service remove <服务id> --yes
       cli server remove <服务器id> --yes
-      cli tunnel forget-key <隧道id> --yes   # 服务器重装过、指纹变了才用
-      cli app stop-all --yes                  # 升级 / 卸载前停全部隧道和服务（安装器调它）
-      cli config import 备份.json --yes       # 导入配置；先看看会改什么就加 --dry-run
+      cli tunnel forget-key <隧道id> --yes   # 仅在服务器重装过、指纹变化时使用
+      cli app stop-all --yes                  # 升级 / 卸载前停止全部隧道和服务（安装器会调用它）
+      cli config import 备份.json --yes       # 导入配置；如需先查看将修改的内容，请加 --dry-run
 
 ## 最常用的命令
-    cli status --json                       # 一次看全：应用 + 服务 + 隧道 + 服务器
+    cli status --json                       # 一次查看全部：应用 + 服务 + 隧道 + 服务器
     cli services --json                     # 本机服务清单（id、端口、状态、启动方式）
     cli tunnels --json                      # 发布隧道清单（服务→服务器、云端端口、状态）
     cli servers --json                      # 云端服务器清单
     cli ports --json                        # 本机正在监听的端口（带进程名和程序路径）
     cli tunnel start <隧道id>               # 开始发布
-    cli tunnel stop <隧道id>                # 暂停发布（要确认；非交互加 --yes）
-    cli service start <服务id>              # 拉起本机服务（用它登记的启动方式）
-    cli service stop <服务id>               # 停止（不是应用启动的进程会先拦一下；配了启动方式才加 --force 真停，只监控的服务会被拒绝）
-    cli logs <隧道id> --lines 80            # 看隧道日志（--kind service 看服务日志，别的值报错）
-    cli logs --source all --format json --json  # 事件 + 应用日志 + 所有隧道/服务日志（合并读）
-    cli logs <隧道id> --archive 1           # 看上一份轮转备份（0/1/2）
-    cli nginx <隧道id>                      # 生成要贴到云端面板的 nginx 配置片段
-    cli tunnel check <隧道id>               # 去云端看实际开着的访问保护（只读，不改服务器）
+    cli tunnel stop <隧道id>                # 暂停发布（需要确认；非交互加 --yes）
+    cli service start <服务id>              # 启动本机服务（使用已登记的启动方式）
+    cli service stop <服务id>               # 停止（非应用启动的进程会先拦截；已配置启动方式时加 --force 可实际停止，仅监控的服务会被拒绝）
+    cli logs <隧道id> --lines 80            # 查看隧道日志（--kind service 查看服务日志，其它值会报错）
+    cli logs --source all --format json --json  # 事件 + 应用日志 + 所有隧道/服务日志（合并读取）
+    cli logs <隧道id> --archive 1           # 查看上一份轮转备份（0/1/2）
+    cli nginx <隧道id>                      # 生成需要粘贴到云端面板的 nginx 配置片段
+    cli tunnel check <隧道id>               # 到云端查看实际启用的访问保护（只读，不修改服务器）
 
 ## 体检 / 排查
     cli doctor                              # 体检：应用、文件夹、SSH、端口、服务器、隧道、云端、公网、域名
-    cli doctor --deep                       # 深度检查（会连服务器和域名，慢一点）
-    cli doctor --strict                     # 有没过就直接退出码 1（这不算命令错误，是「检查没过」）
-    cli stats                               # 运行多久、隧道重连情况、今日重连次数、更新状态
-    cli diag --out 诊断包.zip               # 打一个脱敏诊断包（发给帮你排查的人）
-    cli app stop-all --yes                  # 升级 / 卸载前停全部隧道和服务（安装器调它）
-    cli app update-check                    # 查一下有没有新版本（只查，不下载、不安装）
+    cli doctor --deep                       # 深度检查（会连接服务器和域名，耗时较长）
+    cli doctor --strict                     # 有未通过项就直接退出码 1（这不算命令错误，是「检查未通过」）
+    cli stats                               # 运行时长、隧道重连情况、今日重连次数、更新状态
+    cli diag --out 诊断包.zip               # 生成脱敏诊断包（发给排查人员）
+    cli server test <服务器id>               # 测试连接：真连一次 SSH（最长 15 秒）
+    cli app stop-all --yes                  # 升级 / 卸载前停止全部隧道和服务（安装器会调用它）
+    cli app update-check                    # 检查是否有新版本（仅检查，不下载、不安装）
 
 ## 撤销删除
     cli undo                                # 撤销最近一次删除（= cli undo last）
-    cli undo list                           # 看还能撤销哪些（删除后 10 分钟内、最多 20 条）
+    cli undo list                           # 查看可撤销的记录（删除后 10 分钟内、最多 20 条）
     cli undo und-3f9a1c2d                   # 按令牌撤销指定的一条
-- 隧道撤销后一律是暂停状态，想继续发布再 cli tunnel start <id>。
-- 删除命令成功后，人话输出会提示「（10 分钟内可以撤销：cli undo last）」。
+- 隧道撤销后一律是暂停状态，如需继续发布请执行 cli tunnel start <id>。
+- 删除命令成功后，文本输出会提示「（10 分钟内可以撤销：cli undo last）」。
 
 ## 配置类
     cli service add --name 我的网站 --port 8188 --exe C:\path\python.exe --args "main.py" --watch
     cli service edit <服务id> --port 8189 --watch true
-    cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开）
+    cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开启）
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
-    cli tunnel add ... --preset ws          # 发布预设：web（默认）/ ws（WebSocket）/ upload（传大文件）
+    cli tunnel add ... --preset ws          # 发布预设：web（默认）/ ws（WebSocket）/ upload（上传大文件）
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
-    cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两道门同时开
-    cli tunnel edit <隧道id> --access password --access-password 新密码   # 换密码
+    cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两种保护同时启用
+    cli tunnel edit <隧道id> --access password --access-password 新密码   # 更换密码
     cli tunnel edit <隧道id> --access none   # 取消访问保护（不传 --access = 保持原样）
     cli server add --name 香港-1 --host api.example.com --user user
-    cli server add --name 宝塔机 --host api.example.com --user root --vhost-dir /www/server/panel/vhost   # 站点目录：密码文件/站点配置放哪
-    cli server edit <服务器id> --vhost-dir /www/server/panel/vhost   # 不写 = 保留原来的站点目录，不会被清掉
-    echo 服务器密码 | cli server setup-key <服务器id>     # 用密码登录一次，自动配好免密
-- --access 只认 password / ip / none，拼错直接报错（不会悄悄变成「无保护」）；--access= 这种空值也直接报错，要取消保护写 --access none。
-- --access-password 必须配 --access password，--access-ips 必须配 --access ip，配不上会报错。
-- 每次改完都会回显最终保护状态，比如「访问保护：密码 + 白名单（只允许指定 IP），已生效」。
+    cli server add --name 宝塔机 --host api.example.com --user root --vhost-dir /www/server/panel/vhost   # 站点目录：密码文件与站点配置的存放位置
+    cli server edit <服务器id> --vhost-dir /www/server/panel/vhost   # 不写 = 保留原有站点目录，不会被清除
+    echo 服务器密码 | cli server setup-key <服务器id>     # 使用密码登录一次，自动配置免密登录
+- --access 仅支持 password / ip / none，拼写错误会直接报错（不会静默变成「无保护」）；--access= 这种空值也会直接报错，如需取消保护请写 --access none。
+- --access-password 必须配 --access password，--access-ips 必须配 --access ip，不匹配会报错。
+- 每次修改后都会回显最终保护状态，例如「访问保护：密码 + 白名单（只允许指定 IP），已生效」。
 
 ## 配置备份（导出 / 导入）
     cli config export --out 备份.json     # 导出（默认脱敏：不含密码哈希、不含密钥路径）
-    cli config export --with-paths        # 连密钥路径一起导出（仍然不含密码哈希）
-    cli config import 备份.json --dry-run # 先看会改什么（不写盘、不用确认）
-    cli config import 备份.json --yes     # 合并导入（按 id 合并，没写的字段保持现状）
+    cli config export --with-paths        # 同时导出密钥路径（仍然不含密码哈希）
+    cli config import 备份.json --dry-run # 先查看将修改的内容（不写盘、无需确认）
+    cli config import 备份.json --yes     # 合并导入（按 id 合并，未写的字段保持原值）
     cli config import 备份.json --mode replace --yes   # 整份替换（导入前自动备份）
-- 导入会改设置：交互终端会问你 y/N；管道 / 脚本 / agent 必须加 --yes，否则退出码 1。
-- 用导出的脱敏文件导回来，密码哈希和密钥路径会保留（不会被清空）。
+- 导入会修改设置：交互终端会询问 y/N；管道 / 脚本 / agent 必须加 --yes，否则退出码 1。
+- 使用导出的脱敏文件导回时，密码哈希和密钥路径会保留（不会被清空）。
 
-## 应用没在跑怎么办
-    cli app status        # 看它在不在；没在跑时退出码 3，JSON 里 offline: true
-    cli app start         # 叫起来（静默进托盘）
-    cli app stop-all --yes # 停掉全部发布隧道和应用拉起的本机服务（升级 / 卸载前用）
-- `cli app stop-all` 是特例：应用没在跑时直接打印「没什么要停的」并退出码 0（安装器不会卡）。
-- 离线也能用的：status / services / tunnels / servers（直接读配置文件，状态字段是 unknown）、
-  cli doctor（本地跑能跑的那几步）、cli undo list（读运行记录）、cli config export（读配置文件）。
-- 需要应用才能跑的（离线时退出码 3）：stats / diag / logs / undo（真撤销）/ config import / app update-check。
-- 要改设置、要起停任何东西，都必须先 cli app start。
+## 应用未运行时怎么办
+    cli app status        # 查看是否在运行；未运行时退出码 3，JSON 中 offline: true
+    cli app start         # 启动应用（静默进入托盘）
+    cli app stop-all --yes # 停止全部发布隧道和应用启动的本机服务（升级 / 卸载前使用）
+- `cli app stop-all` 是特例：应用未运行时直接输出「没有需要停止的内容」并退出码 0（安装器不会卡住）。
+- 离线也能用的：status / services / tunnels / servers（直接读取配置文件，状态字段为 unknown）、
+  cli doctor（本地可执行的那几步）、cli undo list（读取运行记录）、cli config export（读取配置文件）。
+- 需要应用运行的（离线时退出码 3）：stats / diag / logs / undo（实际撤销）/ config import / app update-check / server test。
+- 修改设置、启停任何内容，都必须先执行 cli app start。
 
-## 想调更底层的东西
-    cli methods                       # 列出所有能调的方法 + 参数格式
-    cli call <方法> '{"参数":...}'    # 直接调（万能口）
+## 需要调用更底层接口时
+    cli methods                       # 列出所有可调用的方法 + 参数格式
+    cli call <方法> '{"参数":...}'    # 直接调用（通用入口）
+- 老版本（没有子命令时）可以直接调底层方法：cli call test_server '{"serverId":"..."}'（等价于 cli server test <服务器id>）。
+
+## 完整文档在哪
+- 安装目录里（和 cli.exe 同一层）有一份 AGENTS.md：命令全表、配方、已知坑、安全红线，给 AI 助手看的完整说明；旁边还有一份 SKILL.md（速查技能）。
+- 在线版：https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
 
 ## 输出约定
-- 默认中文人话；加 `--json` 输出机器格式（agent 一律加）。读命令、写命令都是同一个信封。
+- 默认输出中文文本；加 `--json` 输出机器格式（agent 一律加）。读命令、写命令都是同一个信封。
 - 成功（status / services / tunnels / servers / ports / logs / nginx / stats / doctor / diag / methods / call / guide / undo / config / 各种改配置）：
   {"ok": true, "result": ...}
-- 失败：{"ok": false, "error": "人话原因"}
-- 退出码：0 = 成功（确认里选「不」也是 0）；1 = 出错（包括非交互下拒绝执行、undo 令牌过期、doctor --strict 有没过）；
-  2 = 命令写法不对（参数名拼错、少值）；3 = 这个命令需要应用在跑，但它没在跑（JSON 里 offline: true）。
-- `cli logs --format json` 不带 --json 时输出 JSONL（一行一条，无信封，给管道用）；
+- 失败：{"ok": false, "error": "原因说明"}
+- 退出码：0 = 成功（确认里选「不」也是 0）；1 = 出错（包括非交互下拒绝执行、undo 令牌过期、doctor --strict 有未通过项）；
+  2 = 命令写法不对（参数名拼错、少值）；3 = 这个命令需要应用运行，但应用未运行（JSON 里 offline: true）。
+- `cli logs --format json` 不带 --json 时输出 JSONL（一行一条，无信封，供管道使用）；
   带 --json 时才给上面的信封（`--format lines --json` 保持旧形状，result 里有 text）。
-- `cli call` 不带 --json 时按人话打印返回值，加了才给上面的 JSON 信封。
-- 输密码（cli server setup-key）时屏幕上不回显，管道传也一样安全。
-- `cli doctor --strict` 退出码 1 不是命令跑错，是「检查没过」；人话输出会写「✗ 自检有 N 项没过」。
+- `cli call` 不带 --json 时按文本方式打印返回值，加了才给上面的 JSON 信封。
+- 输入密码（cli server setup-key）时屏幕上不回显，通过管道传入同样安全。
+- `cli doctor --strict` 退出码 1 不是命令执行错误，而是「检查未通过」；文本输出会写「✗ 体检有 N 项未通过」。
 ```
+
+---
+
+## 文档版本
+
+- 本版对应 2026-10-12 的全景修复 + 可靠性 / 生命周期改造；2026-10-13 完成文档改名（`AI-AGENT.md` → `AGENTS.md`）与可读性完善（补「先找到 cli.exe」「缺信息先问」两节、重排配方 1）。
+- ctl 底层方法 **60 条**（见第 5 节）；CLI：`server test` 在内的常用命令见第 4 节；`cli methods --json` 可列出全部方法。
+- 配置文件 **v6**（新增 `settings` 与隧道 `preset`）；运行状态存 `state.json`，事件流存 `events.jsonl`。
+- 本版新增 / 变更的 CLI：`stats` / `doctor` / `diag` / `undo` / `config export|import` / `app stop-all|update-check` / `tunnel forget-key` / `server test`。
+- 任何地方对不上时，以代码和 `cli.exe` 的实际输出为准：`cli/src/main.rs`、`core/src/*.rs`、`app/src-tauri/src/ctl.rs`。

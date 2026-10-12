@@ -114,7 +114,7 @@ enum Cmd {
         #[command(subcommand)]
         sub: TunnelCmd,
     },
-    /// 云端服务器：新增/编辑/删除/配置免密
+    /// 云端服务器：新增/编辑/删除/测试连接/配置免密
     Server {
         #[command(subcommand)]
         sub: ServerCmd,
@@ -401,6 +401,11 @@ enum ServerCmd {
   echo 服务器密码 | cli server setup-key <服务器id>   # 通过管道传入密码，同样不会显示在屏幕上
   cli server setup-key <服务器id>                     # 手动输入时同样不回显")]
     SetupKey { id: String },
+    /// 测试连接：真连一次这台服务器的 SSH（最长 15 秒，成功返回用时）
+    #[command(after_help = "例：
+  cli server test srv-api          # 真连一次 SSH，确认密钥 / 网络是否正常
+  cli server test srv-api --json   # 加 --json 输出机器可读结果")]
+    Test { id: String },
     /// 生成访问密码哈希（bcrypt，本机计算，供 nginx 使用；密码从标准输入读取）
     HashPassword { id: String },
 }
@@ -1031,6 +1036,10 @@ fn server_cmd(sub: &ServerCmd, want_json: bool) -> Result<(), String> {
                 &v,
                 v["message"].as_str().unwrap_or("✓ 已配置完成"),
             );
+        }
+        ServerCmd::Test { id } => {
+            let v = call("test_server", json!({"serverId": id}))?;
+            done(want_json, &v, v["message"].as_str().unwrap_or("✓ 连接成功"));
         }
         ServerCmd::HashPassword { id } => {
             let pw = read_secret("请输入要设置的访问密码：")?;
@@ -2727,6 +2736,7 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
     cli doctor --strict                     # 有未通过项就直接退出码 1（这不算命令错误，是「检查未通过」）
     cli stats                               # 运行时长、隧道重连情况、今日重连次数、更新状态
     cli diag --out 诊断包.zip               # 生成脱敏诊断包（发给排查人员）
+    cli server test <服务器id>               # 测试连接：真连一次 SSH（最长 15 秒）
     cli app stop-all --yes                  # 升级 / 卸载前停止全部隧道和服务（安装器会调用它）
     cli app update-check                    # 检查是否有新版本（仅检查，不下载、不安装）
 
@@ -2771,12 +2781,17 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 - `cli app stop-all` 是特例：应用未运行时直接输出「没有需要停止的内容」并退出码 0（安装器不会卡住）。
 - 离线也能用的：status / services / tunnels / servers（直接读取配置文件，状态字段为 unknown）、
   cli doctor（本地可执行的那几步）、cli undo list（读取运行记录）、cli config export（读取配置文件）。
-- 需要应用运行的（离线时退出码 3）：stats / diag / logs / undo（实际撤销）/ config import / app update-check。
+- 需要应用运行的（离线时退出码 3）：stats / diag / logs / undo（实际撤销）/ config import / app update-check / server test。
 - 修改设置、启停任何内容，都必须先执行 cli app start。
 
 ## 需要调用更底层接口时
     cli methods                       # 列出所有可调用的方法 + 参数格式
     cli call <方法> '{"参数":...}'    # 直接调用（通用入口）
+- 老版本（没有子命令时）可以直接调底层方法：cli call test_server '{"serverId":"..."}'（等价于 cli server test <服务器id>）。
+
+## 完整文档在哪
+- 安装目录里（和 cli.exe 同一层）有一份 AGENTS.md：命令全表、配方、已知坑、安全红线，给 AI 助手看的完整说明；旁边还有一份 SKILL.md（速查技能）。
+- 在线版：https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
 
 ## 输出约定
 - 默认输出中文文本；加 `--json` 输出机器格式（agent 一律加）。读命令、写命令都是同一个信封。
@@ -2912,6 +2927,20 @@ mod tests {
             } => assert!(vhost_dir.is_none()),
             _ => panic!("应该解析成 server edit"),
         }
+    }
+
+    #[test]
+    fn server_test_subcommand_parses() {
+        let cli = Cli::try_parse_from(["cli", "server", "test", "srv-api"]).unwrap();
+        match cli.cmd {
+            Cmd::Server {
+                sub: ServerCmd::Test { id },
+            } => assert_eq!(id, "srv-api"),
+            _ => panic!("应该解析成 server test"),
+        }
+        // --json 是全局参数，放在子命令后面也要能解析
+        let cli = Cli::try_parse_from(["cli", "server", "test", "srv-api", "--json"]).unwrap();
+        assert!(cli.json);
     }
 
     #[test]
