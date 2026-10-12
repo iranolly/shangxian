@@ -1,5 +1,9 @@
 ﻿上线助手（免安装版）v<版本>
 
+项目地址
+  https://github.com/iranolly/shangxian
+  新版本下载、使用手册、问题反馈都在这里。
+
 使用方法
   1. 将整个文件夹解压到目标位置（请勿只复制 app.exe，cli.exe 需与 app.exe 位于同一目录）
   2. 双击 app.exe 即可使用
