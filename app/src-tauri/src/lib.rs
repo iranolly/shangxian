@@ -1218,10 +1218,9 @@ fn setup(
     }
 
     // ---------- 电源 / 网络回调 ----------
+    // 注册成功时 install() 自己会记一条「已注册」；这里只管失败提示，不重复记。
     if let Err(e) = power::install() {
         sys_notice(app.handle(), "warn", &e, false);
-    } else {
-        log_info(TAG_POWER, "电源 / 网络回调已注册");
     }
 
     // ---------- 启动 30 秒后静默检查更新 ----------
@@ -1703,10 +1702,14 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    let exit_ctx = app.state::<AppState>().ctx.clone();
-    app.run(move |_handle, event| {
+    // 注意：`Builder::build()` 不会执行 setup（`setup` 在 `app.run()` 里才跑），
+    // 而 AppState 是 setup 里 manage 的；这里提前取会 panic「state() called before manage()」。
+    // 所以退出收尾在 Exit 事件里现取（那时 setup 早已完成），try_state 兜底以免极端路径再炸。
+    app.run(move |handle, event| {
         if let tauri::RunEvent::Exit = event {
-            on_exit(&exit_ctx);
+            if let Some(state) = handle.try_state::<AppState>() {
+                on_exit(&state.ctx);
+            }
         }
     });
 }
