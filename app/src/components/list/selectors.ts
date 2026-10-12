@@ -1,7 +1,7 @@
 // 列表派生选择器（D4 §1.8：selectVisibleTunnelIds 等）+ 结构比较工具。
 // 纯计算都在这里；页面只订阅结果（结构共享保证不必要不重渲染）。
 
-import type { CloudEnv, ServiceView, TunnelView } from "../../api";
+import type { ServiceView, TunnelView } from "../../api";
 import { SERVICE_ORDER, TUNNEL_ORDER } from "../../copy/status";
 import type { AppState } from "../../store/snapshotStore";
 import {
@@ -208,67 +208,6 @@ export function selectServiceStatusCounts(state: AppState): number[] {
   return SERVICE_FILTERS.map((f) =>
     f.value === "all" ? base.length : base.filter((s) => s.status === f.value).length,
   );
-}
-
-// ---------- 服务器环境提醒（「发布隧道」页；数据来自各隧道 protectionCheck.extra.env） ----------
-
-/**
- * 从一条隧道里读环境识别结果（D3 §3）：后端把 CloudEnv 塞在 protectionCheck.extra.env，
- * 旧后端没有 / 不是对象时返回 null。
- */
-function tunnelEnv(tunnel: TunnelView): CloudEnv | null {
-  const extra = tunnel.protectionCheck?.extra;
-  if (!extra || typeof extra !== "object") return null;
-  const raw = (extra as Record<string, unknown>).env;
-  if (!raw || typeof raw !== "object") return null;
-  const env = raw as Partial<CloudEnv>;
-  return typeof env.web === "string" ? (env as CloudEnv) : null;
-}
-
-/** 环境要不要给用户提个醒：web 不是 nginx，或 nginx 但面板没认出来（D4 ServerEnvBanner） */
-export function envNeedsAttention(env: CloudEnv): boolean {
-  if (env.web !== "nginx") return true;
-  return env.panel !== "bt" && env.panel !== "xp";
-}
-
-function envDetectedAt(env: CloudEnv): number {
-  return typeof env.detectedAt === "number" ? env.detectedAt : 0;
-}
-
-/**
- * 某台服务器下最新一次、值得提醒的环境识别结果；没有就 null。
- * 多条隧道各存了一份时取最新的，时间一样就按隧道 id 取（快照顺序会变，不能靠遍历顺序）。
- */
-export function selectServerEnv(state: AppState, serverId: string): CloudEnv | null {
-  let best: CloudEnv | null = null;
-  let bestAt = -1;
-  let bestTunnelId = "";
-  for (const t of state.tunnels) {
-    if (t.serverId !== serverId) continue;
-    const env = tunnelEnv(t);
-    if (!env || !envNeedsAttention(env)) continue;
-    const at = envDetectedAt(env);
-    if (best === null || at > bestAt || (at === bestAt && t.id < bestTunnelId)) {
-      best = env;
-      bestAt = at;
-      bestTunnelId = t.id;
-    }
-  }
-  return best;
-}
-
-/** 「发布隧道」页要挂环境横幅的服务器 id（按服务器去重 + 按名字排序；没有就空数组） */
-export function selectServerEnvAlertIds(state: AppState): string[] {
-  const seen = new Set<string>();
-  for (const t of state.tunnels) {
-    if (seen.has(t.serverId)) continue;
-    const env = tunnelEnv(t);
-    if (env && envNeedsAttention(env)) seen.add(t.serverId);
-  }
-  const ids = [...seen];
-  const name = (id: string) => state.byServerId[id]?.name ?? "";
-  ids.sort((a, b) => compareName(name(a), name(b), a, b));
-  return ids;
 }
 
 // ---------- 结构比较（传给 useStore 的 isEqual） ----------

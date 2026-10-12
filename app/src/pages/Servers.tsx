@@ -7,11 +7,9 @@ import { ConfirmModal } from "../components/ConfirmModal";
 import { useModalA11y } from "../components/useModalA11y";
 import {
   setupPasswordless,
-  type CloudEnv,
   type ServerInput,
   type ServerView,
 } from "../api";
-import { ENV_PANEL_WORD, ENV_WEB_WORD } from "../copy/status";
 import { actions } from "../store/actions";
 import { useNotice } from "../store/noticeStore";
 import { getState } from "../store/snapshotStore";
@@ -60,93 +58,6 @@ function focusCard(elementId: string): boolean {
   return true;
 }
 
-// ---------- 环境识别（D3 §3 / §15） ----------
-
-const UI_DISMISSED_KEY = "ui.dismissed";
-/** 「我手动确认过了」的冷静期：7 天内不再显示这条横幅（D4 §3.5） */
-const PANEL_DISMISS_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-const ENV_TEXT_APACHE =
-  "这台服务器上跑的是 Apache，不是 nginx。这个应用生成的是 nginx 的配置片段，贴了不会生效。两个办法：① 在面板里新建站点时选 nginx（宝塔/小皮都支持）；② 先把片段留着，换成 nginx 再用。";
-const ENV_TEXT_BOTH =
-  "这台机器上 nginx 和 Apache 都在。贴之前先确认你的站点是哪一个在管（面板里的网站列表一般会写 nginx 还是 Apache）。";
-const ENV_TEXT_WEB_NONE =
-  "没找到 nginx，也没有 Apache。可能网站服务没装，或者装在特殊路径。这种情况先别贴片段。";
-const ENV_TEXT_UNKNOWN =
-  "没认出来这台服务器用的什么面板和网站服务（nginx 还是 Apache 都没找到）。先别贴片段，怕贴错地方；可以在服务器上执行 nginx -v 或 httpd -v 看看，再点「重新识别」。";
-const ENV_TEXT_PANEL_NONE =
-  "这台服务器没发现面板，但装了 nginx。配置要自己改 nginx 的站点文件；下面给的片段还是能用的。";
-const ENV_TEXT_PANEL_UNKNOWN =
-  "没认出来这台服务器用的什么面板；不过网站服务是 nginx，配置片段能用，站点目录可能要手动确认。";
-
-interface EnvNote {
-  tone: "ok" | "warn" | "error";
-  text: string;
-  /** true = 要显示成醒目横幅；false = 只是一行说明 */
-  banner: boolean;
-}
-
-function envNote(env: CloudEnv): EnvNote {
-  if (env.web === "apache") return { tone: "error", banner: true, text: ENV_TEXT_APACHE };
-  if (env.web === "both") return { tone: "warn", banner: true, text: ENV_TEXT_BOTH };
-  if (env.web === "none") return { tone: "warn", banner: true, text: ENV_TEXT_WEB_NONE };
-  if (env.web === "unknown") return { tone: "warn", banner: true, text: ENV_TEXT_UNKNOWN };
-  if (env.panel === "unknown") return { tone: "warn", banner: true, text: ENV_TEXT_PANEL_UNKNOWN };
-  if (env.panel === "none") return { tone: "warn", banner: true, text: ENV_TEXT_PANEL_NONE };
-  if (env.panel === "bt") {
-    return {
-      tone: "ok",
-      banner: false,
-      text: `云服务器认出来了：宝塔面板 + nginx。识别到的站点目录：${env.vhostDir ?? "/www/server/panel/vhost"}。点「编辑」把它填进去，不对可以改。`,
-    };
-  }
-  return {
-    tone: "ok",
-    banner: false,
-    text: `云服务器认出来了：小皮面板 + nginx。识别到的站点目录：${env.vhostDir ?? "/xp/panel/vhost"}。点「编辑」把它填进去。`,
-  };
-}
-
-function loadDismissed(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(UI_DISMISSED_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : {};
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeDismissed(map: Record<string, number>): void {
-  try {
-    localStorage.setItem(UI_DISMISSED_KEY, JSON.stringify(map));
-  } catch {
-    // 存不了就算了，最多下次再提示一遍
-  }
-}
-
-function formatDay(at?: number | null): string {
-  if (typeof at !== "number" || at <= 0) return "还没记下时间";
-  const d = new Date(at);
-  const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const sameDay =
-    d.getFullYear() === now.getFullYear() &&
-    d.getMonth() === now.getMonth() &&
-    d.getDate() === now.getDate();
-  if (sameDay) return `今天 ${clock}`;
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${clock}`;
-}
-
-/** 识别把握（D3 §3 置信度）翻成人话 */
-function confidenceWord(value?: string | null): string {
-  if (value === "high") return "高";
-  if (value === "medium") return "中";
-  if (value === "low") return "低";
-  return "不确定";
-}
-
 /** 给内嵌的编辑弹层套一层：挂 ref 并接上无障碍（Esc 关闭、Tab 焦点圈定、焦点归还）。 */
 function ModalShell({
   onClose,
@@ -167,7 +78,7 @@ function ModalShell({
 }
 
 /**
- * 卡片上的统一失败提示：测试连接 / 识别环境走 actions 后，失败都挂到 `server:{id}`；
+ * 卡片上的统一失败提示：测试连接走 actions 后，失败都挂到 `server:{id}`；
  * 这里就地显示，和隧道 / 服务卡片的 FixRibbon 同一个错误来源。
  */
 function ServerErrorLine({ serverId }: { serverId: string }) {
@@ -192,8 +103,6 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
   const [pwError, setPwError] = useState("");
   const [pwDone, setPwDone] = useState("");
   const [confirmDel, setConfirmDel] = useState<ServerView | null>(null);
-  const [envBusy, setEnvBusy] = useState<Record<string, boolean>>({});
-  const [dismissed, setDismissed] = useState<Record<string, number>>(() => loadDismissed());
   /** 从「发布向导」死胡同跳过来加的：保存后要回去重开向导并预选新服务器 */
   const [returnToWizard, setReturnToWizard] = useState(false);
 
@@ -351,24 +260,6 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
     void actions.serverRemove(s.id);
   };
 
-  /** 点「识别一下 / 重新识别」：走 actions（pending + 统一失败提示），成功后刷新快照。 */
-  const scanEnv = async (s: ServerView) => {
-    setEnvBusy((m) => ({ ...m, [s.id]: true }));
-    try {
-      const result = await actions.serverScanEnv(s.id);
-      if (result) onChanged();
-    } finally {
-      setEnvBusy((m) => ({ ...m, [s.id]: false }));
-    }
-  };
-
-  /** 「我手动确认过了」：7 天内不再显示这台服务器的环境横幅。 */
-  const dismissEnvBanner = (id: string) => {
-    const next = { ...dismissed, [`panel:${id}`]: Date.now() };
-    setDismissed(next);
-    writeDismissed(next);
-  };
-
   /** 点「测试连接」：走 actions（pending + 统一失败提示）；成功的结果留在卡片上 */
   const testConn = async (s: ServerView) => {
     setTest((m) => ({
@@ -404,34 +295,32 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       <header className="page-head">
         <div>
           <h1 className="page-title">云端服务器</h1>
-          <p className="page-sub">
-            一台一直开着的电脑，负责把别人的访问转给你的电脑。
-          </p>
+          <p className="page-sub">一直开着的电脑，帮你把访问转给本机。</p>
         </div>
-        <button className="btn btn-primary" onClick={() => openNew()}>
-          + 添加服务器
+        <button
+          className="btn btn-primary"
+          title="添加一台云端服务器"
+          onClick={() => openNew()}
+        >
+          + 添加
         </button>
       </header>
 
       {servers.length === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有云端服务器</p>
-          <p className="empty-text">
-            先添加一台你正在用的云服务器，才能发布隧道。
-          </p>
-          <button className="btn btn-primary" onClick={() => openNew()}>
-            + 添加第一台
+          <p className="empty-text">先添加一台云服务器，才能发布隧道。</p>
+          <button
+            className="btn btn-primary"
+            title="添加一台云端服务器"
+            onClick={() => openNew()}
+          >
+            + 添加
           </button>
         </div>
       ) : (
         <div className="service-list">
           {servers.map((s) => {
-            const env = s.cloudEnv ?? null;
-            const note = env ? envNote(env) : null;
-            const panelDismissed =
-              typeof dismissed[`panel:${s.id}`] === "number" &&
-              Date.now() - dismissed[`panel:${s.id}`] < PANEL_DISMISS_TTL_MS;
-            const busy = envBusy[s.id] === true;
             return (
               <article className="card" key={s.id} id={`server-card-${s.id}`}>
                 <div className="server-card">
@@ -443,19 +332,13 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                       {s.keyPath ? ` · 密钥 ${s.keyPath}` : " · 默认密钥"}
                     </div>
                     <div className="server-meta">
-                      站点目录：{s.vhostDir || "还没填（留空就按默认找）"}
+                      站点目录：{s.vhostDir || "还没填（按默认找）"}
                     </div>
                   </div>
                   <button
                     className="btn btn-ghost btn-sm"
-                    disabled={busy}
-                    onClick={() => void scanEnv(s)}
-                  >
-                    {busy ? "识别中…" : env ? "重新识别" : "识别一下"}
-                  </button>
-                  <button
-                    className="btn btn-ghost btn-sm"
                     disabled={test[s.id]?.phase === "loading"}
+                    title="测一下 SSH 能不能连上这台服务器"
                     onClick={() => void testConn(s)}
                   >
                     {test[s.id]?.phase === "loading" ? "测试中…" : "测试连接"}
@@ -468,54 +351,10 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                   </button>
                 </div>
 
-                {env && note ? (
-                  <>
-                    <p className={`env-line ${note.tone}`}>
-                      环境：{ENV_PANEL_WORD[env.panel]} + {ENV_WEB_WORD[env.web]}
-                      <span className="env-meta">
-                        {" "}
-                        · 识别把握：面板 {confidenceWord(env.panelConfidence)} / 网站服务{" "}
-                        {confidenceWord(env.webConfidence)} · 上次识别：{formatDay(env.detectedAt)}
-                      </span>
-                    </p>
-                    {note.banner && !panelDismissed ? (
-                      <div className={`env-banner ${note.tone}`}>
-                        <p>{note.text}</p>
-                        <div className="env-banner-actions">
-                          <button className="link-btn" disabled={busy} onClick={() => void scanEnv(s)}>
-                            重新识别
-                          </button>
-                          <button className="link-btn" onClick={() => dismissEnvBanner(s.id)}>
-                            我手动确认过了
-                          </button>
-                        </div>
-                      </div>
-                    ) : note.tone === "ok" ? (
-                      <p className="env-meta">{note.text}</p>
-                    ) : (
-                      <p className="env-meta">这条提示已经确认过，7 天内不再提醒。</p>
-                    )}
-                    {env.vhostDir && !s.vhostDir && (
-                      <p className="env-meta">
-                        自动识别的站点目录：{env.vhostDir}（点「编辑」填进去，检查云端和密码文件都按它找）
-                      </p>
-                    )}
-                    {env.vhostDir && env.vhostDirExists === false && (
-                      <p className="env-meta">
-                        识别到的站点目录在服务器上不存在（{env.vhostDir}），贴配置前先确认面板里的站点目录。
-                      </p>
-                    )}
-                    {env.webEvidence && (
-                      <p className="env-meta">识别依据：{env.webEvidence}</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="env-meta">还没识别这台服务器的环境，点「识别一下」看看面板和网站服务。</p>
-                )}
                 <ServerErrorLine serverId={s.id} />
 
                 {test[s.id]?.phase === "ok" && (
-                  <p className="field-hint">✓ {test[s.id].text}</p>
+                  <p className="hint">✓ {test[s.id].text}</p>
                 )}
               </article>
             );
@@ -527,7 +366,7 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
       {confirmDel && (
         <ConfirmModal
           title={`删除服务器「${confirmDel.name}」？`}
-          body="删掉后引用它的隧道会连不上；这台服务器上的东西不会被删。5 秒内可以撤销。"
+          body="引用它的隧道会连不上；服务器上的文件不删，5 秒内可撤销。"
           confirmLabel="删除"
           danger
           onClose={() => setConfirmDel(null)}
@@ -545,8 +384,8 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
             <h2 className="modal-title">
               {editing.id ? "编辑服务器" : "添加服务器"}
             </h2>
-            <p className="modal-sub">
-              密钥留空就用系统默认密钥（~/.ssh 里的那把）。
+            <p className="modal-sub" title="默认用 ~/.ssh 里的密钥">
+              密钥留空就用系统默认密钥。
             </p>
           </div>
           <div className="modal-body">
@@ -615,21 +454,19 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                 className="input mono"
                 value={editing.vhostDir ?? ""}
                 placeholder="例如 /www/server/panel/vhost"
+                title="留空就按默认目录找，例如 /www/server/panel/vhost。密码文件和「检查云端」也按这个目录找。"
                 onChange={(e) =>
                   setEditing({ ...editing, vhostDir: e.target.value })
                 }
               />
-              <p className="field-hint">
-                不知道就留空，按小皮面板默认 /xp/panel/vhost 找。宝塔等面板填
-                /www/server/panel/vhost；密码文件和「检查云端」都按这个目录找。
-              </p>
+              <p className="hint">留空就按默认目录找。</p>
             </div>
 
             {/* 没有密钥也能用：填一次密码，助手帮你配好免密 */}
             <div className="field">
               <label className="field-label">没有密钥？</label>
               {pwDone ? (
-                <p className="field-hint">✓ {pwDone}</p>
+                <p className="hint">✓ {pwDone}</p>
               ) : pwOpen ? (
                 <div style={{ display: "flex", gap: 8 }}>
                   <input
@@ -655,14 +492,17 @@ export function ServersPage({ servers, onChanged, intent, onIntentDone }: Props)
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <button
                     className="btn btn-ghost btn-sm"
+                    title={
+                      editing.id
+                        ? "填一次登录密码，助手帮你配好免密；密码不保存"
+                        : "会先保存这台服务器；填一次登录密码，助手帮你配好免密，密码不保存"
+                    }
                     onClick={() => setPwOpen(true)}
                   >
-                    用密码登录一次，帮我配好免密
+                    用密码配免密
                   </button>
-                  <span className="field-hint" style={{ margin: 0 }}>
-                    {editing.id
-                      ? "密码只在内存里用一次，不会存下来"
-                      : "会先把这台服务器保存下来；密码只在内存里用一次，不会存下来"}
+                  <span className="hint" style={{ margin: 0 }}>
+                    密码只用一次，不保存
                   </span>
                 </div>
               )}

@@ -98,6 +98,8 @@ export function NewTunnelWizard({
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  /** 长错误细节：界面上只留一句，鼠标停留再看 */
+  const [errorHint, setErrorHint] = useState("");
   /** 选了「无保护」发布时的确认勾选：不勾不让发布 */
   const [ackNoProtect, setAckNoProtect] = useState(false);
   const [nginxOpen, setNginxOpen] = useState(false);
@@ -218,14 +220,13 @@ export function NewTunnelWizard({
   };
 
   const submit = async () => {
+    setErrorHint("");
     if (!service || !server) {
       setError("刚才选的服务或服务器已经不存在了，关掉向导重新开一次");
       return;
     }
     if (!wantPassword && !wantIp && !ackNoProtect) {
-      setError(
-        "没开任何访问保护：任何人拿到网址都能访问。要发布的话，先勾选下面的确认。",
-      );
+      setError("没开保护：任何人拿到网址都能访问。先勾下面的确认。");
       return;
     }
     if (wantPassword && !password.trim()) {
@@ -247,8 +248,9 @@ export function NewTunnelWizard({
         try {
           accessHash = await hashPassword(server.id, password);
         } catch (e) {
-          setError(
-            `本机算密码哈希没成功，密码没有保存。常见原因：密码超过 72 字节（bcrypt 装不下），或这台服务器已经不在配置里了。换成短一点的密码，或重新选服务器，再回来发布。${e ? `（${String(e)}）` : ""}`,
+          setError("密码没算出来，没有保存：换短一点再试。");
+          setErrorHint(
+            `常见原因：密码超过 72 字节，或这台服务器已经不在配置里了。${e ? `（${String(e)}）` : ""}`,
           );
           return;
         }
@@ -292,8 +294,8 @@ export function NewTunnelWizard({
 
   const presetHint: Record<TunnelPreset, string> = {
     web: "普通网站：大多数情况用这个。",
-    ws: "WebSocket：AI 聊天、实时进度这类网页长连接不断线。",
-    upload: "大文件上传：上传上限放到 2GB，边传边转发；记得密码或白名单开着。",
+    ws: "WebSocket：AI 聊天、实时进度这类长连接不断线。",
+    upload: "大文件上传：上限放到 2GB，边传边转发。",
   };
 
   return (
@@ -324,7 +326,7 @@ export function NewTunnelWizard({
               {step === 1
                 ? "第 1 步，共 3 步：发布电脑上的哪台服务？"
                 : step === 2
-                  ? "第 2 步，共 3 步：从哪台服务器出去、别人用哪个网址？"
+                  ? "第 2 步，共 3 步：从哪台服务器出去？"
                   : "第 3 步，共 3 步：谁能访问？"}
             </p>
           )}
@@ -335,8 +337,11 @@ export function NewTunnelWizard({
             <div className="success">
               <div className="success-mark">✓</div>
               <p className="success-title">隧道建好了，还差最后一步</p>
-              <p className="success-sub">
-                把云端 nginx 配置贴到服务器面板里并重载，网址才会正式生效，别人才能打开。
+              <p
+                className="success-sub"
+                title="把云端 nginx 配置贴到服务器面板里并重载，别人才能打开这个网址。"
+              >
+                贴好云端配置并重载，网址才生效。
               </p>
               {done.url ? (
                 <>
@@ -359,9 +364,11 @@ export function NewTunnelWizard({
                   </div>
                 </>
               ) : (
-                <p className="field-hint">
-                  没填公网网址：这条隧道现在还没有对外地址，别人暂时打不开。
-                  下一步贴配置时会提醒你先补网址——到「发布隧道」页编辑这条隧道就能补。
+                <p
+                  className="field-hint hint"
+                  title="下一步贴配置时会提醒你先补网址：到「发布隧道」页编辑这条隧道就能补。"
+                >
+                  没填网址：现在还没有对外地址。
                 </p>
               )}
               {done.password && (
@@ -375,23 +382,26 @@ export function NewTunnelWizard({
                   </button>
                 </div>
               )}
-              <p className="field-hint">
+              <p
+                className="field-hint hint"
+                title="以后要改保护或换密码，到「访问保护」页。"
+              >
                 {done.password
-                  ? "密码已经存好了；贴云端配置时用它启用访问保护。以后要改保护或换密码，到「访问保护」页。"
-                  : "以后想给这条隧道加访问保护，到「访问保护」页设置。"}
+                  ? "密码已存好，贴配置时用它开启保护。"
+                  : "想加保护，到「访问保护」页设置。"}
               </p>
             </div>
           ) : step === 1 ? (
             services.length === 0 ? (
               <>
-                <p className="field-hint">
+                <p className="field-hint hint">
                   还没有登记本机服务。先加一台，回来就能发布。
                 </p>
                 <button
                   className="btn btn-primary"
                   onClick={() => goAdd("service")}
                 >
-                  + 添加本机服务
+                  添加本机服务
                 </button>
               </>
             ) : (
@@ -414,8 +424,11 @@ export function NewTunnelWizard({
                     <span className="mono">本机 {s.localPort}</span>
                   </label>
                 ))}
-                <p className="field-hint">
-                  只会发布你选中的这台服务；它没在跑的时候，别人访问会失败；建好后到「本机服务」页点一下「启动」。
+                <p
+                  className="field-hint hint"
+                  title="只会发布选中的那台服务；它没在跑时别人会打不开，建好后到「本机服务」页点「启动」。"
+                >
+                  没在跑的话别人打不开。
                 </p>
               </div>
             )
@@ -425,12 +438,12 @@ export function NewTunnelWizard({
                 <label className="field-label">云端服务器</label>
                 {servers.length === 0 ? (
                   <>
-                    <p className="field-hint">还没有云端服务器。先加一台，回来继续。</p>
+                    <p className="field-hint hint">还没有云端服务器。先加一台，回来继续。</p>
                     <button
                       className="btn btn-primary"
                       onClick={() => goAdd("server")}
                     >
-                      + 添加云端服务器
+                      添加服务器
                     </button>
                   </>
                 ) : (
@@ -461,12 +474,13 @@ export function NewTunnelWizard({
                       </button>
                       <button
                         className="link-btn"
+                        title="没有密钥？用密码登录一次，帮你配好免密登录"
                         onClick={() => setKeyOpen((v) => !v)}
                       >
-                        没有密钥？用密码登录一次，帮我配好免密
+                        配免密
                       </button>
                     </div>
-                    {testMsg && <div className="field-hint">{testMsg}</div>}
+                    {testMsg && <div className="field-hint hint">{testMsg}</div>}
                     {keyOpen && (
                       <div className="field-row" style={{ marginTop: 6 }}>
                         <input
@@ -500,7 +514,7 @@ export function NewTunnelWizard({
                     setDirty(true);
                   }}
                 />
-                <p className="field-hint">
+                <p className="field-hint hint">
                   {usedRemote.has(remotePort)
                     ? "这个端口已经被这台服务器上的其他隧道用了，换一个。"
                     : "一般不用改，已经帮你挑了一个没人用的。"}
@@ -519,8 +533,8 @@ export function NewTunnelWizard({
                     setDirty(true);
                   }}
                 />
-                <p className="field-hint">
-                  留空也能发布；填了记得在买域名的地方加一条解析记录。
+                <p className="field-hint hint" title="留空也能发布；填了记得在买域名的地方加一条解析记录。">
+                  留空也能发布，填了要加域名解析。
                 </p>
               </div>
               <div className="field">
@@ -537,9 +551,11 @@ export function NewTunnelWizard({
                   <option value="ws">WebSocket（实时通信）</option>
                   <option value="upload">大文件上传</option>
                 </select>
-                <p className="field-hint">
-                  不确定就保持默认；贴云端配置时会把对应几行一起给你。
-                  {presetHint[preset] ? ` ${presetHint[preset]}` : ""}
+                <p
+                  className="field-hint hint"
+                  title={`${presetHint[preset]} 不确定就保持默认，贴配置时会把对应几行一起给你。`}
+                >
+                  不确定就保持默认。
                 </p>
               </div>
             </>
@@ -630,21 +646,22 @@ export function NewTunnelWizard({
                 </div>
               </div>
 
-              <p className="field-hint">
-                两种保护可以同时勾选；同时开时，两个条件都要满足才能进。
-                这一步就要定好：开了「要密码才能进」，发布时立刻在本机算好密码、
-                只把结果写进服务器上的密码文件，写不进去就发不出去（可以先关掉密码、建好后再到「访问保护」页补）。
+              <p
+                className="field-hint hint"
+                title="两种可以同时开，都要满足才能进；发布时在本机算好密码、只把结果写进服务器，写不进去就发不出去。可以先关掉，建好后再到「访问保护」页补。"
+              >
+                两种可以同时开，都要满足才能进。
               </p>
               {!wantPassword && !wantIp && (
                 <div className="danger-line">
                   ⚠ 两种保护都没开：任何人拿到网址都能访问，不要放私人内容。
-                  <label className="switch">
+                  <label className="switch" title="不推荐：任何人拿到网址都能访问">
                     <input
                       type="checkbox"
                       checked={ackNoProtect}
                       onChange={(e) => setAckNoProtect(e.target.checked)}
                     />
-                    我知道了，这样发布（不推荐）
+                    我知道，仍然发布
                   </label>
                 </div>
               )}
@@ -659,10 +676,10 @@ export function NewTunnelWizard({
                     setDirty(true);
                   }}
                 />
-                <p className="field-hint">这个名字只有你自己看得到。</p>
+                <p className="field-hint hint">这个名字只有你自己看得到。</p>
               </div>
 
-              <p className="field-hint">
+              <p className="field-hint hint">
                 确认一下：{service?.name}（本机 {service?.localPort}）→{" "}
                 {server?.name} · 云端 {remotePort}
                 {url.trim() ? ` · ${url.trim()}` : ""}
@@ -673,7 +690,11 @@ export function NewTunnelWizard({
             </>
           )}
 
-          {error && <div className="error-line">{error}</div>}
+          {error && (
+            <div className="error-line" title={errorHint || undefined}>
+              {error}
+            </div>
+          )}
         </div>
 
         <div className="modal-foot">
@@ -685,9 +706,10 @@ export function NewTunnelWizard({
               <span className="grow" />
               <button
                 className="btn btn-primary"
+                title="把新的几行贴到服务器面板里并重载 nginx"
                 onClick={() => setNginxOpen(true)}
               >
-                下一步：贴云端配置
+                贴云端配置
               </button>
             </>
           ) : (

@@ -60,8 +60,13 @@ export function BulkResultPanel({ result, onClose, onRetry, onUndoDeleted }: Pro
           </button>
           <span className="grow" />
           {tokens.length > 0 && onUndoDeleted ? (
-            <button className="btn btn-ghost" onClick={onUndoDeleted}>
-              撤销已删除的 {tokens.length} 条
+            <button
+              className="btn btn-ghost"
+              title={`把刚才删掉的 ${tokens.length} 条恢复回来`}
+              aria-label={`撤销删除，恢复 ${tokens.length} 条`}
+              onClick={onUndoDeleted}
+            >
+              撤销删除
             </button>
           ) : null}
           <button

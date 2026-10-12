@@ -248,7 +248,7 @@
   color: var(--text-2);
 }
 
-/* ---------- 保护状态 / 漂移 / 环境横幅 ---------- */
+/* ---------- 保护状态 / 漂移 ---------- */
 
 .chip.danger {
   background: var(--st-error-bg);
@@ -264,28 +264,9 @@
   padding: 7px 10px;
   font-size: 12px;
   background: var(--st-connecting-bg);
-  border-left: 3px solid var(--st-connecting);
+  border-left: 2px solid var(--st-connecting);
   border-radius: 0 var(--r-control) var(--r-control) 0;
   color: var(--st-connecting-fg);
-}
-
-.env-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-  padding: 8px 10px;
-  font-size: 12px;
-  background: var(--st-connecting-bg);
-  border-left: 3px solid var(--st-connecting);
-  border-radius: 0 var(--r-control) var(--r-control) 0;
-  color: var(--st-connecting-fg);
-}
-.env-banner .env-text {
-  flex: 1;
-  min-width: 220px;
-  line-height: 1.6;
 }
 
 /* ---------- nginx 可选附加行 ---------- */
@@ -412,7 +393,7 @@
   word-break: break-word;
 }
 .notif-time {
-  margin-top: 2px;
+  margin-top: 6px;
   font-size: 11px;
   color: var(--text-3);
 }

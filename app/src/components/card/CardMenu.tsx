@@ -46,7 +46,7 @@ export function CardMenu({
           disabled: !url,
           title: url ? undefined : "还没填公网网址",
         },
-        { label: "云端配置（nginx）", run: () => onNginx(id) },
+        { label: "云端配置", run: () => onNginx(id) },
         { label: "看发布日志", run: () => onLogs(id) },
         { label: "访问保护", run: () => onOpenProtection(id) },
         {

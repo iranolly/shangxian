@@ -190,11 +190,11 @@ export function ListToolbar({
           </button>
         ))}
         {query ? (
-          <span className="toolbar-hint">
+          <span className="hint toolbar-hint">
             找到 {shown} 条（共 {total} 条）
           </span>
         ) : (
-          <span className="toolbar-hint">共 {total} 条</span>
+          <span className="hint toolbar-hint">共 {total} 条</span>
         )}
       </div>
     </div>

@@ -110,21 +110,6 @@ export const DOCTOR_STATUS_META: Record<DoctorStatus, DoctorStatusMeta> = {
 export type ServerPanelKind = "bt" | "xp" | "none" | "unknown";
 export type ServerWebKind = "nginx" | "apache" | "both" | "none" | "unknown";
 
-export const ENV_PANEL_WORD: Record<ServerPanelKind, string> = {
-  bt: "宝塔面板",
-  xp: "小皮面板",
-  none: "没发现面板",
-  unknown: "没认出来面板",
-};
-
-export const ENV_WEB_WORD: Record<ServerWebKind, string> = {
-  nginx: "nginx",
-  apache: "Apache",
-  both: "nginx 和 Apache 都在",
-  none: "没找到网站服务",
-  unknown: "没认出来网站服务",
-};
-
 /** 隧道排序：坏状态排前面（出错 > 掉线 > 连接中 > 正在发布 > 已暂停） */
 export const TUNNEL_ORDER: Record<TunnelStatus, number> = {
   error: 0,

@@ -1,7 +1,6 @@
 // 上线助手桌面壳：窗口 + 托盘常驻 + 隧道守护接入。
 // 核心看护逻辑在 shangxian-core；这一层负责生命周期与界面命令。
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -1153,8 +1152,7 @@ fn setup(
     // ---------- 控制通道 ----------
     ctl::spawn(ctx.clone());
 
-    // ---------- 自动漂移复检（D3 §12） ----------
-    spawn_drift_scheduler(ctx.clone());
+    // 自动漂移复检已下线（用户要求轻量）：云端核对只保留手动「检查云端」。
 
     // ---------- 看护轮询：事件日志 + 唤醒提示 ----------
     {
@@ -1326,112 +1324,6 @@ fn setup(
     }
 
     Ok(())
-}
-
-/// 自动漂移复检的后台调度（D3 §12）。
-///
-/// - 启动 60 秒后首查，之后每 30 分钟扫一次；
-/// - 同一条隧道两次自动检查间隔 45±10 分钟（按 id 哈希错峰）；
-/// - 单线程顺序执行，同一时刻最多跑一条；
-/// - 失败退避：连续失败第 1 次 90 分钟、第 2 次 3 小时、第 3 次起 6 小时；
-/// - 只查开着发布 + 有网址 + 配了访问保护的隧道；
-/// - 手动检查在跑 / 刚跑过就跳过，绝不挤占手动检查；
-/// - 结果只在有变化时写 state（落盘交给 state 的去抖调度）。
-fn spawn_drift_scheduler(ctx: ctl::Ctx) {
-    std::thread::spawn(move || {
-        // 避开开机自启 / 认领高峰：先等 60 秒。
-        std::thread::sleep(Duration::from_secs(60));
-        // 每条隧道连续失败次数（退避用）+ 上次尝试时刻（失败也要等到下次）。
-        let mut failures: HashMap<String, u32> = HashMap::new();
-        let mut last_attempt: HashMap<String, i64> = HashMap::new();
-        loop {
-            let now = shangxian_core::state::now_ms();
-            match ctl::drift_check_candidates(&ctx) {
-                Ok(candidates) => {
-                    for id in candidates {
-                        if !drift_due(&ctx, &id, now, &failures, &last_attempt) {
-                            continue;
-                        }
-                        last_attempt.insert(id.clone(), now);
-                        match ctl::run_auto_drift_check(&ctx, &id) {
-                            ctl::AutoCheckOutcome::Changed => {
-                                failures.remove(&id);
-                                log_info(
-                                    TAG_GUARD,
-                                    &format!("漂移复检：隧道 {id} 结果有变化，已更新"),
-                                );
-                            }
-                            ctl::AutoCheckOutcome::Unchanged => {
-                                failures.remove(&id);
-                            }
-                            ctl::AutoCheckOutcome::Skipped => {
-                                // 手动检查优先：这轮不算失败、也不占退避槽，下次扫描再来。
-                                last_attempt.remove(&id);
-                            }
-                            ctl::AutoCheckOutcome::Failed(e) => {
-                                let count = failures.entry(id.clone()).or_insert(0);
-                                *count = count.saturating_add(1);
-                                log_warn(
-                                    TAG_GUARD,
-                                    &format!("漂移复检失败（{id}，连续 {count} 次）：{e}"),
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    log_warn(TAG_GUARD, &format!("漂移复检：读不到隧道清单（{e}），这轮跳过"));
-                }
-            }
-            std::thread::sleep(Duration::from_secs(30 * 60));
-        }
-    });
-}
-
-/// 这条隧道现在该不该跑自动复检：按 45±10 分钟间隔，失败期间按退避等待。
-/// 不稳定（不在发布中 / 刚连上不到 2 分钟）直接不算到期：跳过不占退避槽。
-fn drift_due(
-    ctx: &ctl::Ctx,
-    tunnel_id: &str,
-    now: i64,
-    failures: &HashMap<String, u32>,
-    last_attempt: &HashMap<String, i64>,
-) -> bool {
-    // 候选筛选之后状态可能又变了（刚好重连）：到期判断再兜一道。
-    let unstable = ctx
-        .lock_guardian()
-        .ok()
-        .and_then(|g| {
-            g.tunnel_snapshot()
-                .into_iter()
-                .find(|t| t.id == tunnel_id)
-        })
-        .map(|t| ctl::auto_check_skip_reason(&t.status, t.uptime_secs).is_some())
-        .unwrap_or(false);
-    if unstable {
-        return false;
-    }
-    // 上次自动检查落盘的时刻（换应用重启后也认得；手动检查不算自动间隔）。
-    let last_auto = ctx
-        .state
-        .tunnel_state(tunnel_id)
-        .and_then(|s| s.protection_check)
-        .filter(|c| c.source.as_deref() == Some("auto"))
-        .and_then(|c| c.ts)
-        .unwrap_or(0);
-    let last_try = last_attempt
-        .get(tunnel_id)
-        .copied()
-        .unwrap_or(0)
-        .max(last_auto);
-    let failed = failures.get(tunnel_id).copied().unwrap_or(0);
-    let wait = match failed {
-        0 => ctl::auto_check_interval_ms(tunnel_id),
-        1 => 90 * 60_000,
-        2 => 3 * 60 * 60_000,
-        _ => 6 * 60 * 60_000,
-    };
-    now.saturating_sub(last_try) >= wait
 }
 
 /// 托盘 tooltip：几条在发布、几条掉线（没开发布就还是原来那句）。

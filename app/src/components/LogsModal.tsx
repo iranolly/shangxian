@@ -396,7 +396,7 @@ export function LogsModal(props: LogsModalProps) {
       if (legacy) {
         if (targetKind === "all") {
           setGroups([]);
-          setError("全部日志要看新版本后台；当前后台只支持单独看某条隧道的日志");
+          setError("当前后台看不了全部日志，只能单看一条。");
           return;
         }
         const text =
@@ -631,7 +631,7 @@ export function LogsModal(props: LogsModalProps) {
     const ok = await copyText(plainText);
     setBusyAction("");
     if (ok) toast.show({ kind: "success", text: T.logCopied() });
-    else toast.error("没复制成功：请用鼠标选中日志内容，按 Ctrl+C 复制");
+    else toast.error("没复制成功：选中内容按 Ctrl+C");
   };
 
   const doExport = async () => {
@@ -650,7 +650,7 @@ export function LogsModal(props: LogsModalProps) {
     } catch (e) {
       // 保存不了就退回「复制 + 自己粘贴保存」
       const ok = await copyText(plainText);
-      if (ok) toast.info("没写进文件，已帮你复制到剪贴板：粘贴到记事本里保存就是文件");
+      if (ok) toast.info("没写进文件，已复制到剪贴板");
       else toast.error(`导出没成功：${errorText(e)}`);
     } finally {
       setBusyAction("");
@@ -678,10 +678,10 @@ export function LogsModal(props: LogsModalProps) {
       : `${effectiveTarget.kind === "tunnel" ? "发布日志" : "程序日志"} · ${effectiveTarget.name}`;
   const sourceHint =
     effectiveTarget.kind === "all"
-      ? "所有隧道和程序的日志汇到一起，按来源分组；出问题时把这里的内容发出来就能定位。"
+      ? "所有隧道和程序的日志按来源分组。出问题把这里的内容发出来就能定位。"
       : effectiveTarget.kind === "tunnel"
-        ? "这是这条隧道的连接记录，出问题时把这里的内容发出来就能定位。"
-        : "这是程序自己打印的内容（还有看护记录），出问题时把这里的内容发出来就能定位。";
+        ? "这条隧道的连接记录。出问题把这里的内容发出来就能定位。"
+        : "程序自己打印的内容（含看护记录）。出问题把内容发出来就能定位。";
 
   const hasArchives = archives.length > 0;
   const legacyTitle = "这个功能需要新版本后台";
@@ -699,8 +699,8 @@ export function LogsModal(props: LogsModalProps) {
       >
         <div className="modal-head">
           <h2 className="modal-title">{title}</h2>
-          <p className="modal-sub">
-            最近 {view.lines} 行。{sourceHint}
+          <p className="modal-sub" title={sourceHint}>
+            最近 {view.lines} 行。
           </p>
         </div>
 
@@ -877,7 +877,7 @@ export function LogsModal(props: LogsModalProps) {
         <div className="modal-body" style={{ paddingTop: 12 }}>
           {error && <div className="error-line">{error}</div>}
           {loading && flat.length === 0 && !error ? (
-            <p className="field-hint">读取中…</p>
+            <p className="field-hint hint">读取中…</p>
           ) : flat.length === 0 ? (
             <div className="log-empty">
               {view.query.trim() || view.filter !== "all" ? (
@@ -896,7 +896,7 @@ export function LogsModal(props: LogsModalProps) {
               ) : (
                 <>
                   <p className="log-empty-title">这里还没有日志</p>
-                  <p>等它跑一会儿再来看看；如果一直空着，先点「体检」查一下。</p>
+                  <p title="一直空着就先体检一下">等它跑一会儿再来看看。</p>
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() =>

@@ -26,7 +26,7 @@ const FIXED_STEP_TITLES = [
 ];
 
 const ADVICE_FALLBACK =
-  "照着上面的结果检查一下；不确定就点「导出诊断包」发给懂行的人。";
+  "照着上面的结果检查；不确定就导出诊断包。";
 
 // ---------- 会话内的体检结果缓存（doctorStore） ----------
 
@@ -74,14 +74,14 @@ function summaryView(report: DoctorReport): SummaryView {
     return {
       tone: "error",
       title: `有 ${fail} 项没通过`,
-      text: "先看第一处失败，照着“怎么办”做。",
+      text: "先看第一处失败，照着「怎么办」做。",
     };
   }
   if (warn > 0) {
     return {
       tone: "warn",
       title: `有 ${warn} 项要留意`,
-      text: "不是坏事，但最好照着“怎么办”看一眼。",
+      text: "不是坏事，但最好照着「怎么办」看一眼。",
     };
   }
   if (pass > 0 && skip > 0) {
@@ -97,7 +97,7 @@ function summaryView(report: DoctorReport): SummaryView {
   return {
     tone: "warn",
     title: "体检没跑出结果",
-    text: "等一下再试；还不行就点「导出诊断包」发给懂行的人。",
+    text: "等一下再试；还不行就导出诊断包。",
   };
 }
 
@@ -210,8 +210,8 @@ export function DoctorModal({ autoRun, onClose }: Props) {
         <div className="modal doctor-modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">体检</h2>
-          <p className="modal-sub">
-            一键检查：应用、网络、服务器、隧道、证书，哪里不对告诉你怎么办。
+          <p className="modal-sub" title="检查应用、网络、服务器、隧道、证书，哪里不对告诉你怎么办。">
+            一键检查，哪里不对告诉你怎么办。
           </p>
         </div>
         <div className="modal-body">
@@ -234,7 +234,9 @@ export function DoctorModal({ autoRun, onClose }: Props) {
                 深度检查
               </button>
             </div>
-            <span className="field-hint">深度检查会连服务器和公网，最多 1 分钟。</span>
+            <span className="field-hint hint" title="会连服务器和公网，最多 1 分钟；快速模式只查本机。">
+              会连服务器和公网，最多 1 分钟。
+            </span>
           </div>
 
           {error && <div className="error-line settings-error">{error}</div>}

@@ -1048,14 +1048,9 @@ cli call get_public_ip '{}' --json
 > - `get_public_ip`：`{"ip":"203.0.113.10","source":"sshConnection","at":...,"server":"香港-1","message":"..."}`。
 > - `scan_server_env`：直接返回 `CloudEnv`（同 `env` 字段）。
 > - `run_access_audit`：返回和 `check_tunnel_cloud` 同形状（带 `check`/`actual`/`audit`）。
-> - 这些方法**只读云端**，不会写服务器；手动调一次就把结果存进 `state.json` 对应隧道的 `protectionCheck`（后台自动复检的落盘策略见下）。
+> - 这些方法**只读云端**，不会写服务器；手动调一次就把结果存进 `state.json` 对应隧道的 `protectionCheck`。
 >
-> **自动漂移复检（应用在跑时后台自己跑，不用调命令）**：
-> - 应用启动 **60 秒后**查第一轮，之后每 **30 分钟**扫一遍；同一条隧道两次自动检查间隔 **35–55 分钟**（`35 + hash(隧道id) % 21`，按隧道错峰，避免对同一台服务器密集建 SSH）。
-> - 只查**开着发布 + 填了网址 + 配了访问保护**的隧道；用 `drift` 模式（轻量，SSH 最长 25 秒），**只读云端**、不改服务器，结果 `source` = `"auto"`。
-> - **手动优先**：手动检查正在跑、或距上次手动检查不到 **5 分钟**，这一轮直接跳过，绝不挤占手动检查。
-> - **失败退避**：连续失败第 1 次等 90 分钟、第 2 次等 3 小时、第 3 次起等 6 小时，服务器不通时不反复刷 SSH。
-> - **只在结果有变化时才写 `protectionCheck`**（不变不写盘，省磁盘）；`status` 和手动检查一样是 `ok` / `drift` / `error`，`driftFields` 也一样。
+> **自动漂移复检已下线**：云端核对现在只有手动「检查云端」。
 
 ### 5.10 自动读取启动方式（给 agent 的专用方法）
 
@@ -1647,7 +1642,7 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
 | 15 | 云端端口两台电脑共享 | 应用只能发现本配置内的端口冲突；另一台电脑占用的云端端口会以 `remote port forwarding failed` 形式出现，不会提前拦。跨电脑别用同一端口 |
 | 16 | nginx 是人工步骤 | 应用只生成片段，不自动下发、不自动 reload。改端口/改访问保护后必须提醒用户重新贴 |
 | 17 | 掉线通知 | 隧道持续异常超过 3 分钟才弹一次，恢复再弹一次；用户暂停的不报。可在设置页关（`set_notify_enabled`） |
-| 18 | `tunnel check` 读的是云端实际状态 | 应用里的设置不代表云端已生效。改完保护/贴完云端配置后用 `cli tunnel check <隧道id> --json` 核对（`confFound` / `passwordOn` / `ipOn` / `allowIps` / `htpasswdExists`），对不上就重新贴配置。它和界面「检查云端」同一条判定流水线（最长约 30 秒）；应用在跑时后台还会每 35–55 分钟自动复检（`protectionCheck.source` = `"auto"`，见 5.9） |
+| 18 | `tunnel check` 读的是云端实际状态 | 应用里的设置不代表云端已生效。改完保护/贴完云端配置后用 `cli tunnel check <隧道id> --json` 核对（`confFound` / `passwordOn` / `ipOn` / `allowIps` / `htpasswdExists`），对不上就重新贴配置。它和界面「检查云端」同一条判定流水线（最长约 30 秒） |
 | 19 | 站点目录 `vhostDir` | 密码文件/站点配置目录的解析顺序：服务器 `vhostDir` → 环境变量 `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`。站点配置在 `<目录>/nginx/<域名>.conf`，密码文件在 `<目录>/<域名>.htpasswd`；「检查云端」也按这个目录找 |
 | 20 | CLI 改站点目录（原坑已修复） | 直接用 `cli server add/edit --vhost-dir <目录>`：edit 不写 = 保留原来的站点目录，写 `--vhost-dir ""` = 清空；不用再 `cli call save_server` 带全字段 |
 | 21 | 配置读坏不留空转 | 应用读坏时把原文件留底成 `config.json.bad`、弹红条，并**禁止自动保存**（防空配置覆盖）；恢复好再重开应用 |

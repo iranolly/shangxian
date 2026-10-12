@@ -2737,10 +2737,10 @@ fn cached_env(ctx: &Ctx, server_id: &str) -> Option<CloudEnv> {
         .and_then(|value| serde_json::from_value::<CloudEnv>(value).ok())
 }
 
-/// 手动检查的来源标记；自动漂移复检写 `"auto"`。
+/// 手动检查的来源标记。
 const MANUAL_SOURCE: &str = "manual";
 
-/// 正在手动检查的隧道 id：自动漂移调度器看见就让路（绝不挤占手动检查）。
+/// 正在手动检查的隧道 id。
 static MANUAL_CHECKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// 一次手动检查的占位；离开作用域自动还回去（panic 也不漏）。
@@ -2765,14 +2765,6 @@ impl Drop for ManualCheckGuard {
             live.retain(|x| x != &self.id);
         }
     }
-}
-
-/// 这条隧道有没有手动检查在跑（自动调度器让路用）。
-pub(crate) fn manual_check_running(tunnel_id: &str) -> bool {
-    MANUAL_CHECKS
-        .lock()
-        .map(|live| live.iter().any(|x| x == tunnel_id))
-        .unwrap_or(false)
 }
 
 /// 一次云端检查里 SSH 失败时带着的 error 记录。
@@ -2828,13 +2820,13 @@ fn cloud_check_json(result: &cloudcheck::CloudCheckResult) -> Value {
 }
 
 /// 纯组装：同一份远端输出 + 同一份输入 → 同一份 ProtectionCheck。
-/// 手动/自动检查都过这里，判定全在 core 的 `assemble_v2` / `drift_fields`。
+/// 手动检查都过这里，判定全在 core 的 `assemble_v2` / `drift_fields`。
 fn assemble_cloud_check(output: &str, input: &CheckInput<'_>) -> cloudcheck::CloudCheckResult {
     cloudcheck::assemble_v2(output, input)
 }
 
 /// 跑一次云端脚本（锁纪律：短锁取信息 → 放锁跑 SSH）。
-/// `source` 写进检查结果（手动 = `"manual"`，自动漂移 = `"auto"`）。
+/// `source` 写进检查结果（手动 = `"manual"`）。
 /// 这里**不写 state**：写不写、写哪一条由调用方按模式决定（env 模式绝不能碰保护结果）。
 fn run_cloud_check(
     ctx: &Ctx,
@@ -2954,133 +2946,6 @@ fn run_access_audit(ctx: &Ctx, params: &Value) -> Result<Value, String> {
     ctx.state
         .set_protection_check(&id, check_for_state(&result));
     Ok(cloud_check_json(&result))
-}
-
-// ---------- 自动漂移复检（D3 §12；调度线程在 lib.rs） ----------
-
-/// 每条隧道两次自动检查的间隔：45±10 分钟，按 id 稳定哈希错峰（35..=55 分钟）。
-pub(crate) fn auto_check_interval_ms(tunnel_id: &str) -> i64 {
-    // FNV-1a：不引依赖、同一条隧道每次算出来一样。
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in tunnel_id.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    let minutes = 35 + (hash % 21) as i64;
-    minutes * 60_000
-}
-
-/// 刚手动查过就先放着：自动检查至少等 5 分钟（D3 §12「手动优先」）。
-const AUTO_CHECK_AFTER_MANUAL_MS: i64 = 5 * 60_000;
-
-/// 刚连上/刚重连的观察期：连接时间不到 2 分钟先不自动复检。
-const AUTO_CHECK_MIN_UPTIME_SECS: u64 = 120;
-
-/// 自动复检这轮该不该跳过一条隧道（纯函数，方便单测；候选筛选与到期判断共用）。
-/// 返回 `Some(原因)` = 跳过：不算失败、也不占退避槽。
-/// 两条规则：不在发布中（status != running）；刚连上/刚重连（0 < uptime < 120 秒）。
-pub(crate) fn auto_check_skip_reason(status: &str, uptime_secs: u64) -> Option<&'static str> {
-    if status != "running" {
-        return Some("隧道不在发布中");
-    }
-    if uptime_secs > 0 && uptime_secs < AUTO_CHECK_MIN_UPTIME_SECS {
-        return Some("刚连上/刚重连，先等连接稳定");
-    }
-    None
-}
-
-/// 自动检查的候选：开着发布 + 填了网址 + 配了访问保护（没保护就无所谓漂移），
-/// 并且当前连接是稳定的（不在发布中 / 刚连上不到 2 分钟这轮先跳过）。
-pub(crate) fn drift_check_candidates(ctx: &Ctx) -> Result<Vec<String>, String> {
-    let g = ctx.lock_guardian()?;
-    Ok(g.tunnel_snapshot()
-        .into_iter()
-        .filter(|t| {
-            t.enabled
-                && t.url
-                    .as_deref()
-                    .map(|u| !u.trim().is_empty())
-                    .unwrap_or(false)
-                && !t.access.is_empty()
-                && auto_check_skip_reason(&t.status, t.uptime_secs).is_none()
-        })
-        .map(|t| t.id)
-        .collect())
-}
-
-/// 两次检查结果除了时间戳以外有没有实质变化（自动检查只在变化时落盘）。
-fn check_result_changed(old: &ProtectionCheck, new: &ProtectionCheck) -> bool {
-    let mut a = old.clone();
-    let mut b = new.clone();
-    a.ts = None;
-    b.ts = None;
-    serde_json::to_value(&a).ok() != serde_json::to_value(&b).ok()
-}
-
-/// 上一次手动检查是不是刚过去（5 分钟内）：自动检查让路。
-fn manual_check_recent(ctx: &Ctx, tunnel_id: &str, now: i64) -> bool {
-    ctx.state
-        .tunnel_state(tunnel_id)
-        .and_then(|s| s.protection_check)
-        .filter(|c| c.source.as_deref() == Some(MANUAL_SOURCE))
-        .and_then(|c| c.ts)
-        .map(|ts| now.saturating_sub(ts) < AUTO_CHECK_AFTER_MANUAL_MS)
-        .unwrap_or(false)
-}
-
-/// 一次自动复检的落点。
-pub(crate) enum AutoCheckOutcome {
-    /// 结果变了，已写 state（落盘走 mark_dirty）。
-    Changed,
-    /// 结果和上次一样：没写盘，只把内存里的核对时刻刷新了。
-    Unchanged,
-    /// 手动检查在跑 / 刚跑过，这轮让路。
-    Skipped,
-    /// 检查失败（调度器按退避处理）。
-    Failed(String),
-}
-
-/// 跑一条隧道的自动漂移复检（锁外 SSH；只在结果变化时写 state）。
-pub(crate) fn run_auto_drift_check(ctx: &Ctx, tunnel_id: &str) -> AutoCheckOutcome {
-    let now = now_ms();
-    if manual_check_running(tunnel_id) || manual_check_recent(ctx, tunnel_id, now) {
-        return AutoCheckOutcome::Skipped;
-    }
-    match run_cloud_check(ctx, tunnel_id, CheckMode::Drift, "auto") {
-        Ok(result) => {
-            let new_check = check_for_state(&result);
-            let old = ctx
-                .state
-                .tunnel_state(tunnel_id)
-                .and_then(|s| s.protection_check);
-            if let Some(old) = old {
-                if !check_result_changed(&old, &new_check) {
-                    // 结果没变也要把内存里的核对时刻刷新：界面 24 小时「待核对」
-                    // 对稳定环境不再误报；不标脏，重启后旧 ts 自然再查一次。
-                    if let Some(ts) = new_check.ts {
-                        ctx.state.touch_protection_check(tunnel_id, ts);
-                    }
-                    return AutoCheckOutcome::Unchanged;
-                }
-            }
-            ctx.state.set_protection_check(tunnel_id, new_check);
-            AutoCheckOutcome::Changed
-        }
-        Err(CloudCheckError::Setup(message)) => AutoCheckOutcome::Failed(message),
-        Err(CloudCheckError::Failed(failure)) => {
-            let changed = ctx
-                .state
-                .tunnel_state(tunnel_id)
-                .and_then(|s| s.protection_check)
-                .as_ref()
-                .map(|old| check_result_changed(old, &failure.check))
-                .unwrap_or(true);
-            if changed {
-                ctx.state.set_protection_check(tunnel_id, failure.check);
-            }
-            AutoCheckOutcome::Failed(failure.message)
-        }
-    }
 }
 
 /// 把环境识别结果并进检查结果的 `extra.env`：保留 extra 里别的键（例如 https / port /
@@ -3435,52 +3300,6 @@ HTPASSWD_YES
         assert!(error_writes_protection(CheckMode::Full));
         assert!(error_writes_protection(CheckMode::Drift));
         assert!(error_writes_protection(CheckMode::Audit));
-    }
-
-    #[test]
-    fn auto_check_interval_is_staggered_but_stable() {
-        let a = auto_check_interval_ms("tun-a");
-        assert_eq!(a, auto_check_interval_ms("tun-a"));
-        assert!((35 * 60_000..=55 * 60_000).contains(&a));
-        let mut seen = std::collections::BTreeSet::new();
-        for id in ["tun-1", "tun-2", "tun-3", "tun-4", "tun-5", "tun-6"] {
-            let interval = auto_check_interval_ms(id);
-            assert!((35 * 60_000..=55 * 60_000).contains(&interval));
-            seen.insert(interval);
-        }
-        assert!(seen.len() > 1, "按 id 哈希错峰失败了：{seen:?}");
-    }
-
-    #[test]
-    fn auto_check_skips_unstable_tunnels() {
-        // 发布中且连接已稳定：查
-        assert!(auto_check_skip_reason("running", 0).is_none());
-        assert!(auto_check_skip_reason("running", AUTO_CHECK_MIN_UPTIME_SECS).is_none());
-        assert!(auto_check_skip_reason("running", 3600).is_none());
-        // 不在发布中：跳（不管连了多久）
-        for status in ["connecting", "disconnected", "error", "paused"] {
-            assert!(auto_check_skip_reason(status, 3600).is_some(), "{status}");
-        }
-        // 刚连上/刚重连（0 < uptime < 120）：跳
-        assert!(auto_check_skip_reason("running", 1).is_some());
-        assert!(auto_check_skip_reason("running", AUTO_CHECK_MIN_UPTIME_SECS - 1).is_some());
-    }
-
-    #[test]
-    fn auto_check_only_flags_real_changes() {
-        let old = ProtectionCheck {
-            status: "ok".into(),
-            source: Some("auto".into()),
-            ts: Some(1),
-            ..ProtectionCheck::default()
-        };
-        let mut only_ts = old.clone();
-        only_ts.ts = Some(999);
-        assert!(!check_result_changed(&old, &only_ts));
-        let mut drift = old.clone();
-        drift.status = "drift".into();
-        drift.drift_fields = vec!["password".into()];
-        assert!(check_result_changed(&old, &drift));
     }
 
     #[test]

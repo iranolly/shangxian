@@ -53,7 +53,7 @@
 }
 
 .toolbar-chips {
-  gap: 6px;
+  gap: 8px;
 }
 
 .chip-btn {
@@ -165,7 +165,7 @@
 .card-badges {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex-wrap: wrap;
 }
 

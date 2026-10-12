@@ -124,7 +124,9 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
             {sshMeta.icon} {ssh.detail}
           </span>
         ) : (
-          <span className="about-value muted">点「体检」看看 ssh 是否可用</span>
+          <span className="about-value muted" title="跑一次体检，看 SSH 通不通">
+            点「去体检」看看
+          </span>
         )}
         {(!ssh || !sshOk) && (
           <span className="about-actions">
@@ -164,10 +166,10 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
         <span className="about-label">检查更新</span>
         <span className={`about-value ${updateTone}`}>
           {updateText}
-          <span className="about-hint">
+          <span className="about-hint hint">
             上次检查：{update.checkedAt ? formatDay(update.checkedAt) : "还没检查过"}
           </span>
-          {checkError && <span className="about-hint">⚠ {checkError}</span>}
+          {checkError && <span className="about-hint hint">⚠ {checkError}</span>}
         </span>
         <span className="about-actions">
           {update.status === "available" ? (
@@ -188,8 +190,8 @@ export function AboutCard({ onOpenDoctor, onOpenDiagnostics }: Props) {
 
       <div className="about-row">
         <span className="about-label">诊断包</span>
-        <span className="about-value">
-          密码、密钥、控制令牌永远不会放进去。
+        <span className="about-value" title="诊断包给懂行的人排查用">
+          密码、密钥、令牌不会放进去。
         </span>
         <span className="about-actions">
           <button className="btn btn-ghost btn-sm" onClick={onOpenDiagnostics}>

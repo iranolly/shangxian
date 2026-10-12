@@ -126,7 +126,7 @@ export function Sidebar({ current, onNavigate }: Props) {
             <span>发布隧道</span>
             {tunnelsTotal > 0 ? (
               <span className="nav-sub">
-                {tunnelsRunning} 条发布中 · {tunnelsDown} 条掉线
+                发布中 {tunnelsRunning} · 掉线 {tunnelsDown}
               </span>
             ) : null}
           </span>

@@ -130,11 +130,16 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
       <div className="bulk-bar" role="region" aria-label="批量操作">
         {progress ? (
           <>
-            <span className="bulk-count">
+            <span
+              className="bulk-count"
+              title={
+                progress.hidden > 0
+                  ? `另有 ${progress.hidden} 条被筛选隐藏，这次不动`
+                  : undefined
+              }
+            >
               正在处理 {progress.done}/{progress.total}…
-              {progress.hidden > 0
-                ? `（另有 ${progress.hidden} 条被筛选隐藏，这次不动）`
-                : ""}
+              {progress.hidden > 0 ? `（隐藏 ${progress.hidden} 条）` : ""}
             </span>
             <span className="bulk-progress" aria-hidden="true">
               <span className="bulk-progress-fill" style={{ width: `${pct}%` }} />
@@ -151,11 +156,16 @@ export function BulkBar({ page, visibleIds, onExit }: Props) {
           </>
         ) : (
           <>
-            <span className="bulk-count">
+            <span
+              className="bulk-count"
+              title={
+                hiddenSelected > 0
+                  ? `另有 ${hiddenSelected} 条被筛选隐藏，不参与操作`
+                  : undefined
+              }
+            >
               已选 {ids.length} 条
-              {hiddenSelected > 0
-                ? `（另有 ${hiddenSelected} 条被筛选隐藏，不参与操作）`
-                : ""}
+              {hiddenSelected > 0 ? `（隐藏 ${hiddenSelected} 条）` : ""}
             </span>
             <button
               className="btn btn-ghost btn-sm"

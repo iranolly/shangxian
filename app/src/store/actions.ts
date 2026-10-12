@@ -12,7 +12,6 @@ import {
   restoreDeleted,
   saveServer,
   saveService,
-  scanServerEnv,
   serviceStart,
   serviceStop,
   setServiceAutostart,
@@ -25,7 +24,6 @@ import {
   updateTunnel,
   type AccessCheck,
   type CloudCheckResult,
-  type CloudEnv,
   type NewTunnelInput,
   type ServerInput,
   type ServiceInput,
@@ -605,21 +603,6 @@ export const actions = {
       });
     } catch (e) {
       setNotice(`server:${id}`, errorText(e));
-      return undefined;
-    }
-  },
-
-  /** 识别服务器环境：pending 走 `server:{id}`；结果回给页面刷新，失败统一挂到卡片 */
-  async serverScanEnv(id: string): Promise<CloudEnv | undefined> {
-    try {
-      return await runCommand<CloudEnv>({
-        key: `server:${id}`,
-        run: () => scanServerEnv(id),
-        success: null,
-        failure: { rethrow: true, silent: true },
-      });
-    } catch (e) {
-      setNotice(`server:${id}`, `识别环境没成功：${errorText(e)}`);
       return undefined;
     }
   },

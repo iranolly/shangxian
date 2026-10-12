@@ -394,14 +394,14 @@ export function NotificationCenter({ onClose, onOpenSettings }: Props) {
           title="只压界面提醒；系统通知请用「免打扰时段」"
           onClick={() => setMutedUntil(muted ? null : Date.now() + MUTE_MS)}
         >
-          {muted ? "取消界面静音" : "界面静音 1 小时"}
+          {muted ? "取消静音" : "静音 1 小时"}
         </button>
       </div>
 
       {items.length === 0 ? (
         <div className="notif-empty">
           <p className="notif-empty-title">还没有通知</p>
-          <p>掉线、恢复、体检失败这些事会记在这里。</p>
+          <p>掉线、恢复、体检失败会记在这里。</p>
         </div>
       ) : (
         <div className="notif-list">

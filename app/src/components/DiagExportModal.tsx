@@ -59,23 +59,26 @@ export function DiagExportModal({ onClose }: Props) {
       <div className="modal diag-modal" role="dialog" aria-modal="true" ref={dialogRef}>
         <div className="modal-head">
           <h2 className="modal-title">导出诊断包</h2>
-          <p className="modal-sub">
-            诊断包是一份“现场记录”，发给帮我排查的人就能定位问题。
+          <p className="modal-sub" title="诊断包是一份“现场记录”，发给帮你排查的人就能定位问题。">
+            把现场情况打包，发给懂行的人排查。
           </p>
         </div>
         <div className="modal-body">
           <ul className="diag-list">
-            <li>
-              <span className="strong">里面会放：</span>
-              应用版本、系统信息、脱敏后的设置、隧道和服务的状态、最近的日志、体检结果。
+            <li title="应用版本、系统信息、脱敏后的设置、隧道和服务的状态、最近的日志、体检结果。">
+              <span className="strong">会放：</span>
+              版本、系统、脱敏设置、状态、日志
             </li>
-            <li>
-              <span className="strong">不会放：</span>
-              登录密码、密码加密结果、私钥内容、控制令牌、启动参数原文。
+            <li title="不会放：登录密码、密码加密结果、私钥内容、控制令牌、启动参数原文。">
+              <span className="strong">不放：</span>
+              密码、私钥、令牌、启动参数
             </li>
           </ul>
           <div className="field" style={{ marginTop: 14, marginBottom: 0 }}>
-            <label className="switch">
+            <label
+              className="switch"
+              title="会连服务器和公网，最多 1 分钟；不勾只查本机。"
+            >
               <input
                 type="checkbox"
                 checked={deep}
@@ -84,9 +87,7 @@ export function DiagExportModal({ onClose }: Props) {
               />
               深度检查
             </label>
-            <p className="field-hint">
-              会连服务器和公网，最多 1 分钟；快速模式只查本机。
-            </p>
+            <p className="field-hint hint">会连服务器，最多 1 分钟。</p>
           </div>
           {error && <div className="error-line settings-error">{error}</div>}
         </div>

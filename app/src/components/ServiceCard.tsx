@@ -85,7 +85,7 @@ function ServiceCardInner({ serviceId, selectable, onStop, onEdit, onLogs, onRem
           {healthChip(service)}
           {service.logOverflowed ? (
             <span className="chip warn" title="程序日志太多，只保留了最近一部分；归档可以在看日志时切换">
-              日志太长了，只留了最近一段
+              日志只留了最近一段
             </span>
           ) : null}
         </span>
@@ -177,8 +177,11 @@ function ServiceCardInner({ serviceId, selectable, onStop, onEdit, onLogs, onRem
       ) : null}
 
       {noLaunch ? (
-        <p className="card-no-launch">
-          只监控，不帮你启动：没填启动程序时「看护」和「开机自启」用不上。想用的话，点「⋯」→「编辑本机服务」把启动程序填上。
+        <p
+          className="hint card-no-launch"
+          title="没填启动程序时「看护」和「开机自启」用不上。想用就点「⋯」→「编辑本机服务」把启动程序填上"
+        >
+          只监控，不帮你启动
         </p>
       ) : null}
 

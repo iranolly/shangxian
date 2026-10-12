@@ -1,22 +1,19 @@
 // 访问保护状态（「访问保护」页每行下面用）：
 // - 持久黄标「待核对」：从快照的 protectionCheck 读（unknown / 超过 24 小时 / drift）；
 // - 漂移黄条：云端配置和设置对不上时给「打开云端配置 / 暂时不管」；
-// - HTTPS 红黄灯：从检查结果的 protectionCheck.extra 读（D3 §4）；
-// - 非 nginx 横幅：按 D3 §15 文案，给「重新识别 / 我手动确认过了」。
+// - HTTPS 红黄灯：从检查结果的 protectionCheck.extra 读（D3 §4）。
 
 import { useEffect, useState } from "react";
 
 import {
   checkTunnelAccess,
   checkTunnelCloud,
-  scanServerEnv,
   type AccessCheck,
   type CloudCheckResult,
   type ProtectionCheck,
   type TunnelView,
 } from "../api";
 import { errorText } from "../store/commands";
-import { useServer } from "../store/useStore";
 
 type CheckState =
   | { phase: "idle" }
@@ -85,13 +82,14 @@ export function cloudLabel(c: AccessCheck): string {
 export function cloudCheck(
   t: TunnelView,
   c: AccessCheck,
-): { tone: "ok" | "warn"; text: string; htpasswdMissing: boolean } {
+): { tone: "ok" | "warn"; text: string; hint?: string; htpasswdMissing: boolean } {
   const { password, ip } = accessFlags(t.access);
   const htpasswdMissing = c.passwordOn && !c.htpasswdExists;
   if (!c.confFound) {
     return {
       tone: "warn",
-      text: "云端没找到这条隧道的站点配置（可能还没在面板里建站）",
+      text: "云端没找到站点配置",
+      hint: "可能还没在面板里建站；建好后再检查一次",
       htpasswdMissing,
     };
   }
@@ -110,9 +108,8 @@ export function cloudCheck(
   const same = sameFlags && sameIps;
   return {
     tone: same ? "ok" : "warn",
-    text: same
-      ? `云端已生效：${cloudLabel(c)}`
-      : `云端实际是：${cloudLabel(c)}（设置还没生效，请重新复制云端配置贴到面板里）`,
+    text: same ? `云端已生效：${cloudLabel(c)}` : `云端实际是：${cloudLabel(c)}`,
+    hint: same ? undefined : "设置还没生效，请重新复制云端配置贴到面板里",
     htpasswdMissing,
   };
 }
@@ -149,9 +146,7 @@ function dismiss(key: string): void {
   }
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const HTTPS_DISMISS_MS = 24 * 60 * 60 * 1000;
-const PANEL_DISMISS_MS = 7 * DAY_MS;
 const FRESH_MS = 24 * 60 * 60 * 1000;
 
 // ---------- protectionCheck.extra 里的 HTTPS / warnings ----------
@@ -181,7 +176,7 @@ export function readExtra(check?: ProtectionCheck | null): {
 export function httpsLight(
   t: TunnelView,
   https: ExtraHttps | null,
-): { level: "red" | "yellow"; text: string } | null {
+): { level: "red" | "yellow"; text: string; hint?: string } | null {
   if (!https) return null;
   const { password, ip } = accessFlags(t.access);
   const urlHttps = (t.url ?? "").startsWith("https://");
@@ -189,43 +184,50 @@ export function httpsLight(
   if (urlHttps && https.enabled === false) {
     return {
       level: "red",
-      text: "网址写的是 https，但服务器上没有找到 443 的站点。外面打不开，先回面板把证书和 https 开上。",
+      text: "网址是 https，但服务器上没有 443 站点",
+      hint: "外面打不开；先回面板把证书和 https 开上",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 0) {
     return {
       level: "red",
-      text: "证书已经过期了，网页会报警告。去面板点一下「续签证书」。",
+      text: "证书已经过期了",
+      hint: "网页会报警告；去面板点一下「续签证书」",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 7) {
     return {
       level: "red",
-      text: `证书还剩 ${https.certDays} 天，快到期了。去面板点一下「续签证书」；续期用的 /.well-known 那一小块要留着别删。`,
+      text: `证书还剩 ${https.certDays} 天，快到期了`,
+      hint: "去面板点「续签证书」；续期用的 /.well-known 那一小块要留着别删",
     };
   }
   if (password && plainOpen) {
     return {
       level: "red",
-      text: "密码现在能用 http:// 明文提交，等于把密码写在明信片上。请到面板打开「强制 HTTPS」（80 跳 443）。",
+      text: "密码能用 http:// 明文提交",
+      hint: "等于把密码写在明信片上；请到面板打开「强制 HTTPS」（80 跳 443）",
     };
   }
   if (ip && plainOpen) {
     return {
       level: "yellow",
-      text: "网站用 http:// 打开时内容不加密。虽然只有白名单 IP 能进，还是建议在面板打开「强制 HTTPS」。",
+      text: "http:// 打开时内容不加密",
+      hint: "虽然只有白名单 IP 能进，还是建议在面板打开「强制 HTTPS」",
     };
   }
   if (!password && !ip && plainOpen) {
     return {
       level: "yellow",
-      text: "这个网站 http:// 和 https:// 都能开。建议在面板打开「强制 HTTPS」，让 http:// 自动跳到 https://。",
+      text: "http:// 和 https:// 都能开",
+      hint: "建议在面板打开「强制 HTTPS」，让 http:// 自动跳到 https://",
     };
   }
   if (typeof https.certDays === "number" && https.certDays <= 30) {
     return {
       level: "yellow",
-      text: `证书还剩 ${https.certDays} 天，注意一下。面板一般会自动续，续不上会红。`,
+      text: `证书还剩 ${https.certDays} 天`,
+      hint: "注意一下；面板一般会自动续，续不上会红",
     };
   }
   return null;
@@ -244,24 +246,6 @@ const DRIFT_TEXT: Record<string, string> = {
 function driftText(fields: string[]): string {
   const list = fields.map((f) => DRIFT_TEXT[f] ?? f).join("、");
   return list || "云端和设置对不上";
-}
-
-// ---------- 环境横幅文案（D3 §15） ----------
-
-export function envText(web: string): string {
-  if (web === "apache") {
-    return "这台服务器上跑的是 Apache，不是 nginx。这个应用生成的是 nginx 的配置片段，贴了不会生效。两个办法：① 在面板里新建站点时选 nginx（宝塔/小皮都支持）；② 先把片段留着，换成 nginx 再用。";
-  }
-  if (web === "none") {
-    return "没找到 nginx，也没有 Apache。可能网站服务没装，或者装在特殊路径。这种情况先别贴片段。";
-  }
-  if (web === "unknown") {
-    return "没认出来这台服务器用的什么面板和网站服务（nginx 还是 Apache 都没找到）。先别贴片段，怕贴错地方；可以在服务器上执行 nginx -v 或 httpd -v 看看，再点「重新识别」。";
-  }
-  if (web === "both") {
-    return "这台机器上 nginx 和 Apache 都在。贴之前先确认你的站点是哪一个在管（面板里的网站列表一般会写 nginx 还是 Apache）。";
-  }
-  return "";
 }
 
 function timeText(at: number): string {
@@ -283,11 +267,6 @@ interface Props {
 export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
   const [state, setState] = useState<CheckState | null>(null);
   const [driftHidden, setDriftHidden] = useState(false);
-  const [envBusy, setEnvBusy] = useState(false);
-  const [envMsg, setEnvMsg] = useState("");
-  /** 浏览器预览 / 刚识别完：识别结果显示用（快照可能还没更新） */
-  const [envOverride, setEnvOverride] = useState<string | null | undefined>(undefined);
-  const server = useServer(tunnel.serverId);
   const summary = protectionSummary(tunnel);
   const { password, ip } = accessFlags(tunnel.access);
   const check = tunnel.protectionCheck;
@@ -324,29 +303,6 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
       } catch (e) {
         setState({ phase: "error", message: errorText(e) });
       }
-    }
-  };
-
-  const env =
-    envOverride !== undefined ? envOverride : (server?.cloudEnv?.web ?? null);
-  const nonNginx = env !== null && env !== "nginx";
-  const panelDismissedKey = `panel:${tunnel.serverId}`;
-  const [panelDismissed, setPanelDismissed] = useState(() =>
-    isDismissed(panelDismissedKey, PANEL_DISMISS_MS),
-  );
-
-  const rescanEnv = async () => {
-    if (!server) return;
-    setEnvBusy(true);
-    setEnvMsg("");
-    try {
-      const result = await scanServerEnv(server.id);
-      setEnvOverride(result.web);
-      setEnvMsg(`重新识别完成：网站服务是 ${result.web}`);
-    } catch (e) {
-      setEnvMsg(`识别没成功：${errorText(e)}`);
-    } finally {
-      setEnvBusy(false);
     }
   };
 
@@ -397,15 +353,10 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
         </span>
         <button
           className="link-btn"
-          title={nonNginx ? "自动检查用不了，请按面板手册核对" : undefined}
           disabled={state?.phase === "loading"}
           onClick={() => void run()}
         >
-          {state?.phase === "loading"
-            ? "检查中…"
-            : nonNginx
-              ? "手动核对"
-              : "检查云端"}
+          {state?.phase === "loading" ? "检查中…" : "检查云端"}
         </button>
         {state?.phase === "done" && (
           <span className="protect-result" style={{ color: "var(--text-3)" }}>
@@ -413,14 +364,17 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
           </span>
         )}
         {result && (
-          <span className={`protect-result ${result.tone}`}>
+          <span className={`protect-result ${result.tone}`} title={result.hint}>
             {result.tone === "ok" ? "✓ " : "⚠ "}
             {result.text}
           </span>
         )}
         {result?.htpasswdMissing && (
-          <span className="protect-result warn">
-            ⚠ 服务器上还没有密码文件（htpasswd），密码可能进不去
+          <span
+            className="protect-result warn"
+            title="密码可能进不去，去云端配置里重新生成"
+          >
+            ⚠ 服务器上还没有密码文件
           </span>
         )}
         {state?.phase === "error" && (
@@ -430,8 +384,10 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
 
       {showDrift && (
         <div className="drift-bar">
-          <span>
-            云端和设置对不上：{driftText(check?.driftFields ?? [])}。重新贴一次云端配置。
+          <span
+            title={`${driftText(check?.driftFields ?? [])}；重新贴一次云端配置就能修好`}
+          >
+            云端和设置对不上
           </span>
           {onOpenNginx && (
             <button className="link-btn" onClick={() => onOpenNginx(tunnel)}>
@@ -446,7 +402,7 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
 
       {checkStatus === "error" && (
         <div className="drift-bar">
-          <span>云端核不上：{check?.error ?? "不知道原因"}</span>
+          <span title={check?.error ?? "不知道原因"}>云端核不上</span>
           <button className="link-btn" onClick={() => void run()}>
             再检查一次
           </button>
@@ -457,7 +413,10 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
       )}
 
       {light && !httpsDismissed && (
-        <div className={light.level === "red" ? "error-line" : "warn-line"}>
+        <div
+          className={light.level === "red" ? "error-line" : "warn-line"}
+          title={light.hint}
+        >
           {light.level === "red" ? "红灯： " : "注意： "}
           {light.text}
           {onOpenNginx && (
@@ -491,40 +450,6 @@ export function ProtectionStatus({ tunnel, onOpenNginx }: Props) {
         </div>
       ))}
 
-      {server && !panelDismissed && env === null && (
-        <div className="env-banner">
-          <span className="env-text">还没识别这台服务器的环境。</span>
-          <button
-            className="link-btn"
-            disabled={envBusy}
-            onClick={() => void rescanEnv()}
-          >
-            {envBusy ? "识别中…" : "识别一下"}
-          </button>
-        </div>
-      )}
-      {server && !panelDismissed && env !== null && env !== "nginx" && (
-        <div className="env-banner">
-          <span className="env-text">{envText(env ?? "")}</span>
-          <button
-            className="link-btn"
-            disabled={envBusy}
-            onClick={() => void rescanEnv()}
-          >
-            {envBusy ? "识别中…" : "重新识别"}
-          </button>
-          <button
-            className="link-btn"
-            onClick={() => {
-              dismiss(panelDismissedKey);
-              setPanelDismissed(true);
-            }}
-          >
-            我手动确认过了
-          </button>
-        </div>
-      )}
-      {envMsg && <div className="field-hint">{envMsg}</div>}
     </div>
   );
 }

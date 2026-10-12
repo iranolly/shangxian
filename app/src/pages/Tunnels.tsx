@@ -15,7 +15,6 @@ import { EditTunnelModal } from "../components/EditTunnelModal";
 import { LogsModal, type LogTarget } from "../components/LogsModal";
 import { NewTunnelWizard } from "../components/NewTunnelWizard";
 import { NginxModal } from "../components/NginxModal";
-import { ServerEnvBanner } from "../components/ServerEnvBanner";
 import type { PageKey } from "../components/Sidebar";
 import { TunnelCard } from "../components/TunnelCard";
 import { BulkBar } from "../components/list/BulkBar";
@@ -35,7 +34,6 @@ import {
   sameNumberArray,
   sameStringArray,
   sameTunnelGroups,
-  selectServerEnvAlertIds,
   selectTunnelGroups,
   selectTunnelIds,
   selectTunnelStatusCounts,
@@ -92,7 +90,6 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
   const groups = useStore(selectTunnelGroups, sameTunnelGroups);
   const statusCounts = useStore(selectTunnelStatusCounts, sameNumberArray);
   const total = useStore(selectTunnelTotal);
-  const envAlertServerIds = useStore(selectServerEnvAlertIds, sameStringArray);
   const bulkMode = useBulkMode("tunnels");
 
   const [wizard, setWizard] = useState<{ serviceId?: string; serverId?: string } | null>(
@@ -185,9 +182,7 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       <header className="page-head">
         <div>
           <h1 className="page-title">发布隧道</h1>
-          <p className="page-sub">
-            把某台本机服务接到某台云端服务器上，别人用网址就能打开。
-          </p>
+          <p className="page-sub">把本机服务接到云端，别人用网址就能打开。</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button
@@ -199,25 +194,18 @@ export function TunnelsPage({ onNavigate, intent, onIntentDone }: Props = {}) {
           >
             体检
           </button>
-          <button className="btn btn-primary" onClick={() => setWizard({})}>
-            + 发布新隧道
+          <button className="btn btn-primary" title="发布一条新隧道" onClick={() => setWizard({})}>
+            + 发布
           </button>
         </div>
       </header>
 
-      {/* 服务器环境横幅（按服务器去重；没有环境问题就不显示） */}
-      {envAlertServerIds.map((serverId) => (
-        <ServerEnvBanner key={serverId} serverId={serverId} />
-      ))}
-
       {total === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有发布任何隧道</p>
-          <p className="empty-text">
-            把你电脑上的程序分享到公网，别人用手机、在外面都能打开。
-          </p>
-          <button className="btn btn-primary" onClick={() => setWizard({})}>
-            + 发布第一条隧道
+          <p className="empty-text">分享到公网，在外面用手机也能打开。</p>
+          <button className="btn btn-primary" title="发布第一条隧道" onClick={() => setWizard({})}>
+            + 发布
           </button>
         </div>
       ) : (
@@ -378,7 +366,7 @@ function RemoveTunnelConfirm({ id, onClose }: { id: string; onClose(): void }) {
   return (
     <ConfirmModal
       title={`删除隧道「${tunnel.name}」？`}
-      body="删掉后别人立刻打不开，配置也会一起删掉；5 秒内可以撤销。"
+      body="别人立刻打不开，配置一起删；5 秒内可撤销。"
       confirmLabel="删除"
       danger
       onConfirm={() => {

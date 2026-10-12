@@ -153,8 +153,11 @@ function CloneForm({
       <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 560 }}>
         <div className="modal-head">
           <h2 className="modal-title">克隆隧道 · {source.name}</h2>
-          <p className="modal-sub">
-            复制一条设置差不多的隧道；建好后是暂停状态，检查好再开始发布。
+          <p
+            className="modal-sub"
+            title="复制一条设置差不多的隧道；建好后是暂停状态，检查好再开始发布。"
+          >
+            照着这条复制一条，建好是暂停状态。
           </p>
         </div>
         <div className="modal-body">
@@ -237,8 +240,11 @@ function CloneForm({
             </label>
             {wantPassword ? (
               <>
-                <p className="field-hint">
-                  原来的密码加密结果不能复制，这里给新隧道设一条新密码（可以和原来一样）。
+                <p
+                  className="field-hint hint"
+                  title="原来的密码加密结果不能复制，所以这里要给新隧道设一条（可以和原来一样）。"
+                >
+                  给新隧道设一条新密码。
                 </p>
                 <div className="field-row">
                   <div className="field">

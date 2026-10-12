@@ -55,8 +55,10 @@ export function CloudDriftBar({ tunnelId, onOpenNginx }: Props) {
     <>
       {check?.status === "drift" && !ignored("drift") ? (
         <div className="drift-bar">
-          <span>
-            云端和设置对不上：{driftText(check.driftFields ?? [])}。重新贴一次云端配置。
+          <span
+            title={`${driftText(check.driftFields ?? [])}；重新贴一次云端配置就能修好`}
+          >
+            云端和设置对不上
           </span>
           {onOpenNginx ? (
             <button className="link-btn" onClick={() => onOpenNginx(tunnelId)}>
@@ -71,7 +73,7 @@ export function CloudDriftBar({ tunnelId, onOpenNginx }: Props) {
 
       {check?.status === "error" && !ignored("error") ? (
         <div className="drift-bar">
-          <span>云端核不上：{check.error ?? "不知道原因"}</span>
+          <span title={check.error ?? "不知道原因"}>云端核不上</span>
           <button
             className="link-btn"
             onClick={() => void actions.checkCloud(tunnelId)}
@@ -85,7 +87,10 @@ export function CloudDriftBar({ tunnelId, onOpenNginx }: Props) {
       ) : null}
 
       {light && !ignored("https") ? (
-        <div className={light.level === "red" ? "error-line" : "warn-line"}>
+        <div
+          className={light.level === "red" ? "error-line" : "warn-line"}
+          title={light.hint}
+        >
           {light.level === "red" ? "红灯： " : "注意： "}
           {light.text}
           {onOpenNginx ? (

@@ -132,7 +132,12 @@ function TunnelCardInner({
 
       {!tunnel.serviceOk ? (
         <div className="card-note">
-          <span className="chip warn">⚠ 本机服务没在跑（访问会失败）</span>
+          <span
+            className="chip warn"
+            title="本机服务没在跑，外面访问会失败；点「去启动」把它开起来"
+          >
+            ⚠ 本机服务没在跑
+          </span>
           {onGoToServices ? (
             <button className="link-btn" onClick={onGoToServices}>
               去启动

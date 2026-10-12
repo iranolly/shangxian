@@ -143,9 +143,7 @@ export function ImportModal({ onClose, onDone }: Props) {
       <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 640 }}>
         <div className="modal-head">
           <h2 className="modal-title">导入</h2>
-          <p className="modal-sub">
-            从配置文件恢复设置（合并或整体替换），也可以扫描旧的启动脚本。
-          </p>
+          <p className="modal-sub">从文件恢复设置，或扫描旧启动脚本。</p>
           <div className="seg" style={{ marginTop: 10 }} role="group" aria-label="导入方式">
             <button
               className={tab === "config" ? "active" : ""}
@@ -172,7 +170,7 @@ export function ImportModal({ onClose, onDone }: Props) {
                   accept=".json,application/json"
                   onChange={(e) => void readFile(e.target.files?.[0] ?? null)}
                 />
-                {fileName && <p className="field-hint">已选：{fileName}</p>}
+                {fileName && <p className="field-hint hint">已选：{fileName}</p>}
               </div>
 
               <div className="field">
@@ -190,7 +188,10 @@ export function ImportModal({ onClose, onDone }: Props) {
               </div>
 
               <div className="import-mode">
-                <label className="switch">
+                <label
+                  className="switch"
+                  title="按 id 对上的只改文件里出现的字段，其它保持不动"
+                >
                   <input
                     type="radio"
                     name="import-mode"
@@ -200,9 +201,13 @@ export function ImportModal({ onClose, onDone }: Props) {
                       setSummary(null);
                     }}
                   />
-                  合并（推荐）：按 id 对上的只改文件里出现的字段，其它保持不动
+                  合并（推荐）：只改文件里提到的
                 </label>
-                <label className="switch" style={{ marginTop: 6 }}>
+                <label
+                  className="switch"
+                  style={{ marginTop: 6 }}
+                  title="会先自动备份现在的配置"
+                >
                   <input
                     type="radio"
                     name="import-mode"
@@ -212,7 +217,7 @@ export function ImportModal({ onClose, onDone }: Props) {
                       setSummary(null);
                     }}
                   />
-                  整体替换：导入文件里有什么就是什么（会先自动备份现在的配置）
+                  整体替换：文件里有什么就是什么
                 </label>
               </div>
 
@@ -237,10 +242,10 @@ export function ImportModal({ onClose, onDone }: Props) {
               {error && <div className="error-line">{error}</div>}
             </>
           ) : items === null ? (
-            <p className="field-hint">正在扫描旧的启动脚本…</p>
+            <p className="field-hint hint">正在扫描旧的启动脚本…</p>
           ) : items.length === 0 ? (
-            <p className="field-hint">
-              没有找到可以导入的旧脚本。你可以直接用「+ 添加本机服务」。
+            <p className="field-hint hint">
+              没找到旧脚本，可以直接加本机服务。
             </p>
           ) : (
             <>
@@ -259,18 +264,20 @@ export function ImportModal({ onClose, onDone }: Props) {
                     />
                     <div className="option-text">
                       <div>{it.name}</div>
-                      <div className="option-hint">
+                      <div className="option-hint hint">
                         本机端口 {it.localPort} · 云端端口 {it.remotePort} ·{" "}
                         {it.serverUser}@{it.serverHost}
                       </div>
-                      <div className="option-hint">来源：{it.source}</div>
+                      <div className="option-hint hint">来源：{it.source}</div>
                     </div>
                   </label>
                 ))}
               </div>
-              <p className="field-hint">
-                导入后隧道是「已暂停」。确认新工具跑稳后，停掉旧的启动脚本，
-                再到「发布隧道」页点「开始发布」完成接管。
+              <p
+                className="field-hint hint"
+                title="停掉旧的启动脚本，再到「发布隧道」页点「开始发布」完成接管。"
+              >
+                导入后隧道是暂停状态，确认后到「发布隧道」页启动。
               </p>
               {scriptError && <div className="error-line">{scriptError}</div>}
             </>
@@ -313,7 +320,7 @@ export function ImportModal({ onClose, onDone }: Props) {
       {confirmReplace && (
         <ConfirmModal
           title="要整体替换现在的配置吗？"
-          body="导入文件里没有的东西会没了；助手会先自动备份现在的配置，出问题可以找回。"
+          body="文件里没有的东西会没了（会先自动备份）。"
           confirmLabel="整体替换"
           danger
           onConfirm={() => {

@@ -106,7 +106,7 @@ export function BulkConfirmModal({ action, names, unit, onConfirm, onClose }: Pr
       body={
         action === "start"
           ? "这些隧道会立刻开始连接云端。"
-          : "暂停后别人就打不开了；想恢复再点「开始发布」。"
+          : "暂停后别人就打不开了。"
       }
       confirmLabel={action === "start" ? "开始发布" : "暂停发布"}
       onConfirm={onConfirm}

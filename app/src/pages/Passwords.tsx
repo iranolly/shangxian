@@ -5,6 +5,7 @@
 import { useState } from "react";
 
 import { NginxModal } from "../components/NginxModal";
+import { InfoTip } from "../components/InfoTip";
 import { ProtectionModal } from "../components/ProtectionModal";
 import {
   ProtectionStatus,
@@ -46,9 +47,18 @@ type AuditState =
 function actionFor(t: TunnelView): string {
   const { password, ip } = accessFlags(t.access);
   if (password && ip) return "改保护";
-  if (password) return "改密码 / 用户名";
+  if (password) return "改密码";
   if (ip) return "改白名单";
   return "加保护";
+}
+
+/** 行按钮的悬浮说明：按当前设置的组合说清改的是什么 */
+function actionTip(t: TunnelView): string {
+  const { password, ip } = accessFlags(t.access);
+  if (password && ip) return "改网页访问的密码和允许的 IP";
+  if (password) return "改网页访问的密码和用户名";
+  if (ip) return "改允许访问的 IP 名单";
+  return "给这条隧道加密码或 IP 名单";
 }
 
 /** 待核对 = 没查过 / unknown / 上次核对超过 24 小时（D2 §6.4 展示规则） */
@@ -153,8 +163,8 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
       <header className="page-head">
         <div>
           <h1 className="page-title">访问保护</h1>
-          <p className="page-sub">
-            给每条隧道加一道门：要密码、只让指定的人进，两种保护可以同时开。
+          <p className="page-sub" title="密码和 IP 名单可以同时开">
+            给每条隧道加道门：密码或 IP 名单。
           </p>
         </div>
       </header>
@@ -171,13 +181,25 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
             <article className="card">
               <div className="server-card">
                 <div className="server-main">
-                  <div className="server-name">访问保护一览</div>
-                  <div className="server-meta">
+                  <div className="server-name">
+                    访问保护一览
+                    <InfoTip text="密码只存加密结果，不存明文。保存后会打开云端配置，贴到面板再点「检查云端」才算生效。" />
+                  </div>
+                  <div
+                    className="server-meta"
+                    title={
+                      driftCount > 0
+                        ? "重新贴一次云端配置就好"
+                        : warnCount > 0
+                          ? "网址一泄露谁都能看，点每条按钮加保护"
+                          : "点每条下面的「检查云端」，真的生效了才算数"
+                    }
+                  >
                     {driftCount > 0
-                      ? `有 ${driftCount} 条隧道云端和设置对不上，重新贴一次云端配置就好。`
+                      ? `有 ${driftCount} 条云端和设置对不上。`
                       : warnCount > 0
-                        ? `有 ${warnCount} 条隧道还没设好保护，网址一泄露谁都能看。`
-                        : `${tunnels.length} 条隧道本地设置都齐全。点每条下面的「检查云端」，云端真的生效了才算数。`}
+                        ? `有 ${warnCount} 条还没设好保护。`
+                        : `本地 ${tunnels.length} 条设置都齐全。`}
                   </div>
                   {(pendingCount > 0 || driftCount > 0) && (
                     <div className="row-actions" style={{ marginTop: 8 }}>
@@ -186,7 +208,7 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                       )}
                       {driftCount > 0 && (
                         <span className="chip warn">
-                          {driftCount} 条要重新贴云端配置
+                          {driftCount} 条要重贴配置
                         </span>
                       )}
                     </div>
@@ -215,29 +237,32 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                     <span className="row-actions">
                       <button
                         className="btn btn-ghost btn-sm"
+                        title={actionTip(t)}
                         onClick={() => setProtectForId(t.id)}
                       >
                         {actionFor(t)}
                       </button>
                       <button
                         className="btn btn-ghost btn-sm"
+                        title="最近来访和被挡次数（只在本机显示）"
                         onClick={() => void toggleAudit(t)}
                       >
-                        {auditFor === t.id ? "收起访问记录" : "查看访问记录"}
+                        {auditFor === t.id ? "收起记录" : "访问记录"}
                       </button>
                     </span>
                   </div>
                   <ProtectionStatus tunnel={t} onOpenNginx={openNginxInTunnels} />
 
                   {driftShown && protection && (
-                    <div className="drift-bar">
-                      <p>
-                        云端和设置对不上：
-                        {(protection.driftFields ?? [])
+                    <div
+                      className="drift-bar"
+                      title={`对不上的地方：${
+                        (protection.driftFields ?? [])
                           .map((field) => DRIFT_FIELD_TEXT[field] ?? field)
-                          .join("、") || "有些地方不一样"}
-                        。重新贴一次云端配置。
-                      </p>
+                          .join("、") || "有些地方不一样"
+                      }。重新贴一次云端配置。`}
+                    >
+                      <p>云端和设置对不上，重新贴一次配置。</p>
                       <div className="drift-actions">
                         <button className="link-btn" onClick={() => setNginxForId(t.id)}>
                           打开云端配置
@@ -255,8 +280,11 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
                   )}
 
                   {protection?.status === "error" && (
-                    <div className="drift-bar error">
-                      <p>云端核不上：{protection.error ?? "没查到原因"}。点「检查云端」再试一次。</p>
+                    <div
+                      className="drift-bar error"
+                      title={protection.error ?? "没查到原因"}
+                    >
+                      <p>云端核不上，点「检查云端」重试。</p>
                     </div>
                   )}
 
@@ -284,10 +312,8 @@ export function PasswordsPage({ tunnels, onRefresh }: Props) {
               );
             })}
 
-            <p className="page-hint">
-              这里的密码是别人打开网页时输的；连服务器用的登录密码在「云端服务器」页。
-              密码不会存在本地（只存加密结果），忘了就在这里点「改密码 / 用户名」重新设一个；
-              保存成功后会直接打开「云端配置」，把新的几行贴到面板里，再点「检查云端」确认真的生效了。
+            <p className="hint">
+              这里管网页访问密码；服务器登录密码在「云端服务器」页。
             </p>
           </>
         )}

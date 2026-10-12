@@ -22,7 +22,6 @@ import { errorText } from "../store/commands";
 import {
   cloudCheck,
   cloudLabel,
-  envText,
   httpsLight,
   readExtra,
 } from "./ProtectionStatus";
@@ -147,16 +146,14 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
     return checkState.actual.confFound ? "ok" : "warn";
   })();
   const statusText = (() => {
-    if (checkState.phase === "idle") {
-      return "还没检查过云端：贴完上面的配置、保存并重载 nginx（服务器上的接待员）后，点右边「检查云端」看生效没有。";
-    }
+    if (checkState.phase === "idle") return "还没检查过云端。";
     if (checkState.phase === "loading") return "正在连服务器检查…";
     if (checkState.phase === "error") return `检查失败：${checkState.message}`;
     const { actual, at } = checkState;
     const head = `上次检查 ${timeText(at)}：`;
     if (checkResult) return `${head}${checkResult.text}`;
     if (!actual.confFound) {
-      return `${head}云端还没找到这条隧道的站点配置（可能站点还没建，或者改了没保存、没重载）。`;
+      return `${head}云端还没找到站点配置（可能没保存或没重载）。`;
     }
     return `${head}云端已找到站点配置，当前生效：${cloudLabel(actual)}。`;
   })();
@@ -167,11 +164,9 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
   const { https } = readExtra(freshCheck);
   const light = tunnel ? httpsLight(tunnel, https) : null;
   const portExposed = cloud?.port?.bound === "exposed";
-  const envHint =
-    cloud?.env && cloud.env.web !== "nginx" ? envText(cloud.env.web) : "";
   const presetNote =
     tunnel?.preset && tunnel.preset !== "web"
-      ? `这条隧道用了「${PRESET_NAME[tunnel.preset] ?? tunnel.preset}」预设：下面高亮行里包含对应几行；预设行只能放进已有的那段花括号里，别贴到最外层。`
+      ? `用的是「${PRESET_NAME[tunnel.preset] ?? tunnel.preset}」预设，高亮行里含对应几行。`
       : "";
 
   // 复制按钮上的字：复制成功后显示"已复制"，1.6 秒后恢复
@@ -225,14 +220,22 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
       >
         <div className="modal-head">
           <h2 className="modal-title">云端配置 · {name}</h2>
-          <p className="modal-sub">
-            灰色是原配置的样子，高亮是要加的行：只加高亮的这几行，不要替换整段。
+          <p
+            className="modal-sub"
+            title="灰色是原配置的样子；只加高亮的这几行，不要替换整段。"
+          >
+            只加高亮的这几行，别替换整段。
           </p>
         </div>
         <div className="modal-body">
           {error && <div className="error-line">{error}</div>}
           <div className={`nginx-check ${checkTone}`}>
-            <span className="nginx-check-text">{statusText}</span>
+            <span
+              className="nginx-check-text"
+              title="贴完上面的配置、保存并重载 nginx 后，点「检查云端」看生效没有。"
+            >
+              {statusText}
+            </span>
             <button
               className="link-btn"
               disabled={checkState.phase === "loading"}
@@ -243,29 +246,42 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
           </div>
           {checkResult?.htpasswdMissing && (
             <div className="warn-line">
-              ⚠ 服务器上还没有密码文件（htpasswd），密码可能进不去。
+              ⚠ 服务器上还没有密码文件，密码可能进不去。
             </div>
           )}
-          {envHint && <div className="warn-line">{envHint}</div>}
           {light && (
-            <div className={light.level === "red" ? "error-line" : "warn-line"}>
+            <div
+              className={light.level === "red" ? "error-line" : "warn-line"}
+              title={light.hint}
+            >
               {light.level === "red" ? "红灯： " : "注意： "}
               {light.text}
             </div>
           )}
           {portExposed && (
-            <div className="warn-line">
-              云端端口对所有网卡开放了。发布只绑 127.0.0.1（只有服务器自己能连的地址），
-              说明有别的程序占着它，请检查或关防火墙。
+            <div
+              className="warn-line"
+              title="发布只绑 127.0.0.1（只有服务器自己能连的地址），说明有别的程序占着这个端口，请检查或关防火墙。"
+            >
+              云端端口对所有网卡开放，被别的程序占着。
             </div>
           )}
           {cloud?.clientIp && (
-            <div className="field-hint">
-              服务器看到的你的上网 IP 是 {cloud.clientIp}。换网络可能就变了；
-              运营商共享 IP 时加白名单可能不生效。
+            <div
+              className="field-hint hint"
+              title="换网络可能就变了；运营商共享 IP 时加白名单可能不生效。"
+            >
+              服务器看到你的上网 IP 是 {cloud.clientIp}。
             </div>
           )}
-          {presetNote && <div className="field-hint">{presetNote}</div>}
+          {presetNote && (
+            <div
+              className="field-hint hint"
+              title="预设行只能放进已有的那段花括号里，别贴到最外层。"
+            >
+              {presetNote}
+            </div>
+          )}
 
           {data && (
             <>
@@ -339,9 +355,11 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
                   <div className="optional-block">
                     <pre>{data.acmeExempt}</pre>
                   </div>
-                  <p className="field-hint">
-                    这几行是给证书续期开的小门：只放开 /.well-known/ 这个地址，别的地址照样要密码 / 白名单。
-                    漏了证书到期续不上。
+                  <p
+                    className="field-hint hint"
+                    title="只放开 /.well-known/ 这个地址，别的地址照样要密码 / 白名单；漏了证书到期续不上。"
+                  >
+                    只放开证书续期那个地址。
                   </p>
                 </div>
               )}
@@ -363,16 +381,18 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
                   <div className="optional-block">
                     <pre>{optionalLines.join("\n")}</pre>
                   </div>
-                  <p className="field-hint">
-                    这行是告诉搜索引擎「别收录这个网站」。它只是礼貌提醒，不是门锁；
-                    门锁还是密码或白名单。网站就是给所有人看的话不用加。
+                  <p
+                    className="field-hint hint"
+                    title="它只是礼貌提醒，不是门锁；门锁还是密码或白名单。网站就是给所有人看的话不用加。"
+                  >
+                    告诉搜索引擎别收录这个网站。
                   </p>
                 </div>
               )}
 
               {copyFailed && (
                 <div className="error-line" style={{ marginTop: 8 }}>
-                  没复制成功：请用鼠标选中上面的内容，按 Ctrl+C 复制。
+                  没复制成功：选中内容按 Ctrl+C。
                 </div>
               )}
               {data.htpasswd && (
@@ -380,9 +400,7 @@ export function NginxModal({ id, name, tunnel, onClose }: Props) {
                   <label className="field-label">
                     密码文件内容（htpasswd）
                   </label>
-                  <p className="field-hint">
-                    别人打开网页时用的密码文件，不是连服务器的登录密码。
-                  </p>
+                  <p className="field-hint hint">网页访问用的密码文件，不是登录密码。</p>
                   <div
                     className="success-line"
                     style={{ justifyContent: "flex-start" }}

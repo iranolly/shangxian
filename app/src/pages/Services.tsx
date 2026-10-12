@@ -212,16 +212,18 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       <header className="page-head">
         <div>
           <h1 className="page-title">本机服务</h1>
-          <p className="page-sub">
-            这台电脑上的程序：记下端口和启动方式，就能帮你启动、看护。
-          </p>
+          <p className="page-sub">记下端口和启动方式，帮你启动和看护。</p>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost" onClick={() => setImportOpen(true)}>
-            导入现有脚本
+          <button
+            className="btn btn-ghost"
+            title="从已有脚本导入本机服务"
+            onClick={() => setImportOpen(true)}
+          >
+            导入脚本
           </button>
           <button className="btn btn-primary" onClick={() => openAdd()}>
-            + 添加本机服务
+            + 添加
           </button>
         </div>
       </header>
@@ -229,9 +231,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       {total === 0 ? (
         <div className="empty">
           <p className="empty-title">还没有登记本机服务</p>
-          <p className="empty-text">
-            第一次用？按下面三步走：先加云端服务器，再登记本机程序，最后发布。
-          </p>
+          <p className="empty-text">第一次用？按下面三步走。</p>
           <div className="empty-steps">
             <button type="button" className="card empty-step" onClick={() => onNavigate?.("servers")}>
               <span className={`empty-step-num${hasServers ? " done" : ""}`}>
@@ -239,7 +239,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
               </span>
               <span className="empty-step-main">
                 <span className="server-name">添加云端服务器</span>
-                <span className="server-meta">先告诉助手：用哪台一直开着的电脑转发访问。</span>
+                <span className="server-meta">用哪台服务器转发访问。</span>
               </span>
               <span className="link-btn">{hasServers ? "去看 →" : "去添加 →"}</span>
             </button>
@@ -257,7 +257,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
               <span className="empty-step-num">③</span>
               <span className="empty-step-main">
                 <span className="server-name">发布隧道</span>
-                <span className="server-meta">把本机服务接到云端服务器上，生成公网网址。</span>
+                <span className="server-meta">把本机服务接到云端，生成公网网址。</span>
               </span>
               <span className="link-btn">去看看 →</span>
             </button>
@@ -340,7 +340,7 @@ export function ServicesPage({ onNavigate, intent, onIntentDone }: Props = {}) {
       {stopFor ? (
         <ConfirmModal
           title="这台服务不是你启动的"
-          body={`正在监听的是 ${stopFor.who}${stopFor.pid != null ? `（PID ${stopFor.pid}）` : ""}。停止会真的把它关掉，确定吗？`}
+          body={`正在监听的是 ${stopFor.who}${stopFor.pid != null ? `（PID ${stopFor.pid}）` : ""}。确定停止吗？`}
           confirmLabel="停止"
           danger
           onConfirm={confirmStop}
@@ -386,7 +386,7 @@ function ServiceModalHost({
           if (isUp) {
             setNotice(
               `service:${editId}`,
-              "启动方式已改；正在跑的程序没有动，改动会在下次重启服务时生效。",
+              "启动方式已改；下次重启服务才生效。",
             );
           }
         }
@@ -408,7 +408,7 @@ function RemoveServiceConfirm({ id, onClose }: { id: string; onClose(): void }) 
   return (
     <ConfirmModal
       title={`删除本机服务「${service.name}」？`}
-      body="如果还有隧道在用它，程序会拦下来并告诉你哪几条；5 秒内可以撤销。"
+      body="有隧道在用它会被拦下；5 秒内可撤销。"
       confirmLabel="删除"
       danger
       onConfirm={() => {

@@ -498,12 +498,14 @@ export function QrModal({ url, name, onClose }: Props) {
           </div>
           {copyFailed && (
             <div className="error-line" style={{ marginTop: 8 }}>
-              没复制成功：请用鼠标选中上面的网址，按 Ctrl+C 复制。
+              没复制成功：选中网址按 Ctrl+C。
             </div>
           )}
-          <p className="field-hint">二维码是离线生成的，不会把网址发到网上。</p>
+          <p className="field-hint hint" title="不联网也能生成，网址不会发到网上。">
+            二维码是离线生成的。
+          </p>
           {longUrl && matrix ? (
-            <p className="field-hint">网址有点长，二维码比较密，尽量用复制。</p>
+            <p className="field-hint hint">网址有点长，二维码比较密，尽量用复制。</p>
           ) : null}
         </div>
         <div className="modal-foot">

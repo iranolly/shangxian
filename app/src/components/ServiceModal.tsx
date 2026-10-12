@@ -367,8 +367,11 @@ export function ServiceModal({
           <h2 className="modal-title">
             {service ? `编辑本机服务 · ${service.name}` : "添加本机服务"}
           </h2>
-          <p className="modal-sub">
-            本机服务就是这台电脑上的程序：填好端口和启动方式，才能帮你启动、看护。
+          <p
+            className="modal-sub"
+            title="本机服务就是这台电脑上的程序：填好端口和启动方式，才能帮你启动、看护。"
+          >
+            这台电脑上的程序，填好端口和启动方式。
           </p>
         </div>
 
@@ -393,7 +396,7 @@ export function ServiceModal({
                   unmark("name");
                 }}
               />
-              <p className="field-hint">这个名字只有你自己看得到。</p>
+              <p className="field-hint hint">这个名字只有你自己看得到。</p>
             </div>
             <div className="field">
               <label className="field-label">
@@ -412,7 +415,7 @@ export function ServiceModal({
                   unmark("localPort");
                 }}
               />
-              <p className="field-hint">就是这台程序的门牌号。</p>
+              <p className="field-hint hint">就是这台程序的门牌号。</p>
             </div>
           </div>
 
@@ -421,15 +424,18 @@ export function ServiceModal({
               本机正在监听的端口（点一下就自动填好）
             </label>
             {!service && (
-              <p className="field-hint">
-                端口如果已经登记在别的服务名下，会标出「已登记」——点它直接跳到那台服务的编辑界面，不会在这里重复登记。
+              <p
+                className="field-hint hint"
+                title="端口已经登记在别的服务名下时会标出「已登记」，点它直接跳到那台服务的编辑界面，不会重复登记。"
+              >
+                点一下自动填；已登记的会跳到那条服务。
               </p>
             )}
             {ports === null ? (
-              <p className="field-hint">正在读取…</p>
+              <p className="field-hint hint">正在读取…</p>
             ) : ports.length === 0 ? (
-              <p className="field-hint">
-                没读到正在监听的端口。先把程序跑起来，再回来点一下。
+              <p className="field-hint hint">
+                没读到端口；先把程序跑起来再回来点。
               </p>
             ) : (
               <div className="port-picker">
@@ -464,7 +470,7 @@ export function ServiceModal({
               </div>
             )}
             {inspecting && (
-              <p className="field-hint">正在读取这台程序的启动方式…</p>
+              <p className="field-hint hint">正在读取这台程序的启动方式…</p>
             )}
           </div>
 
@@ -482,19 +488,22 @@ export function ServiceModal({
                 </p>
               ))}
               {sensitive && (
-                <label className="switch warn-check">
+                <label
+                  className="switch warn-check"
+                  title="参数里有疑似密钥，我确认仍然保存"
+                >
                   <input
                     type="checkbox"
                     checked={ackSensitive}
                     onChange={(e) => setAckSensitive(e.target.checked)}
                   />
-                  我知道这些参数里有疑似密钥，仍然保存
+                  确认仍然保存
                 </label>
               )}
               {rawInfo?.argsDropped && (
                 <div className="raw-cmd">
                   <p className="raw-cmd-label">
-                    读取到的原始命令行（只读；参数没有自动填进去，想用可以照着改）：
+                    原始命令行（只读，参数没填进去）：
                   </p>
                   <p className="raw-cmd-text mono" title={rawInfo.text}>
                     {rawInfo.text}
@@ -527,8 +536,8 @@ export function ServiceModal({
               }}
             />
             {!launchExe.trim() && (
-              <p className="field-hint">
-                留空的话我只能看状态：启动、看护、开机自启都用不上。
+              <p className="field-hint hint">
+                留空只能看状态，启动、看护、自启用不上。
               </p>
             )}
           </div>
@@ -553,7 +562,7 @@ export function ServiceModal({
                 }}
               />
               {preview && (
-                <p className="field-hint mono preview-line">
+                <p className="field-hint mono preview-line hint">
                   实际会执行的命令行：{preview}
                 </p>
               )}
@@ -575,7 +584,7 @@ export function ServiceModal({
                   unmark("launchWorkdir");
                 }}
               />
-              <p className="field-hint">
+              <p className="field-hint hint">
                 程序从哪个文件夹开始跑（读到的是它现在的工作目录）。
               </p>
             </div>
@@ -611,14 +620,17 @@ export function ServiceModal({
                 />
                 应用启动后帮我跑起来
               </label>
-              <p className="field-hint">
-                还要去「设置」页打开「开机自动启动」；两个都开，开机后才会自动把这条服务跑起来。
+              <p
+                className="field-hint hint"
+                title="两个都开，开机后才会自动把这条服务跑起来。"
+              >
+                设置里也要开「开机自动启动」。
               </p>
             </div>
           </div>
           {noLaunch && (
             <p className="hint-danger">
-              没填启动程序，只能看状态：「看护」和「开机自启」现在用不上；填上上面的启动程序就能开。
+              没填启动程序：看护和自启用不上。
             </p>
           )}
 
@@ -653,7 +665,7 @@ export function ServiceModal({
       {overwriteAsk ? (
         <ConfirmModal
           title="启动程序 / 启动参数 / 工作目录里已经有内容了。"
-          body="要用自动读取到的内容覆盖吗？（取消 = 保留你现在填的）"
+          body="用读到的内容覆盖？取消就保留你填的。"
           confirmLabel="覆盖"
           onConfirm={confirmOverwrite}
           onClose={() => setOverwriteAsk(null)}

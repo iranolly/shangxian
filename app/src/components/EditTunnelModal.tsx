@@ -81,19 +81,23 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
       <div className="modal" role="dialog" aria-modal="true" ref={dialogRef} style={{ width: 560 }}>
         <div className="modal-head">
           <h2 className="modal-title">编辑隧道 · {tunnel.name}</h2>
-          <p className="modal-sub">
-            本机服务：{tunnel.serviceName}（本机端口 {tunnel.localPort}）；
-            改端口保存后会断开重连一次，还要重新贴云端配置。访问保护（网页密码 / IP 白名单）在「访问保护」页改。
+          <p
+            className="modal-sub"
+            title="改端口保存后会断开重连一次，还要重新贴云端配置；访问保护（网页密码 / IP 白名单）在「访问保护」页改。"
+          >
+            本机服务：{tunnel.serviceName}（本机端口 {tunnel.localPort}）。
           </p>
         </div>
         <div className="modal-body">
           {error && <div className="error-line">{error}</div>}
 
           {needPaste ? (
-            <div className="warn-line">
-              保存好了。{portChanged && "云端端口改了，"}
-              {urlChanged && "网址改了，"}服务器上贴过的 nginx 片段要跟着更新一次，
-              不然外面还是按老配置走。
+            <div
+              className="warn-line"
+              title="服务器上贴过的 nginx 片段要跟着更新一次，不然外面还是按老配置走。"
+            >
+              保存好了：{portChanged && "端口改了，"}
+              {urlChanged && "网址改了，"}云端配置要重贴一次。
             </div>
           ) : (
             <>
@@ -127,13 +131,13 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
                 />
               </div>
               {portChanged && (
-                <div className="warn-line">
-                  端口改了：保存后会断开重连一次，还要重新贴一次云端配置才生效。
+                <div className="warn-line" title="保存后会断开重连一次，还要重新贴一次云端配置。">
+                  端口改了，会重连并要重贴配置。
                 </div>
               )}
               {urlChanged && !portChanged && (
-                <div className="warn-line">
-                  网址改了：保存后要重新贴一次云端配置，云端才会认这个新网址。
+                <div className="warn-line" title="云端认了新网址才生效。">
+                  网址改了，要重贴配置才认。
                 </div>
               )}
             </>
@@ -148,12 +152,13 @@ export function EditTunnelModal({ tunnel, onClose, onSaved, onNeedNginx }: Props
               <span className="grow" />
               <button
                 className="btn btn-primary"
+                title="把新的几行贴到服务器面板里并重载 nginx"
                 onClick={() => {
                   onNeedNginx?.(tunnel);
                   onClose();
                 }}
               >
-                下一步：贴云端配置
+                贴云端配置
               </button>
             </>
           ) : (

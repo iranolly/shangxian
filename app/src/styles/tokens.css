@@ -15,32 +15,32 @@
   /* 文字 */
   --text: #17181c;
   --text-2: #62666f; /* 对比度 5.75:1 */
-  --text-3: #8b909a; /* 仅禁用/装饰，不用于要读的字 */
+  --text-3: #8b909a; /* 弱化/提示文字（.hint 等） */
 
-  /* 品牌色 */
-  --accent: #4f5be8;
-  --accent-hover: #4450d8;
-  --accent-active: #3a45c4;
+  /* 品牌色（v3 降饱和） */
+  --accent: #5d6a9a;
+  --accent-hover: #505c86;
+  --accent-active: #454f72;
   --accent-fg: #ffffff;
-  --accent-soft: #eef0fe;
-  --focus-ring: rgba(79, 91, 232, 0.4);
+  --accent-soft: #eef0f6;
+  --focus-ring: rgba(93, 106, 154, 0.35);
 
   --row-hover: #f7f8fa;
 
-  /* 五个状态：圆点色 / 浅底 / 深字 */
-  --st-running: #22c55e;
-  --st-running-bg: #e8f8ee;
-  --st-running-fg: #166534;
-  --st-connecting: #f59e0b;
-  --st-connecting-bg: #fef6e3;
-  --st-connecting-fg: #8a5300;
-  --st-disconnected: #f97316;
-  --st-disconnected-bg: #fff0e5;
-  --st-disconnected-fg: #9a3412;
-  --st-error: #ef4444;
-  --st-error-bg: #fdecec;
-  --st-error-fg: #991b1b;
-  --st-paused: #9ca3af;
+  /* 五个状态：圆点色 / 浅底 / 深字（v3 降饱和） */
+  --st-running: #4f9d6c;
+  --st-running-bg: #eaf3ee;
+  --st-running-fg: #2f6a49;
+  --st-connecting: #a98a4f;
+  --st-connecting-bg: #f6f1e5;
+  --st-connecting-fg: #785c22;
+  --st-disconnected: #b07a52;
+  --st-disconnected-bg: #f6efe9;
+  --st-disconnected-fg: #885530;
+  --st-error: #b86363;
+  --st-error-bg: #f7ecec;
+  --st-error-fg: #8c4141;
+  --st-paused: #9aa0a8;
   --st-paused-bg: #f1f2f4;
   --st-paused-fg: #4b5563;
 
@@ -49,7 +49,7 @@
   --r-control: 8px;
   --r-card: 12px;
   --r-modal: 16px;
-  --shadow-modal: 0 12px 32px rgba(15, 16, 18, 0.18);
+  --shadow-modal: 0 10px 28px rgba(15, 16, 18, 0.12);
   --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI",
     "PingFang SC", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, "Sarasa Mono SC", ui-monospace,
@@ -68,21 +68,21 @@
     --text: #e8e9ec;
     --text-2: #9ca1ab; /* 对比度 7.03:1 */
     --text-3: #6e7480;
-    --accent: #6b78ff;
-    --accent-hover: #7d89ff;
-    --accent-active: #5a67f0;
+    --accent: #8d97cc;
+    --accent-hover: #9ba5d6;
+    --accent-active: #7a84b8;
     --accent-fg: #0f1012;
-    --accent-soft: rgba(107, 120, 255, 0.14);
-    --focus-ring: rgba(107, 120, 255, 0.55);
+    --accent-soft: rgba(141, 151, 204, 0.16);
+    --focus-ring: rgba(141, 151, 204, 0.45);
     --row-hover: #1c1d22;
     --st-running-bg: rgba(34, 197, 94, 0.15);
-    --st-running-fg: #5ee49a;
+    --st-running-fg: #83c79f;
     --st-connecting-bg: rgba(245, 158, 11, 0.15);
-    --st-connecting-fg: #fbbf24;
+    --st-connecting-fg: #d2b078;
     --st-disconnected-bg: rgba(249, 115, 22, 0.15);
-    --st-disconnected-fg: #fd9a5c;
+    --st-disconnected-fg: #cf9d7b;
     --st-error-bg: rgba(239, 68, 68, 0.15);
-    --st-error-fg: #fb7c7c;
+    --st-error-fg: #d28f8f;
     --st-paused-bg: rgba(255, 255, 255, 0.08);
     --st-paused-fg: #a5aab4;
   }
@@ -99,21 +99,21 @@
   --text: #e8e9ec;
   --text-2: #9ca1ab;
   --text-3: #6e7480;
-  --accent: #6b78ff;
-  --accent-hover: #7d89ff;
-  --accent-active: #5a67f0;
+  --accent: #8d97cc;
+  --accent-hover: #9ba5d6;
+  --accent-active: #7a84b8;
   --accent-fg: #0f1012;
-  --accent-soft: rgba(107, 120, 255, 0.14);
-  --focus-ring: rgba(107, 120, 255, 0.55);
+  --accent-soft: rgba(141, 151, 204, 0.16);
+  --focus-ring: rgba(141, 151, 204, 0.45);
   --row-hover: #1c1d22;
   --st-running-bg: rgba(34, 197, 94, 0.15);
-  --st-running-fg: #5ee49a;
+  --st-running-fg: #83c79f;
   --st-connecting-bg: rgba(245, 158, 11, 0.15);
-  --st-connecting-fg: #fbbf24;
+  --st-connecting-fg: #d2b078;
   --st-disconnected-bg: rgba(249, 115, 22, 0.15);
-  --st-disconnected-fg: #fd9a5c;
+  --st-disconnected-fg: #cf9d7b;
   --st-error-bg: rgba(239, 68, 68, 0.15);
-  --st-error-fg: #fb7c7c;
+  --st-error-fg: #d28f8f;
   --st-paused-bg: rgba(255, 255, 255, 0.08);
   --st-paused-fg: #a5aab4;
 }
