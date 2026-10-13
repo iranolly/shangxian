@@ -2,7 +2,7 @@
 // 核心看护逻辑在 shangxian-core；这一层负责生命周期与界面命令。
 
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use shangxian_core::config::{self, AppConfig, Settings, default_data_dir};
 use shangxian_core::events::{EventLine, EventLog, EventSubject};
@@ -1153,6 +1153,12 @@ fn setup(
         let ctx = ctx.clone();
         let handle = app.handle().clone();
         std::thread::spawn(move || {
+            // 网卡例行参数变更也会被认成「网络恢复」，提示容易泛滥：
+            // NetworkChanged 仅在确实有隧道需要重连（affected > 0）时弹，
+            // 且同一条文案 60 秒内最多弹一次；冷却期内只记日志。
+            // Resumed / ClockJump 的文案与行为不受此限。
+            const NETWORK_NOTICE_COOLDOWN: Duration = Duration::from_secs(60);
+            let mut last_network_notice: Option<Instant> = None;
             loop {
                 std::thread::sleep(Duration::from_millis(150));
                 let events = {
@@ -1164,7 +1170,7 @@ fn setup(
                 };
                 for (id, event) in events {
                     match &event {
-                        shangxian_core::supervisor::Event::SystemWake { kind, .. } => {
+                        shangxian_core::supervisor::Event::SystemWake { kind, affected } => {
                             let text = match kind {
                                 shangxian_core::wake::WakeKind::Resumed { .. } => {
                                     "电脑刚唤醒，正在立即重新连接服务器…"
@@ -1176,6 +1182,27 @@ fn setup(
                                     "系统时间已变更，正在重新连接…"
                                 }
                             };
+                            if matches!(kind, shangxian_core::wake::WakeKind::NetworkChanged) {
+                                if *affected == 0 {
+                                    log_info(
+                                        TAG_POWER,
+                                        &format!("{text}（无需重连，仅记录不提示）"),
+                                    );
+                                    continue;
+                                }
+                                let now = Instant::now();
+                                let cooled = last_network_notice.map_or(true, |last| {
+                                    now.duration_since(last) >= NETWORK_NOTICE_COOLDOWN
+                                });
+                                if !cooled {
+                                    log_info(
+                                        TAG_POWER,
+                                        &format!("{text}（60 秒内已提示过，仅记录不提示）"),
+                                    );
+                                    continue;
+                                }
+                                last_network_notice = Some(now);
+                            }
                             log_info(TAG_POWER, text);
                             sys_notice(&handle, "info", text, false);
                         }
