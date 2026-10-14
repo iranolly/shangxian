@@ -1027,6 +1027,26 @@ fn setup(
     hidden: bool,
     test_notify: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // ② 单实例 / 多会话守卫。
+    // 放在这里（而不是进程最前面）是故意的：同一个会话里再点一次图标时，
+    // single-instance 插件（最先注册的插件）已经先在它的 setup 里接管了——
+    // 把新实例的命令行转给老实例（唤起主窗口），新实例自己退出，走不到这里。
+    // 能走到这里的「已在运行」基本都是另一个 Windows 会话的重复启动，弹提示并退出。
+    // 拿到的锁凭据存进应用状态，活到进程结束，中途不释放。
+    match singleton::acquire(&data_dir) {
+        singleton::Singleton::Acquired(token) => {
+            app.manage(token);
+        }
+        singleton::Singleton::AlreadyRunning { other_session } => {
+            if other_session {
+                singleton::show_already_running_dialog();
+            } else {
+                singleton::show_same_session_dialog();
+            }
+            std::process::exit(1);
+        }
+    }
+
     log_info(TAG_START, "应用已启动");
 
     // ---------- 运行状态 / 事件日志 ----------
@@ -1438,18 +1458,8 @@ pub fn run() {
         std::process::exit(1);
     }
 
-    // ② 单实例 / 多会话守卫（Tauri builder 之前）
-    let _singleton = match singleton::acquire(&data_dir) {
-        singleton::Singleton::Acquired(token) => token,
-        singleton::Singleton::AlreadyRunning { other_session } => {
-            if other_session {
-                singleton::show_already_running_dialog();
-            } else {
-                singleton::show_same_session_dialog();
-            }
-            std::process::exit(1);
-        }
-    };
+    // ② 单实例 / 多会话守卫：挪到 Tauri setup() 开头了（原因见那里）。
+    // 不能让它在插件之前拦截，否则「同一会话再点一次图标」会弹错提示而不是唤起窗口。
 
     // ③ 日志初始化 + panic hook（能记日志的最早时机）
     let logging_error = logging::init(&data_dir).err();
@@ -1535,7 +1545,8 @@ pub fn run() {
             }
         })
         .on_window_event(|window, event| {
-            // 关闭 = 真正销毁窗口（释放 WebView2）；托盘继续看护。
+            // 点关闭 = 只销毁窗口（释放 WebView2 内存），程序留在托盘继续看护；
+            // 真正退出只走托盘右键菜单（见文件末尾 run() 里的 ExitRequested 拦截）。
             if let WindowEvent::CloseRequested { .. } = event {
                 mainwindow::save_state(window.app_handle());
                 notify_tray_hint_once(window.app_handle());
@@ -1618,10 +1629,21 @@ pub fn run() {
     // 而 AppState 是 setup 里 manage 的；这里提前取会 panic「state() called before manage()」。
     // 所以退出收尾在 Exit 事件里现取（那时 setup 早已完成），try_state 兜底以免极端路径再炸。
     app.run(move |handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            if let Some(state) = handle.try_state::<AppState>() {
-                on_exit(&state.ctx);
+        match event {
+            // 关掉窗口后不再让应用跟着退出：不带退出码的 ExitRequested（最后一个窗口
+            // 被销毁时系统发出）一律拦下，程序留在托盘；只有托盘菜单的「退出」是带
+            // 退出码主动调的（Some），不拦，让它真的退出。
+            tauri::RunEvent::ExitRequested { api, code, .. } => {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
             }
+            tauri::RunEvent::Exit => {
+                if let Some(state) = handle.try_state::<AppState>() {
+                    on_exit(&state.ctx);
+                }
+            }
+            _ => {}
         }
     });
 }

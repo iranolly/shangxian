@@ -7,6 +7,11 @@
 //! - 点关闭 = 真正销毁窗口，WebView2 进程随之释放（托盘态不再常驻内存）。
 //!
 //! 窗口位置/大小/最大化状态存 `<数据目录>/window-state.json`（不用插件）。
+//! 大小存逻辑像素（和界面设计值同口径，恢复时直接当建窗参数）；
+//! 位置存物理像素（恢复时用 set_position 写回）。
+//! 不能混着走：builder 的 position/inner_size 按逻辑像素解释，
+//! tao 的 set_size 对「无边框 + 阴影」窗口又会把隐藏边框偏移算重（实测每轮 +37px，
+//! 窗口刚建时偏移量还不稳定），随便用哪种都会让窗口每次开关漂移一轮。
 //! 重开时先校验位置还在不在任何显示器上，不在就居中。
 
 use std::path::Path;
@@ -23,12 +28,29 @@ pub const MIN_WIDTH: f64 = 960.0;
 pub const MIN_HEIGHT: f64 = 640.0;
 pub const WINDOW_STATE_FILE: &str = "window-state.json";
 
+/// `window-state.json` 的当前格式版本。
+///
+/// v2：大小存逻辑像素（界面设计口径）、位置存物理像素，恢复时各走各的正确通道。
+/// v0/v1 旧文件单位混用，数值已被历史 bug 放大污染，一律不信任：回默认大小并居中。
+pub const WINDOW_STATE_VERSION: u32 = 2;
+
+/// 逻辑尺寸的合理上限：超过说明文件被改坏了，回默认大小。
+const MAX_LOGICAL_SIZE: u32 = 10000;
+
 /// 窗口记忆（坏文件按默认值处理，不阻塞启动）。
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowState {
+    /// 文件格式版本（旧文件没有这个字段 → 0）。
+    #[serde(default)]
+    pub version: u32,
+    /// 保存时窗口所在显示器的缩放（校验位置时把逻辑大小换算回物理用）。
+    #[serde(default)]
+    pub scale: f64,
+    /// 左上角坐标（物理像素，和显示器坐标同一口径）。
     pub x: Option<i32>,
     pub y: Option<i32>,
+    /// 客户区大小（逻辑像素，和界面设计值同口径）。
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub maximized: bool,
@@ -65,33 +87,46 @@ fn focus_existing(app: &AppHandle) -> bool {
     true
 }
 
-/// 只在主线程调：建窗 → 挂自绘标题栏 → 恢复记忆 → show/focus。
+/// 只在主线程调：建窗 → 恢复记忆 → 挂自绘标题栏 → show/focus。
 pub fn create(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     let state = load_state(&default_data_dir());
-    let mut builder =
+    // 旧格式（version < 2）单位混用过，尺寸和位置都不可信，直接回默认。
+    let trusted = state.version >= WINDOW_STATE_VERSION;
+    let (mut width, mut height) = if trusted {
+        (
+            state.width.unwrap_or(DEFAULT_WIDTH as u32),
+            state.height.unwrap_or(DEFAULT_HEIGHT as u32),
+        )
+    } else {
+        (DEFAULT_WIDTH as u32, DEFAULT_HEIGHT as u32)
+    };
+    if width > MAX_LOGICAL_SIZE || height > MAX_LOGICAL_SIZE {
+        width = DEFAULT_WIDTH as u32;
+        height = DEFAULT_HEIGHT as u32;
+    }
+
+    let builder =
         WebviewWindowBuilder::new(app, MAIN_LABEL, WebviewUrl::App("index.html".into()))
             .title("上线助手")
-            .inner_size(
-                state.width.unwrap_or(DEFAULT_WIDTH as u32) as f64,
-                state.height.unwrap_or(DEFAULT_HEIGHT as u32) as f64,
-            )
+            // 尺寸存的就是逻辑像素，直接当建窗参数用（这也是唯一不会漂移的尺寸通道）。
+            .inner_size(width as f64, height as f64)
             .min_inner_size(MIN_WIDTH, MIN_HEIGHT)
             .decorations(false)
             .shadow(true)
+            .center()
             .visible(false);
 
-    // 保存的位置还在任何显示器上就直接用；否则居中，免得窗口跑到不存在的屏幕外面。
-    if let (Some(x), Some(y)) = (state.x, state.y) {
-        if position_is_visible(app, &state) {
-            builder = builder.position(x as f64, y as f64);
-        } else {
-            builder = builder.center();
+    let window = builder.build()?;
+
+    // 位置用物理像素在显示前写回（builder.position 是逻辑语义，不能用来恢复物理坐标）。
+    if trusted && !state.maximized {
+        if let (Some(x), Some(y)) = (state.x, state.y) {
+            if position_is_visible(app, &state) {
+                let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+            }
         }
-    } else {
-        builder = builder.center();
     }
 
-    let window = builder.build()?;
     // 自绘标题栏（圆角 + 最大化按钮命中测试）跟窗口绑定，每次建窗都要挂一次。
     crate::titlebar::attach(&window, app);
     if state.maximized {
@@ -107,13 +142,18 @@ pub fn save_state(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_LABEL) else {
         return;
     };
+    // 大小转成逻辑像素再存（恢复时走建窗参数）；位置按物理存（恢复时 set_position）。
+    let scale = window.scale_factor().unwrap_or(1.0);
     let position = window.outer_position().ok();
     let size = window.inner_size().ok();
+    let logical = size.map(|s| s.to_logical::<u32>(scale));
     let state = WindowState {
+        version: WINDOW_STATE_VERSION,
+        scale,
         x: position.map(|p| p.x),
         y: position.map(|p| p.y),
-        width: size.map(|s| s.width),
-        height: size.map(|s| s.height),
+        width: logical.map(|s| s.width),
+        height: logical.map(|s| s.height),
         maximized: window.is_maximized().unwrap_or(false),
     };
     let path = default_data_dir().join(WINDOW_STATE_FILE);
@@ -146,8 +186,10 @@ pub fn position_is_visible(app: &AppHandle, state: &WindowState) -> bool {
     let (Some(x), Some(y)) = (state.x, state.y) else {
         return false;
     };
-    let w = state.width.unwrap_or(DEFAULT_WIDTH as u32) as i32;
-    let h = state.height.unwrap_or(DEFAULT_HEIGHT as u32) as i32;
+    // 大小存的是逻辑像素，先按保存时的缩放换算回物理，和显示器坐标同口径。
+    let scale = if state.scale > 0.0 { state.scale } else { 1.0 };
+    let w = (state.width.unwrap_or(DEFAULT_WIDTH as u32) as f64 * scale) as i32;
+    let h = (state.height.unwrap_or(DEFAULT_HEIGHT as u32) as f64 * scale) as i32;
     let monitor_list = match app.available_monitors() {
         Ok(list) => list,
         Err(_) => return false,

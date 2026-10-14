@@ -704,7 +704,7 @@ pub struct AppConfig {
 
 - **崩溃自恢复**：用 Windows `RegisterApplicationRestart` 登记「崩溃后重新打开」，命令行固定 `--hidden --recovered`（静默进托盘、知道自己是恢复回来的）。防崩溃循环：10 分钟窗口内第 3 次自动恢复后暂停，由用户决定；设置页可开关（`set_crash_recovery`，关闭用 `<数据目录>\crash-recovery.off` 标记）。不建计划任务、不要管理员权限。
 - **延迟建窗**：`tauri.conf.json` 不再自动建窗；正常启动才建窗，`--hidden` / `--test-notify` / `--recovered` 只进托盘；托盘/第二实例/通知点击才 `show_or_create`；关窗 = 真正销毁窗口（WebView2 进程释放），不是退出应用。窗口位置大小存 `window-state.json`。
-- **单实例（全局）**：互斥量 `Global\Shangxian.App.v1`（跨 Windows 会话，远程桌面另开账号也不能双开，防两边抢云端端口）；系统不让建 Global 对象时回落到 `<数据目录>\app.lock` 文件锁；三层都拿不到也不硬卡用户。`tauri-plugin-single-instance` 保留（同会话内体验是「把已有窗口叫出来」）。
+- **单实例（全局）**：互斥量 `Global\Shangxian.App.v1`（跨 Windows 会话，远程桌面另开账号也不能双开，防两边抢云端端口）；系统不让建 Global 对象时回落到 `<数据目录>\app.lock` 文件锁；三层都拿不到也不硬卡用户。检查在 Tauri `setup()` 开头执行：同一会话再启动由 `tauri-plugin-single-instance` 先接管（唤起已有窗口、新实例退出），跨会话重复启动才由全局互斥量拦下弹提示。
 - **应用退出 / 升级**：应用退出 = 全部隧道停止（ssh 在 kill-on-close 作业里），本机服务保活（作业不设 kill-on-close，下次启动按端口认领）。升级/卸载前用 `cli app stop-all --yes`（或托盘「退出并停止全部本地服务」）：停应用自己拉起的服务整棵树 + 能核对归属的认领进程，核不过的绝不硬杀、计入「没能停」。
 
 ### 12.5 明确不做（防范围膨胀）

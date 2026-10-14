@@ -256,3 +256,34 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
 - **方法数更正（61→60）**：早前「界面合并与文案规范」（提交 4cb0a3e）移除了 `tunnel_restart`，但 `AGENTS.md` / `SKILL.md` / `DESIGN.md` 里的「61 条方法」未同步；本次统一更正为 **60 条**（PROGRESS 历史条目保持原样）。
 - **附录同步**：AGENTS.md 附录里的 `cli guide` 原文已用新版实际输出整体替换（含新增的 `server test` 行与「完整文档在哪」小节）。
 - **验证**：文档事实逐条对源码核对；CLI 经构建、单测（22 项）与退出码实测（1 / 2 / 3）；安装包与便携包经解包与 md5 复核；全程不跑应用、不做 git 操作；`grep -rn "AI-AGENT" README.md PROGRESS.md docs/ .setup/release-notes.md` 里只剩本节和 AGENTS.md「文档版本」两处对改名的历史记录（不再引用旧文件名作为文档地址），全部文档也没有把不存在的子命令（例如隧道级 restart）当成可用命令；关键事实逐条对着 `cli/src/main.rs`（`server test` 子命令与 15 秒超时）、`app/src-tauri/src/ctl.rs`（`test_server` 方法）、`core/src/nginx.rs`（`--access-user` 默认 `shangxian`、`--url` 留空用「你的域名」占位）、`app/src-tauri/src/lib.rs`（`run_server_test` 返回「连接成功，用时 X 秒」）核对。
+
+---
+
+## 修复：从托盘唤起窗口越开越大（2026-10-13）
+
+- **现象**：点右上角关闭（窗口销毁、程序留在托盘）后再从托盘唤起，窗口一次比一次大；实测 `window-state.json` 已累积到 2486×1336（默认 1040×700，显示器缩放 125%）。
+- **根因（两层）**：
+  1. 存盘用的是物理像素（`inner_size` / `outer_position`），恢复时却走 builder 的 `inner_size` / `position`（按逻辑像素解释）。缩放 125% 的屏幕上每次「关闭 → 唤起」尺寸 ×1.25，位置同步漂移。
+  2. 曾改成「全程物理像素 + `set_size(PhysicalSize)` 恢复」，实测宽度稳定但**高度每轮 +37px**：tao 对「无边框 + 阴影」窗口的 `set_size` 会把隐藏边框偏移算重，且窗口刚建时这个偏移量还不稳定（实测 875 → 912 → 949 → 986 → … 每轮 +37）。
+- **最终修复**（`app/src-tauri/src/mainwindow.rs`）：
+  - 大小：**存逻辑像素**（`inner_size / scale`，和界面设计值同口径），恢复时直接当建窗参数 `builder.inner_size(...)`——这条通道实测不漂移，完全不碰 `set_size`。
+  - 位置：**存物理像素**，建窗后显示前用 `set_position(PhysicalPosition)` 写回（位置没有尺寸换算问题，实测稳定）。
+  - `window-state.json` 升到 **version 2**（多存 `scale` 字段，位置校验时把逻辑大小换算回物理）；v0/v1 旧文件单位混用、数值被放大污染，一律忽略、回默认大小并居中。
+  - 逻辑尺寸超过 10000 视为坏文件，回默认。
+- **验证**：`cargo check/build --release -p app` 通过；应用换新版后自动跑「托盘点击 → 关闭」5 轮，`window-state.json` 每轮完全一致（`version:2, scale:1.25, width:1040, height:700, x:630, y:252`），不再有任何递增；旧坏数据（v1、1300×1097）被自动弃用、窗口回默认大小。
+- **附带发现（未修）**：应用运行中再次双击图标（第二实例）只弹「已在另一个 Windows 会话中运行」提示框——实际是同会话，文案不对，也不会把已有窗口叫出来。根因是 `singleton.rs` 的全局互斥量拦截发生在单实例插件之前，且未区分同会话/跨会话。
+- **文件**：`app/src-tauri/src/mainwindow.rs`（同批未提交的 `lib.rs` 托盘存活的改动是本轮之前的工作）。
+
+---
+
+## 修复：双击图标不再弹错提示，直接打开窗口（2026-10-13）
+
+- **现象**：应用运行中再次双击图标（或再启动一份），弹「它已在另一个 Windows 会话中运行」提示——实际是同一个会话；而且不会把已有窗口叫出来。
+- **根因**：自己写的全局单实例检查（`singleton::acquire`）放在 Tauri Builder 之前，抢在 `tauri-plugin-single-instance` 前面把第二实例拦下；全局互斥量对「同一会话」的重复启动也会报「已存在」，被一律当成「另一个会话」。
+- **修复**（`app/src-tauri/src/lib.rs`）：单实例检查从进程最前面挪到应用 `setup()` 开头。插件（最先注册、最先执行）会先处理「同一会话的第二实例」：把命令行转给老实例（唤起主窗口）、新实例自己退出；只有跨会话的重复启动才会走到我们的检查、弹对应提示。锁凭据改为 `app.manage` 持有到进程结束。
+- **验证**（自动脚本模拟）：
+  - 运行中启动第二实例（无参数）：主窗口被唤起 ✓、无提示框 ✓、第二实例退出码 0 ✓；
+  - 第二实例带 `--hidden`：不唤起窗口 ✓、无提示框 ✓、自行退出 ✓；
+  - 第一实例正常启动：窗口正常显示 ✓、无提示框 ✓、隧道正常恢复 ✓。
+- **文档**：DESIGN.md 生命周期一节与 docs/AGENTS.md 铁律 29 同步更新（同会话唤起、跨会话才提示）。
+- **文件**：`app/src-tauri/src/lib.rs`、`app/src-tauri/src/singleton.rs`（注释）、`DESIGN.md`、`docs/AGENTS.md`。
