@@ -28,8 +28,10 @@ use crate::probe::{spawn_probe, ProbeHandle, ProbeKind, ProbeSlot, PROBE_INTERVA
 use crate::reason::ReasonCode;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// 启动后多久还没探测到端口，就从「正在启动」变成「进程在但端口不通」
-const STARTUP_GRACE: Duration = Duration::from_secs(15);
+/// 启动后多久还没探测到端口，就从「正在启动」变成「进程在但端口不通」。
+/// 2 分钟为限：ComfyUI 这类要预加载的应用启动就要 20~60 秒，宽限期内看护
+/// 不碰它（不记失败、不杀进程），超过才算假死。
+const STARTUP_GRACE: Duration = Duration::from_secs(120);
 /// 连续失败这么多次就停下（不再自动重试）
 const MAX_FAILS: u32 = 5;
 /// 认领窗口：应用刚启动时端口还没在听，可能是服务正在启动。
@@ -578,7 +580,13 @@ impl LocalRunner {
     /// 连续 3 次探不到端口、且**进程还活着**才记一次「端口不通」（D2 的 `hung`）。
     /// 没进程的时候（自己退过或根本没启动）不记失败：退出那条已经记过 `exited` 了。
     fn note_probe_failure(&mut self) {
-        if self.child.is_some() && self.probe.is_down() {
+        // 还在启动宽限期内：端口没通是正常的（应用可能还在加载），不算失败，
+        // 免得慢启动时卡片上挂一行假的「上次失败」。
+        let past_grace = self
+            .started_at
+            .map(|t| t.elapsed() >= STARTUP_GRACE)
+            .unwrap_or(false);
+        if self.child.is_some() && self.probe.is_down() && past_grace {
             self.note_failure_text(ReasonCode::Hung, "进程存活但连续 3 次未探测到端口".into());
         }
     }
@@ -1310,6 +1318,34 @@ mod tests {
             Some(ReasonCode::Hung)
         );
         r.kill_child();
+    }
+
+    /// 慢启动回归：启动 20 秒、端口还没通、开着看护——
+    /// 还在 2 分钟宽限期内，不许杀进程、不许安排重启、不许记假失败。
+    #[test]
+    fn slow_start_within_grace_is_not_hung() {
+        let port = free_port();
+        let slot = ProbeSlot::new();
+        let mut r = LocalRunner::new_with_probe(
+            launchable(port, true),
+            &std::env::temp_dir(),
+            null_reporter(),
+            Arc::clone(&slot),
+        );
+        r.user_stopped = false;
+        r.phase = Phase::Starting;
+        r.child = Some(dummy_child());
+        r.started_at = Some(Instant::now() - Duration::from_secs(20));
+
+        feed_down(&slot, 3); // 连续 3 次探不到端口（宽限期内）
+        r.poll();
+
+        assert!(r.pid().is_some(), "宽限期内不能杀进程");
+        assert!(r.retry_at.is_none(), "宽限期内不该安排重启");
+        assert_eq!(r.fail_streak, 0, "宽限期内不算失败");
+        assert!(r.last_failure().is_none(), "宽限期内不记假失败");
+        assert_eq!(r.status_word(), "starting", "界面应显示「启动中」");
+        r.kill_child(); // 清理测试进程
     }
 
     #[test]
