@@ -135,7 +135,7 @@ bash build-release.sh
 ```bash
 node -p "require('./app/src-tauri/tauri.conf.json').version"
 ```
-> 在仓库根目录跑，输出当前版本号（例如 `0.6.2`）。
+> 在仓库根目录跑，输出当前版本号（例如 `0.6.3`）。
 
 打包注意：
 

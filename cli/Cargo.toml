@@ -1,6 +1,6 @@
 [package]
 name = "shangxian-cli"
-version = "0.6.2"
+version = "0.6.3"
 description = "上线助手命令行：给 AI agent 和其他程序查询、配置用"
 edition = "2021"
 
