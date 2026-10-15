@@ -137,7 +137,13 @@ fn nginx_snippet_generation() {
     let mut open = svc.clone();
     open.access = Vec::new();
     let snip2 = shangxian_core::nginx::generate(&open, 8080, &server);
-    assert!(snip2.snippet.is_none());
+    let add2 = snip2.snippet.as_deref().unwrap();
+    assert!(!add2.contains("auth_basic"), "没有访问保护就不该有密码块：{add2}");
+    assert!(
+        add2.contains("# 需要哪一组就把那组行开头的 # 去掉"),
+        "没有保护时至少还有按需启用菜单：{add2}"
+    );
+    assert!(add2.contains("# proxy_http_version 1.1;"), "add2={add2}");
     assert!(snip2.acme_exempt.is_none());
     assert!(
         snip2.preview
@@ -289,7 +295,6 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
-            preset: None,
         })
         .unwrap();
     assert_eq!(g.tunnel_snapshot().len(), 1);
@@ -306,7 +311,6 @@ fn service_and_tunnel_validations() {
             access_user: Some("u".into()),
             access_hash: None,
             access_detail: None,
-            preset: None,
         })
         .unwrap_err();
     assert!(err.contains("密码"), "err={err}");
@@ -323,7 +327,6 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
-            preset: None,
         })
         .unwrap_err();
     assert!(err.contains("IP"), "err={err}");
@@ -343,7 +346,6 @@ fn service_and_tunnel_validations() {
             access_user: None,
             access_hash: None,
             access_detail: None,
-            preset: None,
         })
         .is_err(),
         "重复云端端口应该被拒绝"
@@ -576,7 +578,6 @@ fn update_tunnel_merges_access_detail() {
             access_user: Some("u".into()),
             access_hash: Some("$2y$12$old".into()),
             access_detail: Some("1.2.3.4".into()),
-            preset: None,
         })
         .unwrap();
 
@@ -594,7 +595,6 @@ fn update_tunnel_merges_access_detail() {
             access_user: Some("u".into()),
             access_hash: hash,
             access_detail: detail,
-            preset: None,
         })
     };
 
@@ -705,7 +705,6 @@ fn update_tunnel_password_toggle_semantics() {
             access_user: Some("u".into()),
             access_hash: Some("$2y$12$old".into()),
             access_detail: None,
-            preset: None,
         })
         .unwrap();
 
@@ -725,7 +724,6 @@ fn update_tunnel_password_toggle_semantics() {
             access_user: user,
             access_hash: hash,
             access_detail: None,
-            preset: None,
         })
     };
 

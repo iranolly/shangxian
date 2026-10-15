@@ -212,7 +212,7 @@ guide     给 AI agent 的速查说明
     {
       "access": ["password"], "accessDetail": null, "accessUser": "me",
       "enabled": true, "hasPassword": true, "id": "tun-abc123", "keyPath": null,
-      "localPort": 8188, "name": "comfyui 发布", "preset": "web",
+      "localPort": 8188, "name": "comfyui 发布",
       "reason": null, "reasonCode": null,
       "retryState": "active", "attempt": 0, "retryInSecs": null,
       "connectedSince": 1760000000000, "uptimeSecs": 42, "reconnectsToday": 0,
@@ -230,7 +230,7 @@ guide     给 AI agent 的速查说明
 ```
 
 > 字段差异（重要）：
-> - 应用在跑时，`app` 没有 `running` 字段（用 `pid` 是否为 null 判断），但多 `snapshotVersion`/`startedAt`/`jobGuardOk`/`jobGuardError`/`configTrusted`/`updateInfo`/`settings`；`services` 多 `health`（`up`/`down`/`unknown`）、`reason`、`logPath`、`logOverflowed`、`lastFailure`；`tunnels` 多 `reasonCode`、`retryState`/`attempt`/`retryInSecs`/`connectedSince`/`uptimeSecs`/`reconnectsToday`、`lastFailure`、`protectionCheck`、`serviceOk`/`serviceStatus`、`keyPath`、`preset`，**没有** `serverName`。
+> - 应用在跑时，`app` 没有 `running` 字段（用 `pid` 是否为 null 判断），但多 `snapshotVersion`/`startedAt`/`jobGuardOk`/`jobGuardError`/`configTrusted`/`updateInfo`/`settings`；`services` 多 `health`（`up`/`down`/`unknown`）、`reason`、`logPath`、`logOverflowed`、`lastFailure`；`tunnels` 多 `reasonCode`、`retryState`/`attempt`/`retryInSecs`/`connectedSince`/`uptimeSecs`/`reconnectsToday`、`lastFailure`、`protectionCheck`、`serviceOk`/`serviceStatus`、`keyPath`，**没有** `serverName`。
 > - 应用没跑时（`cli services/tunnels/servers` 的离线读文件路径），`app` 只有 `{pid:null, appVersion:null, dataDir, running:false}`；服务/隧道状态全为 `"unknown"`；隧道多 `serverName`，少 `health`/`reason`/`protectionCheck` 等运行字段；服务器字段不变。
 > - `protectionCheck.status`：`"unknown"`（未核对）/ `"ok"` / `"drift"`（和设置对不上，看 `driftFields`）/ `"error"`（检查本身没跑成，看 `error`）；`driftFields` 取值集合：`conf` / `password` / `ip` / `allowIps` / `htpasswd`。
 
@@ -508,7 +508,6 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 | `--access-user` | 否 | 访问用户名（选了 `password` 用）。不填时生成的 htpasswd 默认用户名是 `shangxian`——**不要默认**：应显式问用户想用什么用户名，并通过 `--access-user` 传进去 |
 | `--access-password` | 否 | 访问密码。加密（优先 bcrypt `$2y$…`；服务器 nginx 验不了时自动用兼容格式 `$apr1$…`）在**本机**算好再写进配置，密码本身不落盘、不碰到服务器（不要服务器装任何东西）。但会短暂出现在本机命令行；介意就用 `hash-password` 拿哈希再 `cli call add_tunnel` |
 | `--access-ips` | 否 | IP 白名单，逗号分隔（选了 `ip` 用） |
-| `--preset` | 否 | nginx 片段预设：`web`（默认，普通网站）/ `ws`（WebSocket）/ `upload`（传大文件）。写别的值直接报错 |
 
 行为：新增后 `enabled: true`，应用立刻开始发布。
 
@@ -544,7 +543,6 @@ cli tunnel edit <隧道id> [--name X] [--remote-port N] [--url X]
 
 - 只写要改的字段。**不能换本机服务、不能换服务器**（参数里没有 service/server）。
 - `--access` 同样可重复/逗号分隔，写什么就是什么（整体替换）：不传 `--access` = 保持原来的保护不变；`--access none` = 改成无保护。
-- `--preset` 不传 = 保持原来的；`web`/`ws`/`upload` 三选一，写别的直接报错。
 - `--access-password` 不填 = 密码保持不变。选了 `password` 但从来没有密码哈希，会报：`✗ 这条隧道选了「要密码才能进」，请先设置访问密码`。
 - `--access-password` 的加密也是本机算（优先 bcrypt，服务器 nginx 不支持时自动用兼容格式），服务器不用装东西；`--access-ips` 必须配 `--access ip`、`--access-password` 必须配 `--access password`，配不上会直接报错（不会静默丢掉）。
 - 改了云端端口：应用会停掉旧隧道，按新端口重连。**记得重新贴 nginx 配置。**
@@ -974,8 +972,8 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 
 | 方法 | 说明 | 参数格式 |
 |---|---|---|
-| `add_tunnel` | 新增发布隧道 | `{name, serviceId, serverId, remotePort, url?, access, accessUser?, accessHash?, accessDetail?, preset?}` |
-| `update_tunnel` | 编辑发布隧道（`accessHash` 传 null 表示不改密码） | `{id, name, remotePort, url?, access, accessUser?, accessHash?, accessDetail?, preset?}` |
+| `add_tunnel` | 新增发布隧道 | `{name, serviceId, serverId, remotePort, url?, access, accessUser?, accessHash?, accessDetail?}` |
+| `update_tunnel` | 编辑发布隧道（`accessHash` 传 null 表示不改密码） | `{id, name, remotePort, url?, access, accessUser?, accessHash?, accessDetail?}` |
 | `remove_tunnel` | 删除发布隧道（返回撤销令牌） | `{id}` |
 | `tunnel_start` | 开始发布 | `{id}` |
 | `tunnel_stop` | 暂停发布 | `{id}` |
@@ -1056,7 +1054,6 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 > 上面这些返回值是 ctl 层原始结果；`cli call --json` 会在外面套一层 `{"ok": true, "result": ...}`（失败前者是 `{"ok": false, "error": "..."}`）。
 > `get_service_logs` / `get_logs` 的 `lines` 不传时默认 200。
 > `add_tunnel` / `update_tunnel` 的 `access` 是**数组**：可同时放 `"password"` 和 `"ip"`（两个都放 = 两个条件都要满足），空数组 `[]` = 无保护。
-> `add_tunnel` / `update_tunnel` 的 `preset` 只认 `web` / `ws` / `upload`，非法值报 `发布预设只支持 web / ws / upload 三种`；`update_tunnel` 省略 = 保持原来的。
 
 ### 5.9 云端完整检查（`check_tunnel_cloud` / `scan_server_env` / `run_access_audit` / `get_public_ip`）
 
@@ -1337,7 +1334,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 | `accessHash` | string / null | 访问密码的哈希（优先 `$2y$12$…`，服务器不支持 bcrypt 时是兼容格式 `$apr1$…`；本机算）；明文密码只显示一次，不落盘 |
 | `accessDetail` | string / null | 访问保护细节（IP 白名单，逗号分隔） |
 | `enabled` | bool | 是否正在发布；`false` = 已暂停 |
-| `preset` | string | v6 新增的 nginx 片段预设：`web`（默认）/ `ws`（WebSocket）/ `upload`（传大文件）；非法值读时归一成 `web` |
+| `preset` | string | 历史字段（v6 起存在）：新版本界面/CLI 不再设置；老隧道可能保留 `ws`/`upload`，决定云端片段里哪组行是激活的；非法值读时归一成 `web` |
 
 ### 8.3 迁移与降级拦截
 
@@ -1812,7 +1809,6 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
     cli service edit <服务id> --port 8189 --watch true
     cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开启）
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
-    cli tunnel add ... --preset ws          # 发布预设：web（默认）/ ws（WebSocket）/ upload（上传大文件）
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
     cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两种保护同时启用
     cli tunnel edit <隧道id> --access password --access-password 新密码   # 更换密码

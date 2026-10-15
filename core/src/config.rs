@@ -22,7 +22,7 @@ pub const PORTABLE_MARKER: &str = "shangxian.portable";
 /// 便携模式的数据子目录：`<exe 目录>\data`。
 pub const PORTABLE_SUBDIR: &str = "data";
 
-/// 发布预设的默认值，也是非法值的归一目标。
+/// 历史预设字段的默认值（新建一律用它），也是非法值的归一目标。
 pub const DEFAULT_PRESET: &str = "web";
 
 fn default_ssh_port() -> u16 {
@@ -162,7 +162,7 @@ pub fn parse_hhmm(text: &str) -> Option<(u32, u32)> {
     Some((hour, minute))
 }
 
-/// 发布预设是否为程序认识的三种之一。
+/// 历史预设字段是否为程序认识的三种之一。
 pub fn is_known_preset(preset: &str) -> bool {
     matches!(preset, "web" | "ws" | "upload")
 }
@@ -173,15 +173,6 @@ pub fn normalize_preset(preset: &str) -> String {
         preset.to_string()
     } else {
         DEFAULT_PRESET.to_string()
-    }
-}
-
-/// 写配置时校验预设（读时归一化，写时拒绝）。
-pub fn check_preset_strict(preset: &str) -> Result<(), String> {
-    if is_known_preset(preset) {
-        Ok(())
-    } else {
-        Err("发布预设只支持 web / ws / upload 三种".to_string())
     }
 }
 
@@ -1644,12 +1635,6 @@ mod tests {
             err(serde_json::json!({"refreshIntervalMs": 800, "quietHours": {"enabled": false, "start": "22:00", "end": "08:00", "x": 1}, "checkUpdateOnStart": true})),
             "设置中包含无法识别的项：quietHours.x"
         );
-
-        assert_eq!(
-            check_preset_strict("wat").unwrap_err(),
-            "发布预设只支持 web / ws / upload 三种"
-        );
-        assert!(check_preset_strict("ws").is_ok());
     }
 
     // ---------- 访问保护柔性读写 ----------

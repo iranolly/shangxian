@@ -1,16 +1,15 @@
 // 克隆隧道弹层（D4 §3.3 CloneTunnelModal）：
-// 名字默认「{源名} 的副本」，服务器/预设/访问保护默认沿用源隧道；
+// 名字默认「{源名} 的副本」，服务器/访问保护默认沿用源隧道；
 // 公网网址默认空（原网址不能给两条隧道同时用）；云端端口默认挑一个空闲的。
 //
 // 与 D4 的一点实现差异：密码的加密结果拿不到（界面里只有 hasPassword 布尔值），
 // 所以选了「要密码」时让用户给新隧道设一条新密码（默认随机预填），提交前在本机算哈希。
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   hashPassword,
   type ServerView,
-  type TunnelPreset,
   type TunnelView,
 } from "../api";
 import { errorText } from "../store/commands";
@@ -75,7 +74,6 @@ function CloneForm({
     String(suggestPort(source.serverId, source.remotePort + 1)),
   );
   const [url, setUrl] = useState("");
-  const [preset, setPreset] = useState<TunnelPreset>(source.preset ?? "web");
   const [wantPassword, setWantPassword] = useState(access.includes("password"));
   const [wantIp, setWantIp] = useState(access.includes("ip"));
   const [accessUser, setAccessUser] = useState(source.accessUser ?? "shangxian");
@@ -125,7 +123,6 @@ function CloneForm({
         serverId,
         remotePort,
         url: url.trim() || null,
-        preset,
         access: flags,
         accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
         accessHash,
@@ -139,16 +136,6 @@ function CloneForm({
       setBusy(false);
     }
   };
-
-  const presets = useMemo(
-    () =>
-      [
-        { value: "web" as TunnelPreset, label: "普通网站（默认）" },
-        { value: "ws" as TunnelPreset, label: "WebSocket（实时通信）" },
-        { value: "upload" as TunnelPreset, label: "大文件上传" },
-      ] satisfies { value: TunnelPreset; label: string }[],
-    [],
-  );
 
   return (
     <div className="modal-backdrop">
@@ -206,21 +193,6 @@ function CloneForm({
             />
             <p className="warn-line">原网址不能同时用于两条隧道；如需填写请更换。
             </p>
-          </div>
-
-          <div className="field">
-            <label className="field-label">发布预设</label>
-            <select
-              className="select"
-              value={preset}
-              onChange={(e) => setPreset(e.target.value as TunnelPreset)}
-            >
-              {presets.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
           </div>
 
           <fieldset className="field">

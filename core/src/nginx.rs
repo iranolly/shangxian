@@ -14,7 +14,8 @@
 //! - `noindex` **不默认生成**，只在 `optional`（界面「可选附加行」）里给一行提示；
 //! - `acmeExempt` 字段名不变，内容升级为多行：有密码给 `auth_basic off;`，有白名单给
 //!   `allow all;`（白名单模式也必须生成），并带说明注释；
-//! - 预设来自 `Tunnel.preset`（`web`/`ws`/`upload`），预设行只能放进已有的 `location / { }`，
+//! - `Tunnel.preset` 是历史字段（新版本界面/CLI 不再设置）：`ws`/`upload` 决定哪组行保持激活，
+//!   其余情况两组都以「按需启用」注释菜单出现，只放进已有的 `location / { }`，
 //!   WebSocket 的 `Connection` 行按环境识别到的 `WS_MAP` 优先用 `$connection_upgrade`。
 
 use crate::config::{ServerConfig, Tunnel};
@@ -178,9 +179,16 @@ fn resolve_htpasswd_dir(
         .unwrap_or_else(|| "/xp/panel/vhost".to_string())
 }
 
-/// 预设行（放进已有的 `location / { }` 里）的分隔注释。
+/// 「按需启用」菜单的公共头（这几行放进已有的 `location / { }` 里）。
 const PRESET_HEAD: &str =
     "# ↓↓↓ 下面几行放进你已有的 location / { } 里（不要贴在 server 里）↓↓↓";
+/// 菜单用法说明。
+const PRESET_MENU_HINT: &str = "# 需要哪一组就把那组行开头的 # 去掉；两组都用不上就整段别贴。";
+/// WebSocket 组前的说明（只在该组是注释菜单时出现）。
+const WS_MENU_HINT: &str =
+    "# 网站有实时进度、长连接（比如 ComfyUI、AI 聊天）→ 去掉这组行开头的 #";
+/// 大文件上传组前的说明（只在该组是注释菜单时出现）。
+const UPLOAD_MENU_HINT: &str = "# 需要传大文件（最大 2GB）→ 去掉这组行开头的 #";
 
 /// 把 `Tunnel.preset` 归一成三种之一；非法值按 `web` 处理（D2 契约）。
 fn normalize_preset(raw: &str) -> &'static str {
@@ -191,37 +199,71 @@ fn normalize_preset(raw: &str) -> &'static str {
     }
 }
 
-/// 按预设生成要放进 `location / { }` 的行。
-fn preset_lines(preset: &str, ws_map: Option<bool>) -> Vec<String> {
-    match preset {
-        "ws" => {
-            let mut lines = vec![
-                PRESET_HEAD.to_string(),
-                "proxy_http_version 1.1;".to_string(),
-                "proxy_set_header Upgrade $http_upgrade;".to_string(),
-            ];
-            if ws_map == Some(true) {
-                lines.push("proxy_set_header Connection $connection_upgrade;".to_string());
-            } else {
-                lines.push("proxy_set_header Connection \"upgrade\";".to_string());
-                lines.push(
-                    "# 如果服务器全局配置里已有 connection_upgrade 的 map，把这行换成 $connection_upgrade 更稳定（宝塔默认有）。"
-                        .to_string(),
-                );
-            }
-            lines.push("proxy_read_timeout 3600s;".to_string());
-            lines.push("proxy_send_timeout 3600s;".to_string());
-            lines
-        }
-        "upload" => vec![
-            PRESET_HEAD.to_string(),
-            "client_max_body_size 2048m;".to_string(),
-            "proxy_request_buffering off;".to_string(),
-            "proxy_read_timeout 600s;".to_string(),
-            "proxy_send_timeout 600s;".to_string(),
-        ],
-        _ => Vec::new(),
+/// WebSocket 组（长连接）的指令行。
+fn ws_group(ws_map: Option<bool>) -> Vec<String> {
+    let mut lines = vec![
+        "proxy_http_version 1.1;".to_string(),
+        "proxy_set_header Upgrade $http_upgrade;".to_string(),
+    ];
+    if ws_map == Some(true) {
+        lines.push("proxy_set_header Connection $connection_upgrade;".to_string());
+    } else {
+        lines.push("proxy_set_header Connection \"upgrade\";".to_string());
+        lines.push(
+            "# 如果服务器全局配置里已有 connection_upgrade 的 map，把这行换成 $connection_upgrade 更稳定（宝塔默认有）。"
+                .to_string(),
+        );
     }
+    lines.push("proxy_read_timeout 3600s;".to_string());
+    lines.push("proxy_send_timeout 3600s;".to_string());
+    lines
+}
+
+/// 大文件上传组的指令行。
+fn upload_group() -> Vec<String> {
+    vec![
+        "client_max_body_size 2048m;".to_string(),
+        "proxy_request_buffering off;".to_string(),
+        "proxy_read_timeout 600s;".to_string(),
+        "proxy_send_timeout 600s;".to_string(),
+    ]
+}
+
+/// 把一组指令行变成注释菜单形态：指令行前面加 `# `，原本就是注释的行原样保留。
+fn as_menu(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            if line.starts_with('#') {
+                line.clone()
+            } else {
+                format!("# {line}")
+            }
+        })
+        .collect()
+}
+
+/// 生成「按需启用」注释菜单（放进已有的 `location / { }` 里）：
+/// 历史 preset 对应的那组行保持激活（老隧道行为不变），另一组以注释菜单出现；
+/// 其余情况两组都注释。两组之间留一个空行。
+fn preset_lines(preset: &str, ws_map: Option<bool>) -> Vec<String> {
+    let ws = ws_group(ws_map);
+    let upload = upload_group();
+    let mut lines = vec![PRESET_HEAD.to_string(), PRESET_MENU_HINT.to_string()];
+    if preset == "ws" {
+        lines.extend(ws.iter().cloned());
+    } else {
+        lines.push(WS_MENU_HINT.to_string());
+        lines.extend(as_menu(&ws));
+    }
+    lines.push(String::new());
+    if preset == "upload" {
+        lines.extend(upload.iter().cloned());
+    } else {
+        lines.push(UPLOAD_MENU_HINT.to_string());
+        lines.extend(as_menu(&upload));
+    }
+    lines
 }
 
 pub fn generate(svc: &Tunnel, local_port: u16, server: &ServerConfig) -> NginxSnippet {
@@ -352,7 +394,7 @@ pub fn generate_with(
         ));
     }
 
-    // ---------- 预设片段（ws / upload；web = 不加行） ----------
+    // ---------- 「按需启用」菜单（历史 preset 的 ws / upload 保持激活，其余都注释） ----------
     let preset_extra = preset_lines(preset, opts.ws_map);
 
     // ---------- 证书续期豁免（多行；白名单模式也要 allow all;） ----------
@@ -393,23 +435,20 @@ pub fn generate_with(
     if !preset_extra.is_empty() {
         preview.push(gray("    ..."));
         preview.push(gray("    location / {"));
-        preview.push(add(format!("        {}", PRESET_HEAD)));
         for line in &preset_extra {
-            preview.push(add(format!("        {line}")));
+            if line.is_empty() {
+                preview.push(add(""));
+            } else {
+                preview.push(add(format!("        {line}")));
+            }
         }
         preview.push(gray("    }"));
     }
 
     let snippet = {
         let mut parts = blocks;
-        if !preset_extra.is_empty() {
-            parts.push(preset_extra.join("\n"));
-        }
-        if parts.is_empty() {
-            None
-        } else {
-            Some(parts.join("\n"))
-        }
+        parts.push(preset_extra.join("\n"));
+        Some(parts.join("\n"))
     };
 
     preview.push(gray("    ..."));
@@ -449,26 +488,6 @@ pub fn generate_with(
         steps.push(format!(
             "{what}不要遗漏——遗漏后证书到期无法自动续期；它只放开 /.well-known/ 这个地址，其他地址仍然需要密码/白名单。"
         ));
-    }
-    match preset {
-        "ws" => {
-            steps.push(
-                "已勾选「WebSocket」：这几行可让 AI 聊天、实时进度这类网页长连接保持稳定；请放入已有的 location / { } 中，不要贴到 server 里。".into(),
-            );
-            if opts.ws_map != Some(true) {
-                steps.push(
-                    "「Connection」那行先用 \"upgrade\"：如果服务器全局配置里已有 connection_upgrade 的 map（宝塔通常有），换成 $connection_upgrade 更稳定。"
-                        .into(),
-                );
-            }
-        }
-        "upload" => {
-            steps.push(
-                "已勾选「大文件上传」：上传上限提高到 2GB，边传边转发、不占服务器硬盘。注意：需确保密码或白名单已开启，否则其他访问者也能上传大文件。"
-                    .into(),
-            );
-        }
-        _ => {}
     }
     steps.push(
         "「可选附加行」里的 noindex 默认未添加：添加后会告诉搜索引擎不要收录这个网站（礼貌提示，不是门锁）；网站面向所有人公开时无需添加。".into(),
@@ -685,7 +704,11 @@ mod tests {
         assert!(!text.contains("bad:user"), "非法用户名不能进片段");
         assert!(!text.contains("1.2.3.4;"), "非法白名单不能进片段");
         assert!(snip.htpasswd.is_none(), "用户名非法就不生成 htpasswd");
-        assert!(snip.snippet.is_none(), "没有任何保护块应该可以生成");
+        assert!(
+            !snip.snippet.as_deref().unwrap().contains("auth_basic"),
+            "没有任何保护块应该可以生成（只剩按需启用菜单）：{:?}",
+            snip.snippet
+        );
         assert!(snip.acme_exempt.is_none(), "没有保护就不生成续期豁免");
         assert!(
             snip.steps.iter().any(|s| s.contains("注入")),
@@ -720,7 +743,11 @@ mod tests {
     fn empty_whitelist_does_not_emit_deny_all_alone() {
         let tun = tunnel_with(vec!["ip"], None, None, Some("all"));
         let snip = generate(&tun, 8080, &fake_server());
-        assert!(snip.snippet.is_none(), "只有 deny all 会把所有人挡住，不能生成");
+        assert!(
+            !snip.snippet.as_deref().unwrap().contains("deny all;"),
+            "只有 deny all 会把所有人挡住，不能生成：{:?}",
+            snip.snippet
+        );
         assert!(snip.steps.iter().any(|s| s.contains("阻止所有访问")));
         assert!(snip.acme_exempt.is_none(), "没有真正生效的白名单就不生成续期豁免");
     }
@@ -781,59 +808,104 @@ mod tests {
         assert!(acme.contains("    auth_basic off;") && acme.contains("    allow all;"), "acme={acme}");
     }
 
-    // ---------- 预设（D3 §6.2；D2 只认 web/ws/upload） ----------
+    // ---------- 「按需启用」菜单（历史 preset 决定哪组激活） ----------
 
-    #[test]
-    fn web_preset_adds_nothing() {
-        let tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
-        let snip = generate(&tun, 8080, &fake_server());
-        assert!(!snip.snippet.as_deref().unwrap().contains("proxy_http_version"));
-        assert!(!snip.snippet.as_deref().unwrap().contains("client_max_body_size"));
+    /// 片段里有没有按「行」算的指令：`commented=true` 要求该行是 `# 指令`，
+    /// `false` 要求是激活行（行首无 #）。逐行判断，避免子串误判。
+    fn has_instruction(add: &str, prefix: &str, commented: bool) -> bool {
+        add.lines().any(|line| {
+            let text = line.trim_start();
+            match text.strip_prefix('#') {
+                Some(rest) => commented && rest.trim_start().starts_with(prefix),
+                None => !commented && text.starts_with(prefix),
+            }
+        })
     }
 
     #[test]
-    fn ws_preset_uses_connection_upgrade_when_map_known() {
+    fn web_menu_comments_both_groups() {
+        let tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
+        let snip = generate(&tun, 8080, &fake_server());
+        let add = snip.snippet.as_deref().unwrap();
+        assert!(add.contains(PRESET_HEAD), "add={add}");
+        assert!(add.contains(PRESET_MENU_HINT), "add={add}");
+        assert!(add.contains(WS_MENU_HINT), "add={add}");
+        assert!(add.contains(UPLOAD_MENU_HINT), "add={add}");
+        assert!(has_instruction(add, "proxy_http_version 1.1;", true), "add={add}");
+        assert!(has_instruction(add, "client_max_body_size 2048m;", true), "add={add}");
+        assert!(!has_instruction(add, "proxy_http_version 1.1;", false), "add={add}");
+        assert!(!has_instruction(add, "client_max_body_size 2048m;", false), "add={add}");
+        // 示意图里同一套菜单行都是新增行
+        assert!(snip
+            .preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("# proxy_http_version 1.1;")));
+        assert!(snip
+            .preview
+            .iter()
+            .any(|l| l.is_new && l.text.contains("# client_max_body_size 2048m;")));
+    }
+
+    #[test]
+    fn ws_preset_keeps_ws_group_active() {
         let mut tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
         tun.preset = "ws".into();
         let mut opts = GenOptions::default();
         opts.ws_map = Some(true);
         let snip = generate_with(&tun, 8080, &fake_server(), &opts);
         let add = snip.snippet.as_deref().unwrap();
-        assert!(add.contains("proxy_set_header Connection $connection_upgrade;"), "add={add}");
+        assert!(has_instruction(add, "proxy_http_version 1.1;", false), "add={add}");
+        assert!(has_instruction(add, "proxy_set_header Upgrade $http_upgrade;", false), "add={add}");
+        assert!(
+            has_instruction(add, "proxy_set_header Connection $connection_upgrade;", false),
+            "add={add}"
+        );
+        assert!(has_instruction(add, "proxy_read_timeout 3600s;", false), "add={add}");
         assert!(!add.contains("\"upgrade\""), "有 map 时不该再用 \"upgrade\"：{add}");
-        assert!(add.contains("proxy_read_timeout 3600s;"));
-        assert!(snip.steps.iter().any(|s| s.contains("WebSocket")), "steps={:?}", snip.steps);
+        // 另一组（大文件上传）仍是注释菜单
+        assert!(has_instruction(add, "client_max_body_size 2048m;", true), "add={add}");
+        assert!(add.contains(UPLOAD_MENU_HINT), "add={add}");
+        assert!(!add.contains(WS_MENU_HINT), "WS 组已激活，不该再带菜单说明：{add}");
     }
 
     #[test]
-    fn ws_preset_falls_back_to_upgrade_with_comment() {
+    fn ws_preset_without_map_uses_upgrade_with_advice() {
         let mut tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
         tun.preset = "ws".into();
         // ws_map 未知（None）也要能用，但要提示怎么换更好
         let snip = generate(&tun, 8080, &fake_server());
         let add = snip.snippet.as_deref().unwrap();
-        assert!(add.contains("proxy_set_header Connection \"upgrade\";"), "add={add}");
+        assert!(
+            has_instruction(add, "proxy_set_header Connection \"upgrade\";", false),
+            "add={add}"
+        );
         assert!(add.contains("connection_upgrade 的 map"), "add={add}");
+        assert!(has_instruction(add, "client_max_body_size 2048m;", true), "add={add}");
     }
 
     #[test]
-    fn upload_preset_lines() {
+    fn upload_preset_keeps_upload_group_active() {
         let mut tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
         tun.preset = "upload".into();
         let snip = generate(&tun, 8080, &fake_server());
         let add = snip.snippet.as_deref().unwrap();
-        assert!(add.contains("client_max_body_size 2048m;"));
-        assert!(add.contains("proxy_request_buffering off;"));
-        assert!(snip.steps.iter().any(|s| s.contains("大文件上传")), "steps={:?}", snip.steps);
+        assert!(has_instruction(add, "client_max_body_size 2048m;", false), "add={add}");
+        assert!(has_instruction(add, "proxy_request_buffering off;", false), "add={add}");
+        assert!(has_instruction(add, "proxy_read_timeout 600s;", false), "add={add}");
+        // 另一组（WebSocket）仍是注释菜单
+        assert!(has_instruction(add, "proxy_http_version 1.1;", true), "add={add}");
+        assert!(add.contains(WS_MENU_HINT), "add={add}");
+        assert!(!add.contains(UPLOAD_MENU_HINT), "上传组已激活，不该再带菜单说明：{add}");
     }
 
     #[test]
-    fn unknown_preset_falls_back_to_web() {
+    fn unknown_preset_falls_back_to_web_menu() {
         let mut tun = tunnel_with(vec!["password"], Some("u"), Some("$2y$12$abc"), None);
         tun.preset = "spa".into();
         let snip = generate(&tun, 8080, &fake_server());
         let add = snip.snippet.as_deref().unwrap();
-        assert!(!add.contains(PRESET_HEAD), "未知预设按 web 处理：{add}");
+        assert!(has_instruction(add, "proxy_http_version 1.1;", true), "add={add}");
+        assert!(has_instruction(add, "client_max_body_size 2048m;", true), "add={add}");
         assert_eq!(normalize_preset("WS"), "ws");
         assert_eq!(normalize_preset("upload"), "upload");
         assert_eq!(normalize_preset("SPA"), "web");

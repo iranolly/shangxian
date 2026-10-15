@@ -28,7 +28,6 @@ import {
   type ServiceInput,
   type ServiceStopResult,
   type Settings,
-  type TunnelPreset,
   type UpdateTunnelInput,
 } from "../api";
 import { copyText as copyToClipboard } from "../copy/clipboard";
@@ -121,7 +120,6 @@ export interface CloneDraft {
   serverId: string;
   remotePort: number;
   url: string | null;
-  preset: TunnelPreset;
   access: string[];
   accessUser: string | null;
   accessHash: string | null;
@@ -495,7 +493,6 @@ export const actions = {
             accessUser: draft.accessUser,
             accessHash: draft.accessHash,
             accessDetail: draft.accessDetail,
-            preset: draft.preset,
           }),
         success: null,
         failure: { rethrow: true, silent: true },

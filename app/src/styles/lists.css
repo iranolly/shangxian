@@ -174,8 +174,7 @@
   color: var(--st-error-fg);
 }
 
-.chip.neutral,
-.chip.preset-badge {
+.chip.neutral {
   background: var(--st-paused-bg);
   color: var(--st-paused-fg);
 }

@@ -247,9 +247,6 @@ enum TunnelCmd {
         /// 只允许这些 IP（access 含 ip 时用，例 "1.2.3.4,5.6.7.8"）
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
-        /// 发布预设：web（默认，普通网站）/ ws（WebSocket）/ upload（上传大文件）
-        #[arg(long)]
-        preset: Option<String>,
     },
     /// 改：只写需要修改的字段，其余保持不变
     #[command(after_help = "例：
@@ -274,9 +271,6 @@ enum TunnelCmd {
         access_password: Option<String>,
         #[arg(long = "access-ips")]
         access_ips: Option<String>,
-        /// 发布预设：web / ws / upload；不传 = 保持原来的
-        #[arg(long)]
-        preset: Option<String>,
     },
     /// 核对云端 nginx 上这条隧道实际启用的访问保护（通过 SSH 只读读取配置）
     Check { id: String },
@@ -760,7 +754,6 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
             access_user,
             access_password,
             access_ips,
-            preset,
         } => {
             // --access 拼错、或 --access-password / --access-ips 没配套：先报错，
             // 不让它们被 core 柔性丢掉，变成「看着开了保护其实没有」。
@@ -771,9 +764,6 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                 access_ips.as_deref(),
                 false,
             )?;
-            if let Some(p) = preset {
-                config::check_preset_strict(p)?;
-            }
             let svc = find_service(service)?;
             let svc_name = str_of(&svc, "name");
             let name = name
@@ -795,7 +785,6 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                     "accessUser": access_user,
                     "accessHash": hash,
                     "accessDetail": access_ips,
-                    "preset": preset,
                 }),
             )?;
             done(
@@ -817,12 +806,8 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
             access_user,
             access_password,
             access_ips,
-            preset,
         } => {
             let old = find_tunnel(id)?;
-            if let Some(p) = preset {
-                config::check_preset_strict(p)?;
-            }
             // 不传 --access = 保持原样（从查到的那条隧道里把数组读回来）；
             // 传 none = 清空；传别的 = 整体替换，可以叠加。
             let access_new = if access.is_empty() {
@@ -861,7 +846,6 @@ fn tunnel_cmd(sub: &TunnelCmd, want_json: bool) -> Result<(), String> {
                     "accessUser": access_user.clone().or_else(|| opt_str(&old, "accessUser")),
                     "accessHash": hash,
                     "accessDetail": access_ips.clone().or_else(|| opt_str(&old, "accessDetail")),
-                    "preset": preset.clone().or_else(|| opt_str(&old, "preset")),
                 }),
             )?;
             done(
@@ -2067,7 +2051,6 @@ fn snapshot() -> Result<Value, String> {
                 "access": t.access,
                 "accessUser": t.access_user,
                 "hasPassword": t.access_hash.is_some(),
-                "preset": t.preset,
             })
         })
         .collect();
@@ -2758,7 +2741,6 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
     cli service edit <服务id> --port 8189 --watch true
     cli service edit <服务id> --watch false              # --watch / --autostart 也可以不带值（= 开启）
     cli tunnel add --service <服务id> --server <服务器id> --remote-port 13000 --url 我的域名.com
-    cli tunnel add ... --preset ws          # 发布预设：web（默认）/ ws（WebSocket）/ upload（上传大文件）
     cli tunnel add ... --access password --access-user 用户名 --access-password 密码
     cli tunnel add ... --access password --access ip --access-ips "1.2.3.4,5.6.7.8"   # 密码 + 白名单两种保护同时启用
     cli tunnel edit <隧道id> --access password --access-password 新密码   # 更换密码
@@ -3243,25 +3225,6 @@ mod tests {
                 assert_eq!(lines, 50);
             }
             _ => panic!("应该解析成 logs"),
-        }
-        // tunnel add / edit 的 --preset
-        let cli = Cli::try_parse_from([
-            "cli", "tunnel", "add", "--service", "svc-1", "--server", "srv-1", "--remote-port",
-            "13000", "--preset", "ws",
-        ])
-        .unwrap();
-        match cli.cmd {
-            Cmd::Tunnel {
-                sub: TunnelCmd::Add { preset, .. },
-            } => assert_eq!(preset.as_deref(), Some("ws")),
-            _ => panic!("应该解析成 tunnel add"),
-        }
-        let cli = Cli::try_parse_from(["cli", "tunnel", "edit", "tun-1"]).unwrap();
-        match cli.cmd {
-            Cmd::Tunnel {
-                sub: TunnelCmd::Edit { preset, .. },
-            } => assert!(preset.is_none(), "不传 = 保持原来的预设"),
-            _ => panic!("应该解析成 tunnel edit"),
         }
         // 重置指纹
         let cli =

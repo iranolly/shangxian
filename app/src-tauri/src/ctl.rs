@@ -851,6 +851,8 @@ fn redacted_config(raw: &Value, diag: bool, with_paths: bool) -> Value {
                 "accessUser",
                 "accessDetail",
                 "enabled",
+                // preset 是历史字段（新版界面/CLI 不再设置），但导出、撤销恢复要原样带上，
+                // 否则「导出 → 替换导入」会把老隧道的激活行降级成注释菜单。
                 "preset",
             ] {
                 clone_key(item, &mut t, key);
@@ -2234,12 +2236,12 @@ const METHODS: &[(&str, &str, &str)] = &[
     (
         "add_tunnel",
         "新增发布隧道",
-        "{name, serviceId, serverId, remotePort, url?, access, accessUser?, accessHash?, accessDetail?, preset?}",
+        "{name, serviceId, serverId, remotePort, url?, access, accessUser?, accessHash?, accessDetail?}",
     ),
     (
         "update_tunnel",
         "编辑发布隧道（accessHash 传 null 表示不改密码）",
-        "{id, name, remotePort, url?, access, accessUser?, accessHash?, accessDetail?, preset?}",
+        "{id, name, remotePort, url?, access, accessUser?, accessHash?, accessDetail?}",
     ),
     ("remove_tunnel", "删除发布隧道（返回撤销令牌）", "{id}"),
     ("tunnel_start", "开始发布", "{id}"),

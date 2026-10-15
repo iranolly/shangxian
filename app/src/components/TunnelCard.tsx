@@ -1,5 +1,5 @@
 // 一张发布隧道卡片（D4 §3.3 TunnelCard）：
-// 状态三件套 + 预设徽标 + 访问保护状态（点小牌就改）+ 运行时长/重试倒计时 + 网格信息 + 修复带 + 批量勾选。
+// 状态三件套 + 访问保护状态（点小牌就改）+ 运行时长/重试倒计时 + 网格信息 + 修复带 + 批量勾选。
 // 纪律：卡片只收稳定 props（id / 回调），实体字段自己从 store 订阅（React.memo 才有效）。
 
 import { memo } from "react";
@@ -10,7 +10,6 @@ import { usePending } from "../store/pendingStore";
 import { useServer, useTunnel } from "../store/useStore";
 import { CardMenu } from "./card/CardMenu";
 import { FixRibbon } from "./card/FixRibbon";
-import { PresetBadge } from "./card/PresetBadge";
 import { ProtectionStatus } from "./ProtectionStatus";
 import { RetryLine } from "./card/RetryLine";
 import { UptimeLine } from "./card/UptimeLine";
@@ -71,9 +70,6 @@ function TunnelCardInner({
         <span className={`dot ${tunnel.status}`} aria-hidden="true" />
         <span className={`status-word ${tunnel.status}`}>{meta.word}</span>
         <span className="service-name">{tunnel.name}</span>
-        <span className="card-badges">
-          <PresetBadge preset={tunnel.preset} />
-        </span>
         <span className="card-actions">
           {tunnel.enabled ? (
             <button

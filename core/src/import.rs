@@ -684,7 +684,7 @@ fn normalize_tunnel_value(item: &Value, warnings: &mut Vec<String>) -> Value {
         if !config::is_known_preset(preset) {
             obj.insert("preset".into(), json!(config::DEFAULT_PRESET));
             warnings.push(
-                "有隧道的发布预设无法识别，已按网页（web）处理；如需修改，请打开这条隧道重新选择一次"
+                "有隧道的历史预设字段（preset）无法识别，已按网页（web）处理；该字段新版本不再由界面/CLI 设置，老隧道的值会尽量保留"
                     .to_string(),
             );
         }
@@ -1362,7 +1362,7 @@ mod tests {
         assert_eq!(cfg.tunnels[1].preset, "web", "非法 preset 归一成 web");
         assert_eq!(cfg.tunnels[1].access, vec!["password"], "未知 access 被忽略");
         let joined = summary.warnings.join("；");
-        assert!(joined.contains("发布预设"), "warnings={joined}");
+        assert!(joined.contains("历史预设字段"), "warnings={joined}");
         assert!(joined.contains("访问保护写法"), "warnings={joined}");
         assert!(joined.contains("访问密码"), "warnings={joined}");
     }

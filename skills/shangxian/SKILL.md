@@ -111,7 +111,6 @@ echo "$CLI"
 | `serviceStatus` / `health` | 本机服务原始状态词 / `up`（端口在听）`down`（探过不通）`unknown`（没探过） |
 | `enabled` | 是不是「应该发布」；暂停时是 false |
 | `access` | 数组：可以同时含 `"password"` 和 `"ip"`（两个条件都要满足）；`[]` = 无保护 |
-| `preset` | nginx 片段预设：`web` / `ws` / `upload` |
 | `protectionCheck` | 最近一次云端核对（手动或后台自动）：`status` = `unknown`/`ok`/`drift`/`error`；`source` = `manual`/`auto`；对不上看 `driftFields` |
 
 ## 常用配方

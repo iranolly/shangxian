@@ -1,9 +1,8 @@
 // 发布新隧道向导：3 步 + 成功屏。
-// 第 1 步选本机服务，第 2 步选云端服务器和端口（含发布预设），第 3 步定访问保护。
+// 第 1 步选本机服务，第 2 步选云端服务器和端口，第 3 步定访问保护。
 //
 // E3 改造（D4 §3.8）：
 // - 死胡同修复：0 服务 / 0 服务器给直达按钮，并留「回来继续」的入口；
-// - 发布预设下拉（普通网站 / WebSocket / 大文件上传）；
 // - 成功屏二维码按钮（离线生成）；
 // - 表单改过再按 Esc / 取消要确认（dirty）。
 //
@@ -18,7 +17,6 @@ import {
   testServer,
   type ServerView,
   type ServiceView,
-  type TunnelPreset,
   type TunnelView,
 } from "../api";
 import { copyText } from "../copy/clipboard";
@@ -89,7 +87,6 @@ export function NewTunnelWizard({
   );
   const [remotePort, setRemotePort] = useState(0);
   const [url, setUrl] = useState("");
-  const [preset, setPreset] = useState<TunnelPreset>("web");
   const [wantPassword, setWantPassword] = useState(true);
   const [wantIp, setWantIp] = useState(false);
   const [accessUser, setAccessUser] = useState("shangxian");
@@ -135,7 +132,7 @@ export function NewTunnelWizard({
     if (!serverId && servers.length > 0) setServerId(servers[0].id);
   }, [servers, serverId]);
 
-  // 从「添加本机服务 / 服务器」回来时预选新加的那条（同一个 preset 只处理一次）
+  // 从「添加本机服务 / 服务器」回来时预选新加的那条（同一个预选值只处理一次）
   const appliedPresetService = useRef<string | null>(null);
   const appliedPresetServer = useRef<string | null>(null);
   useEffect(() => {
@@ -266,7 +263,6 @@ export function NewTunnelWizard({
         accessUser: wantPassword ? accessUser.trim() || "shangxian" : null,
         accessHash,
         accessDetail: wantIp ? ips.trim() || null : null,
-        preset,
       });
       if (!id) {
         setError("发布失败：请稍后重试");
@@ -290,12 +286,6 @@ export function NewTunnelWizard({
   const copy = async (text: string) => {
     const ok = await copyText(text);
     if (!ok) toast.error("复制失败：请用鼠标选中后按 Ctrl+C 复制");
-  };
-
-  const presetHint: Record<TunnelPreset, string> = {
-    web: "普通网站：大多数情况下使用此项。",
-    ws: "WebSocket：适用于 AI 聊天、实时进度等长连接场景，避免连接中断。",
-    upload: "大文件上传：上限提高到 2GB，边上传边转发。",
   };
 
   return (
@@ -537,27 +527,6 @@ export function NewTunnelWizard({
                   留空也可发布；填写后需添加域名解析。
                 </p>
               </div>
-              <div className="field">
-                <label className="field-label">发布预设</label>
-                <select
-                  className="select"
-                  value={preset}
-                  onChange={(e) => {
-                    setPreset(e.target.value as TunnelPreset);
-                    setDirty(true);
-                  }}
-                >
-                  <option value="web">普通网站（默认）</option>
-                  <option value="ws">WebSocket（实时通信）</option>
-                  <option value="upload">大文件上传</option>
-                </select>
-                <p
-                  className="field-hint hint"
-                  title={`${presetHint[preset]} 不确定时保持默认即可，粘贴配置时会一并提供对应配置行。`}
-                >
-                  不确定时保持默认即可。
-                </p>
-              </div>
             </>
           ) : (
             <>
@@ -683,9 +652,6 @@ export function NewTunnelWizard({
                 请确认：{service?.name}（本机 {service?.localPort}）→{" "}
                 {server?.name} · 云端 {remotePort}
                 {url.trim() ? ` · ${url.trim()}` : ""}
-                {preset !== "web"
-                  ? ` · 预设：${preset === "ws" ? "WebSocket" : "大文件上传"}`
-                  : ""}
               </p>
             </>
           )}

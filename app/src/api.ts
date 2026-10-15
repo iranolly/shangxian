@@ -20,9 +20,6 @@ export type ServiceHealth = "up" | "down" | "unknown";
 /** 隧道重试状态：看护会继续自动重连 / 已经停了（D2 §6.2） */
 export type RetryState = "active" | "stopped";
 
-/** 发布预设（D2 §6.2；界面上不出现英文） */
-export type TunnelPreset = "web" | "ws" | "upload";
-
 /** 一台本机服务：这台电脑上的东西（端口 + 启动方式 + 看护开关） */
 export interface ServiceView {
   id: string;
@@ -90,8 +87,6 @@ export interface TunnelView {
   lastFailure?: FailureInfo | null;
   /** 新：最近一次云端保护核对结果（D2 §6.4，永远存在） */
   protectionCheck?: ProtectionCheck;
-  /** 新：发布预设；未知值按 web 处理 */
-  preset?: TunnelPreset;
 }
 
 export interface ServerView {
@@ -265,8 +260,6 @@ export interface NewTunnelInput {
   accessUser?: string | null;
   accessHash?: string | null;
   accessDetail?: string | null;
-  /** 发布预设（可选，默认 web；D2 §15.6） */
-  preset?: TunnelPreset | null;
 }
 
 /** 编辑一条隧道（accessHash 不填 = 不换密码） */
@@ -279,8 +272,6 @@ export interface UpdateTunnelInput {
   accessUser?: string | null;
   accessHash?: string | null;
   accessDetail?: string | null;
-  /** 发布预设（省略 = 保持原值；D2 §15.6） */
-  preset?: TunnelPreset | null;
 }
 
 const inTauri =
@@ -416,7 +407,6 @@ function normalizeTunnel(raw: TunnelView): TunnelView {
     reconnectsToday: typeof raw.reconnectsToday === "number" ? raw.reconnectsToday : 0,
     lastFailure: raw.lastFailure ?? null,
     protectionCheck: normalizeProtection(raw.protectionCheck),
-    preset: raw.preset === "ws" || raw.preset === "upload" ? raw.preset : "web",
   };
 }
 

@@ -456,6 +456,7 @@ pub struct Tunnel {
     pub access_hash: Option<String>,
     pub access_detail: Option<String>,
     pub enabled: bool,
+    // 历史字段（2026-10-16 起界面/CLI 不再设置；老隧道保留 ws/upload，决定片段里哪组行激活）
     pub preset: String,               // v6："web"（默认）|"ws"|"upload"
 }
 
@@ -653,7 +654,7 @@ pub struct AppConfig {
 | `cleanup` | 按端口**精确**清理残留 sshd 会话（每分钟最多一次）；本机 bcrypt 访问密码哈希 |
 | `ssh` / `job` | 写死 System32 `ssh.exe`；作业对象：隧道 kill-on-close（防孤儿），本机服务保活 |
 | `keyboot` | 密码登录一次 → 生成密钥 → 写 `authorized_keys` → 密钥验证；russh + ring；TOFU 主机指纹 |
-| `nginx` | nginx 片段生成（web/ws/upload 预设）、站点目录解析链、`valid_domain` / `valid_allow_entry` |
+| `nginx` | nginx 片段生成（历史预设字段决定哪组行激活）、站点目录解析链、`valid_domain` / `valid_allow_entry` |
 | `protection` | 云端站点配置解析：`auth_basic` / `allow`+`deny` / 跳转 / `.well-known` 豁免 → `AccessCheck` |
 | `cloudcheck` | 云端核对 V2：只读脚本生成 + 文本协议解析；HTTPS/证书、端口回环、环境识别、访问审计、公网 IP、漂移判定（纯函数，可单测） |
 | `doctor` | 体检九步（app→dirs→ssh→ports→servers→tunnels→cloud→web→dns）；quick/deep；单步 20s、整次 60s |

@@ -149,8 +149,6 @@ pub struct TunnelView {
     pub service_status: String,
     /// 单独指定的密钥（可空 = 继承服务器）
     pub key_path: Option<String>,
-    /// nginx 片段预设：web | ws | upload
-    pub preset: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -198,8 +196,6 @@ pub struct NewTunnelInput {
     pub access_user: Option<String>,
     pub access_hash: Option<String>,
     pub access_detail: Option<String>,
-    /// nginx 片段预设：web（缺省）| ws | upload
-    pub preset: Option<String>,
 }
 
 /// 编辑已有隧道。
@@ -217,8 +213,6 @@ pub struct UpdateTunnelInput {
     /// 新密码的哈希；None = 保持原密码
     pub access_hash: Option<String>,
     pub access_detail: Option<String>,
-    /// nginx 片段预设：web | ws | upload；缺省或 null = 保持原样
-    pub preset: Option<String>,
 }
 
 /// 新增/编辑服务器。
@@ -1162,7 +1156,6 @@ impl Guardian {
                     service_ok: runner.map(|r| r.listening()).unwrap_or(false),
                     service_status: Self::service_status_word(runner).to_string(),
                     key_path: tun.key_path.clone(),
-                    preset: tun.preset.clone(),
                 }
             })
             .collect()
@@ -1739,10 +1732,6 @@ impl Guardian {
         if name.is_empty() {
             return Err("请填写隧道名字".into());
         }
-        // 发布预设：缺省 web；非法值用固定文案拒绝（读配置时归一，写配置时严格）
-        let preset =
-            clean_optional(input.preset).unwrap_or_else(|| config::DEFAULT_PRESET.to_string());
-        config::check_preset_strict(&preset)?;
         let service = self
             .config
             .service(&input.service_id)
@@ -1790,7 +1779,8 @@ impl Guardian {
             access_hash: clean_optional(input.access_hash),
             access_detail: clean_optional(input.access_detail),
             enabled: true,
-            preset,
+            // 界面/CLI 不再让用户选预设；新建一律写历史缺省值 web
+            preset: config::DEFAULT_PRESET.to_string(),
         });
         self.commit_config(next)?;
         Ok(id)
@@ -1802,14 +1792,6 @@ impl Guardian {
         if name.is_empty() {
             return Err("请填写隧道名字".into());
         }
-        // 发布预设：给了才改；非法值用固定文案拒绝（读配置时归一，写配置时严格）
-        let preset = match clean_optional(input.preset.clone()) {
-            Some(value) => {
-                config::check_preset_strict(&value)?;
-                Some(value)
-            }
-            None => None,
-        };
 
         let (server_id, port_changed, old_access, old_hash, old_user, old_detail) = {
             let tun = self
@@ -1885,9 +1867,7 @@ impl Guardian {
             tun.access_user = final_user;
             tun.access_hash = final_hash;
             tun.access_detail = final_detail;
-            if let Some(preset) = &preset {
-                tun.preset = preset.clone();
-            }
+            // 不再改 tun.preset：历史字段保留原值
         }
         // 先落盘，成功了再动运行中的隧道；存盘失败时旧隧道照跑，界面不会虚报成功
         self.commit_config(next)?;
@@ -3585,12 +3565,10 @@ mod tests {
             "reconnectsToday",
             "lastFailure",
             "protectionCheck",
-            "preset",
         ] {
             assert!(value.get(key).is_some(), "快照缺字段 {key}: {value}");
         }
         assert_eq!(value["retryState"], "active");
-        assert_eq!(value["preset"], "web");
         assert_eq!(value["attempt"], 0);
         assert_eq!(value["uptimeSecs"], 0);
         assert_eq!(value["protectionCheck"]["status"], "unknown");
@@ -3642,7 +3620,6 @@ mod tests {
             access_user: Some("u".into()),
             access_hash: Some("$2y$12$x".into()),
             access_detail: None,
-            preset: None,
         })
         .unwrap();
         assert!(
@@ -3678,9 +3655,9 @@ mod tests {
         assert!(state.peek_trash(&info.token).is_none(), "撤销后墓碑要取走");
     }
 
-    // ---------- F1 修复回归：preset 写入口 / 运行态停一切 / 事件 / 站点目录第二层 / server id ----------
+    // ---------- F1 修复回归：预设写入入口已移除 / 运行态停一切 / 事件 / 站点目录第二层 / server id ----------
 
-    fn new_tunnel_input(name: &str, remote_port: u16, preset: Option<&str>) -> NewTunnelInput {
+    fn new_tunnel_input(name: &str, remote_port: u16) -> NewTunnelInput {
         NewTunnelInput {
             name: name.into(),
             service_id: "svc-1".into(),
@@ -3691,16 +3668,10 @@ mod tests {
             access_user: None,
             access_hash: None,
             access_detail: None,
-            preset: preset.map(str::to_string),
         }
     }
 
-    fn update_tunnel_input(
-        id: &str,
-        name: &str,
-        remote_port: u16,
-        preset: Option<&str>,
-    ) -> UpdateTunnelInput {
+    fn update_tunnel_input(id: &str, name: &str, remote_port: u16) -> UpdateTunnelInput {
         UpdateTunnelInput {
             id: id.into(),
             name: name.into(),
@@ -3710,13 +3681,12 @@ mod tests {
             access_user: None,
             access_hash: None,
             access_detail: None,
-            preset: preset.map(str::to_string),
         }
     }
 
-    /// ① preset 写入口：add 缺省 web、add/update 显式值都写进去、非法值固定文案拒绝。
+    /// ① 预设字段已无写入入口：新建一律写 web，update 保持老值（老隧道的 ws 不被改动）。
     #[test]
-    fn add_and_update_tunnel_write_preset() {
+    fn add_and_update_tunnel_keep_preset_field_stable() {
         let dir = std::env::temp_dir().join("sx-guardian-preset-write");
         let _ = std::fs::remove_dir_all(&dir);
         let (cfg, _, _) = fingerprint_fixture();
@@ -3727,35 +3697,28 @@ mod tests {
             null_reporter(),
         );
 
-        // add：缺省 web
-        let id_web = g.add_tunnel(new_tunnel_input("默认", 18081, None)).unwrap();
-        assert_eq!(g.config.tunnel(&id_web).unwrap().preset, "web");
-        // add：显式 ws
-        let id_ws = g
-            .add_tunnel(new_tunnel_input("长连接", 18082, Some("ws")))
-            .unwrap();
-        assert_eq!(g.config.tunnel(&id_ws).unwrap().preset, "ws");
-        // add：非法值固定文案拒绝，配置不动
-        let err = g
-            .add_tunnel(new_tunnel_input("乱写", 18083, Some("wat")))
-            .unwrap_err();
-        assert_eq!(err, "发布预设只支持 web / ws / upload 三种");
-        assert_eq!(g.config.tunnels.len(), 2);
+        // add：不接收入参，固定写 web
+        let id = g.add_tunnel(new_tunnel_input("默认", 18081)).unwrap();
+        assert_eq!(g.config.tunnel(&id).unwrap().preset, "web");
 
-        // update：不给 preset = 保持
-        g.update_tunnel(update_tunnel_input(&id_web, "默认", 18081, None))
+        // update：只改名字/端口，preset 保持原值
+        g.update_tunnel(update_tunnel_input(&id, "改名", 18081))
             .unwrap();
-        assert_eq!(g.config.tunnel(&id_web).unwrap().preset, "web");
-        // update：给了才改
-        g.update_tunnel(update_tunnel_input(&id_web, "默认", 18081, Some("upload")))
+        assert_eq!(g.config.tunnel(&id).unwrap().preset, "web");
+
+        // 老隧道的 ws：update 也不应该被改掉
+        {
+            let tun = g
+                .config
+                .tunnels
+                .iter_mut()
+                .find(|t| t.id == id)
+                .unwrap();
+            tun.preset = "ws".into();
+        }
+        g.update_tunnel(update_tunnel_input(&id, "再改名", 18081))
             .unwrap();
-        assert_eq!(g.config.tunnel(&id_web).unwrap().preset, "upload");
-        // update：非法值固定文案拒绝，保持原值
-        let err = g
-            .update_tunnel(update_tunnel_input(&id_web, "默认", 18081, Some("wat")))
-            .unwrap_err();
-        assert_eq!(err, "发布预设只支持 web / ws / upload 三种");
-        assert_eq!(g.config.tunnel(&id_web).unwrap().preset, "upload");
+        assert_eq!(g.config.tunnel(&id).unwrap().preset, "ws", "update 不能改历史 preset");
     }
 
     /// ② 运行态停一切：停进程、不动 enabled、不落盘；再来一次不重复计数。
