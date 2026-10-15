@@ -605,7 +605,7 @@ pub struct AppConfig {
 
 **密码与云端文件**
 
-- 访问密码哈希改成**本机 bcrypt**（core 用 `bcrypt` crate，输出 `$2y$12$…`）：不再往服务器发命令、不需要服务器装 `openssl`；密码超过 72 字节报人话错。`cleanup::hash_password` 的 `SshExec` 参数保留但不再使用（兼容老调用方）。
+- 访问密码哈希改成**本机算、格式自适应**：优先 bcrypt（core 用 `bcrypt` crate，输出 `$2y$12$…`）；服务器 nginx 验不了 bcrypt 时（例如小皮面板自带旧 libcrypt）自动改用兼容的 apr1（`$apr1$…`，本机 md5crypt 实现，nginx 内置支持）。不再往服务器发密码、不需要服务器装 `openssl`；用 bcrypt 时密码超过 72 字节报人话错。探测在 `core/src/cryptprobe.rs`（找 nginx → 看它真正加载的 libcrypt → python ctypes 真算一次 `$2y$`，探不出按兼容格式兜底），结果缓存在 state 的服务器环境里（`CloudEnv.bcrypt`）。「检查云端」full 会再做一次假账号验证（正常 401；500 = 密码文件读不进去，出一条明确警告）。`cleanup::hash_password` 的 `SshExec` 参数保留但不再使用（兼容老调用方）。
 - 站点目录（`ServerConfig.vhostDir`）解析顺序：**服务器字段 → 环境变量 `SHANGXIAN_HTPASSWD_DIR` → 默认 `/xp/panel/vhost`**；nginx 配置在 `<目录>/nginx/<域名>.conf`，密码文件在 `<目录>/<域名>.htpasswd`。生成片段、写 htpasswd 说明、「检查云端」全部走同一套解析（`nginx::htpasswd_dir_for`）。CLI 可以用 `cli server add/edit --vhost-dir <目录>` 改（edit 不写 = 保留原值，`--vhost-dir ""` = 清空）。
 
 **配置可靠性**
@@ -694,7 +694,7 @@ pub struct AppConfig {
 ### 12.3 安全模型
 
 - **TOFU（首次信任）主机指纹**：隧道 ssh 用 `StrictHostKeyChecking=accept-new`——第一次连某台服务器记下指纹，之后指纹对不上直接拒连（`hostKeyChanged`）；`setup_passwordless` 的 russh 走同一套语义，指纹记录在密钥旁边 `shangxian_known_hosts`。服务器重装/换机器由人确认后 `tunnel forget-key --yes` 重信任。
-- **bcrypt 在本机算**：访问密码哈希 `$2y$12$…`，不往服务器发命令、不需要装 openssl；明文只显示一次、不落盘、不进日志；超过 72 字节拒绝；`setup-key` / `hash-password` 走 stdin 不回显。导出与诊断包**永不含** `accessHash`（只留 `hasPassword`）。
+- **密码哈希在本机算、格式自适应**：优先 bcrypt `$2y$12$…`；服务器 nginx 验不了 bcrypt 时用兼容的 apr1 `$apr1$…`（只读探测见 `cryptprobe`，结果缓存在 state 服务器环境里）。不往服务器发密码、不需要装 openssl；明文只显示一次、不落盘、不进日志；用 bcrypt 时超过 72 字节拒绝；`setup-key` / `hash-password` 走 stdin 不回显。导出与诊断包**永不含** `accessHash`（只留 `hasPassword`）。
 - **HTTPS 感知**：`cloudcheck` 只读核对云端 443/ssl、证书剩余天数、80 是否跳 https、是否明文可开（`plainOpen`）；`.well-known` 要有 `auth_basic off;` 豁免，否则证书续期会被密码拦住。**basic auth 必须配 HTTPS，只有 80 端口的站点不算发布完成**——发布验收固定包含「用 https:// 打开一次」+ `doctor --deep` + `check_tunnel_cloud`。
 - **限速边界**：残留清理每分钟最多 1 次；事件日志每秒最多 10 条、同事件 10 秒去重；掉线通知连续异常 3 分钟才弹一次（恢复再弹、暂停不弹、免打扰时段不弹）；云端检查手动 full 30 秒 / 其它 25 秒超时、审计只统计最近 1000 行（输入封顶 2MB，计数标注「大概」）。
 - **不替用户加防护**：`limit_req`（防爆破限速）要动全局 `http{}`，默认**不生成**、只给强警告文案；应用不装 fail2ban、不改 sshd、不动服务器防火墙——先推 IP 白名单，其余交给用户自己在面板/服务器上决定。

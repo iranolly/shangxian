@@ -382,7 +382,8 @@ pub struct Tunnel {
     /// 访问密码的用户名（配 nginx 时用）
     #[serde(default)]
     pub access_user: Option<String>,
-    /// 访问密码的 bcrypt 哈希（$2y$12$…，明文密码只显示一次，不落盘）
+    /// 访问密码的哈希（优先 bcrypt `$2y$12$…`；服务器 nginx 验不了时是兼容格式 `$apr1$…`；
+    /// 明文密码只显示一次，不落盘）
     #[serde(default)]
     pub access_hash: Option<String>,
     /// 访问保护细节（如 IP 白名单，逗号分隔）

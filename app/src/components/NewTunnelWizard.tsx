@@ -246,7 +246,7 @@ export function NewTunnelWizard({
       let accessHash: string | null = null;
       if (wantPassword) {
         try {
-          accessHash = await hashPassword(server.id, password);
+          accessHash = (await hashPassword(server.id, password)).hash;
         } catch (e) {
           setError("密码计算失败，未保存：请缩短密码后重试。");
           setErrorHint(

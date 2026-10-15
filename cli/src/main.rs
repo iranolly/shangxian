@@ -241,7 +241,7 @@ enum TunnelCmd {
         access: Vec<String>,
         #[arg(long = "access-user")]
         access_user: Option<String>,
-        /// 访问密码（本机计算 bcrypt 哈希后写入服务器密码文件，密码本身不写入磁盘）
+        /// 访问密码（本机算成哈希后写入服务器密码文件；优先 bcrypt，服务器 nginx 不支持时自动用兼容格式；密码本身不写入磁盘）
         #[arg(long = "access-password")]
         access_password: Option<String>,
         /// 只允许这些 IP（access 含 ip 时用，例 "1.2.3.4,5.6.7.8"）
@@ -406,7 +406,7 @@ enum ServerCmd {
   cli server test srv-api          # 真连一次 SSH，确认密钥 / 网络是否正常
   cli server test srv-api --json   # 加 --json 输出机器可读结果")]
     Test { id: String },
-    /// 生成访问密码哈希（bcrypt，本机计算，供 nginx 使用；密码从标准输入读取）
+    /// 生成访问密码哈希（本机计算，供 nginx 使用；优先 bcrypt，服务器 nginx 不支持时自动用兼容格式；密码从标准输入读取）
     HashPassword { id: String },
 }
 
@@ -1048,6 +1048,9 @@ fn server_cmd(sub: &ServerCmd, want_json: bool) -> Result<(), String> {
                 print_ok(&v);
             } else {
                 println!("{}", v["hash"].as_str().unwrap_or(""));
+                if let Some(note) = v["note"].as_str() {
+                    eprintln!("说明：{note}");
+                }
             }
         }
     }
@@ -2134,12 +2137,15 @@ fn find_server(id: &str) -> Result<Value, String> {
         .ok_or_else(|| format!("未找到服务器「{id}」（可用 cli servers 查看 id）"))
 }
 
-/// 本机算出 bcrypt 访问密码哈希（密码本身不落盘）。
+/// 本机算出访问密码哈希（优先 bcrypt；服务器 nginx 不支持时自动用兼容格式；密码本身不落盘）。
 fn hash_password(server_id: &str, password: &str) -> Result<String, String> {
     let v = call(
         "hash_password",
         json!({"serverId": server_id, "password": password}),
     )?;
+    if let Some(note) = v["note"].as_str() {
+        eprintln!("说明：{note}");
+    }
     v["hash"]
         .as_str()
         .map(|s| s.to_string())

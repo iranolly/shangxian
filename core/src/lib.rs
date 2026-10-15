@@ -11,6 +11,7 @@
 
 pub mod cleanup;
 pub mod config;
+pub mod cryptprobe;
 pub mod ctl;
 pub mod guardian;
 pub mod import;

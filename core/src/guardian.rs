@@ -2206,7 +2206,8 @@ impl Guardian {
         Ok(crate::nginx::generate_with(tun, local_port, server, &opts))
     }
 
-    /// 在本机生成 bcrypt 密码哈希、结果写进服务器上的密码文件（新建/编辑隧道用）。
+    /// 在本机生成 bcrypt 访问密码哈希（固定 bcrypt；会自动选格式的入口在 app 的
+    /// `ctl::hash_password_adaptive`）。
     pub fn hash_password(&self, server_id: &str, password: &str) -> Result<String, String> {
         let server = self
             .config

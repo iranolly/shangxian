@@ -10,6 +10,8 @@ serde_json = "1"
 rand = "0.8"
 # 本地生成 nginx 访问密码的 bcrypt 哈希（明文密码不再上服务器、不进 ssh 命令行）
 bcrypt = "0.19"
+# 本地生成 apr1 兼容哈希（服务器 nginx 验不了 bcrypt 时用；算法和 openssl passwd -apr1 一致）
+md5 = "0.7"
 # 只用来做「密码登录一次 → 配好免密」这一步；隧道本身仍走系统 ssh.exe
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }

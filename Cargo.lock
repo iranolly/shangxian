@@ -4298,6 +4298,7 @@ name = "shangxian-core"
 version = "0.6.2"
 dependencies = [
  "bcrypt",
+ "md5",
  "rand 0.8.8",
  "russh",
  "serde",

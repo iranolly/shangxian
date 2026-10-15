@@ -114,7 +114,9 @@ function CloneForm({
 
     setBusy(true);
     try {
-      const accessHash = wantPassword ? await hashPassword(serverId, password) : null;
+      const accessHash = wantPassword
+        ? (await hashPassword(serverId, password)).hash
+        : null;
       const flags: string[] = [];
       if (wantPassword) flags.push("password");
       if (wantIp) flags.push("ip");

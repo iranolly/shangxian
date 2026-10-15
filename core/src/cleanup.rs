@@ -195,6 +195,8 @@ echo NO_OWNER"#
 /// 在本地生成 nginx 用的访问密码哈希（bcrypt），密码不落命令行、不上服务器。
 ///
 /// `exec` 参数保留是为了兼容现有调用方（guardian / app / cli），现在不再使用。
+/// 服务器的 nginx 验不了 bcrypt 时改用 [`hash_password_apr1`]（自适应入口见 app 的
+/// `hash_password_adaptive`）。
 pub fn hash_password(_exec: &SshExec, password: &str) -> Result<String, String> {
     if password.is_empty() {
         return Err("访问密码不能为空".into());
@@ -206,6 +208,102 @@ pub fn hash_password(_exec: &SshExec, password: &str) -> Result<String, String> 
         .map_err(|e| format!("本地生成密码哈希失败：{e}"))?;
     // bcrypt 库默认输出 $2b$；htpasswd / nginx 更常用 $2y$，两者算法一致，只换前缀。
     Ok(hash.replacen("$2b$", "$2y$", 1))
+}
+
+/// apr1 的字符表（md5crypt / nginx 内置实现用的同一套）。
+const APR1_ITOA64: &[u8; 64] =
+    b"./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// 在本地生成 nginx 用的 apr1 兼容哈希（`$apr1$…`），密码同样只在本机算、不落盘。
+///
+/// 用在「服务器的 nginx 验不了 bcrypt」的场合：apr1 是 nginx **内置**支持的格式，
+/// 不依赖服务器上的加密库，任何版本都能读（小皮这类自带旧库的服务器就靠它兜底）。
+pub fn hash_password_apr1(password: &str) -> Result<String, String> {
+    if password.is_empty() {
+        return Err("访问密码不能为空".into());
+    }
+    // 8 位随机盐（256 % 64 == 0，取模无偏）
+    let raw: [u8; 8] = rand::random();
+    let salt: String = raw
+        .iter()
+        .map(|b| APR1_ITOA64[*b as usize % APR1_ITOA64.len()] as char)
+        .collect();
+    Ok(apr1_hash(password, &salt))
+}
+
+/// 按 md5crypt/apr1 算法算哈希（盐由调用方给出；nginx 与 openssl 的算法一致）。
+fn apr1_hash(password: &str, salt: &str) -> String {
+    use md5::Context;
+
+    let pw = password.as_bytes();
+    let salt = &salt.as_bytes()[..salt.len().min(8)];
+
+    let mut ctx = Context::new();
+    ctx.consume(pw);
+    ctx.consume(&b"$apr1$"[..]);
+    ctx.consume(salt);
+
+    let mut ctx1 = Context::new();
+    ctx1.consume(pw);
+    ctx1.consume(salt);
+    ctx1.consume(pw);
+    let mut digest = ctx1.compute().0;
+
+    let mut left = pw.len();
+    while left > 0 {
+        let take = left.min(16);
+        ctx.consume(&digest[..take]);
+        left -= take;
+    }
+    let mut bits = pw.len();
+    while bits > 0 {
+        if bits & 1 != 0 {
+            ctx.consume([0u8]);
+        } else {
+            ctx.consume(&pw[..1]);
+        }
+        bits >>= 1;
+    }
+    digest = ctx.compute().0;
+
+    for round in 0..1000u32 {
+        let mut c = Context::new();
+        if round & 1 != 0 {
+            c.consume(pw);
+        } else {
+            c.consume(&digest[..]);
+        }
+        if round % 3 != 0 {
+            c.consume(salt);
+        }
+        if round % 7 != 0 {
+            c.consume(pw);
+        }
+        if round & 1 != 0 {
+            c.consume(&digest[..]);
+        } else {
+            c.consume(pw);
+        }
+        digest = c.compute().0;
+    }
+
+    fn to64(out: &mut String, mut v: u32, n: usize) {
+        for _ in 0..n {
+            out.push(APR1_ITOA64[(v & 0x3f) as usize] as char);
+            v >>= 6;
+        }
+    }
+
+    let mut out = String::from("$apr1$");
+    out.push_str(&String::from_utf8_lossy(salt));
+    out.push('$');
+    to64(&mut out, (digest[0] as u32) << 16 | (digest[6] as u32) << 8 | digest[12] as u32, 4);
+    to64(&mut out, (digest[1] as u32) << 16 | (digest[7] as u32) << 8 | digest[13] as u32, 4);
+    to64(&mut out, (digest[2] as u32) << 16 | (digest[8] as u32) << 8 | digest[14] as u32, 4);
+    to64(&mut out, (digest[3] as u32) << 16 | (digest[9] as u32) << 8 | digest[15] as u32, 4);
+    to64(&mut out, (digest[4] as u32) << 16 | (digest[10] as u32) << 8 | digest[5] as u32, 4);
+    to64(&mut out, digest[11] as u32, 2);
+    out
 }
 
 /// 把一段文本安全地包进单引号里（给远端 shell 用；域名等外部输入必须过这一道）。
@@ -238,6 +336,39 @@ mod tests {
     fn hash_password_rejects_empty_and_too_long() {
         assert!(hash_password(&fake_exec(), "").is_err());
         assert!(hash_password(&fake_exec(), &"a".repeat(73)).is_err());
+    }
+
+    /// 用 openssl passwd -apr1 生成的固定向量，防止算法实现走样。
+    #[test]
+    fn apr1_matches_openssl_vectors() {
+        assert_eq!(
+            apr1_hash("test123", "abcdefgh"),
+            "$apr1$abcdefgh$tbBaQr8bvJpOyzoypIHIO0"
+        );
+        assert_eq!(
+            apr1_hash("test123", "ABCDEF12"),
+            "$apr1$ABCDEF12$i44n9x.YOEegkvf5K63x3/"
+        );
+        assert_eq!(
+            apr1_hash("test123", "12345678"),
+            "$apr1$12345678$1u9kBHN3v4nFFNZAEKFnT1"
+        );
+        // 非 ASCII 按 UTF-8 字节算（和浏览器提交/nginx 校验一致；向量在 Linux UTF-8 环境用 openssl 生成）
+        assert_eq!(
+            apr1_hash("正确的horse电池", "xyZ12345"),
+            "$apr1$xyZ12345$jtp1DXjccNdD/Ljgyvuvd."
+        );
+    }
+
+    #[test]
+    fn hash_password_apr1_is_well_formed_and_rejects_empty() {
+        let hash = hash_password_apr1("正确的horse电池").unwrap();
+        assert!(hash.starts_with("$apr1$"), "应该是 apr1 哈希：{hash}");
+        assert_eq!(hash.len(), "$apr1$".len() + 8 + 1 + 22, "长度不对：{hash}");
+        // 盐是随机生成的：连算两次大概率不同
+        let again = hash_password_apr1("正确的horse电池").unwrap();
+        assert_ne!(hash, again);
+        assert!(hash_password_apr1("").is_err());
     }
 
     #[test]

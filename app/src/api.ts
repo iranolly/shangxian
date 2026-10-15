@@ -1168,12 +1168,30 @@ export async function deleteServer(id: string): Promise<void> {
   if (inTauri) await invoke("delete_server", { id });
 }
 
+/** 访问密码哈希（后端自适应：优先 bcrypt；服务器 nginx 验不了时用兼容的 apr1） */
+export interface HashPasswordResult {
+  hash: string;
+  format: "bcrypt" | "apr1";
+  /** 用了兼容格式/没探准时的一句说明（可展示给用户） */
+  note?: string;
+}
+
 export async function hashPassword(
   serverId: string,
   password: string,
-): Promise<string> {
-  if (!inTauri) return `preview-hash-${serverId}-${password.length}`;
-  return await invoke<string>("hash_password", { serverId, password });
+): Promise<HashPasswordResult> {
+  if (!inTauri) {
+    return { hash: `preview-hash-${serverId}-${password.length}`, format: "bcrypt" };
+  }
+  const raw = await invoke<{ hash: string; format?: string; note?: string }>(
+    "hash_password",
+    { serverId, password },
+  );
+  return {
+    hash: raw.hash,
+    format: raw.format === "apr1" ? "apr1" : "bcrypt",
+    note: raw.note,
+  };
 }
 
 export interface NginxLine {

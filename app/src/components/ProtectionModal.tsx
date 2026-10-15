@@ -112,10 +112,9 @@ export function ProtectionModal({ tunnel, onClose, onSaved }: Props) {
       };
       // 没填新密码就不传 accessHash：后端保持原来的密码不变。
       if (wantPassword && password.trim()) {
-        input.accessHash = await hashPassword(
-          tunnel.serverId,
-          password.trim(),
-        );
+        input.accessHash = (
+          await hashPassword(tunnel.serverId, password.trim())
+        ).hash;
       }
       await actions.tunnelProtectionSave(input);
       window.dispatchEvent(new CustomEvent("shangxian:notif-refresh"));

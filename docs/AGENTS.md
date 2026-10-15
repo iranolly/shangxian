@@ -61,7 +61,7 @@ echo "$CLI"
 | 0 | **缺信息先问用户，不要照抄示例、不要自己编**。每一项参数只有两个合法来源：用户明确说的，或命令输出里查到的。示例里的域名、端口、账号、密码、路径**全是占位**。缺以下任何一项就先停下、一次问清，拿到答复再动手：① 域名（`--url`）② 云端端口（`--remote-port`）③ 服务器地址 / 登录账号 / 配免密时要用的登录密码 ④ 访问用户名 / 访问密码 ⑤ 本机端口 ⑥ 服务的启动命令（程序 / 参数 / 工作目录）⑦ 这次要动的具体是哪条隧道 / 服务 / 服务器 | 自编参数会把用户的服务内容发到公网、占错端口、改乱配置，最后都要人收拾。问清楚是最省事的路 |
 | 1 | **绝不暂停 / 重启 / 删除「用户正在用」的本机服务和它的隧道**——包括承载你与用户当前会话的通道，以及项目文档里标注「不许碰」的清单（本仓库长期环境里那条叫 `pi-web`，但重点是「谁在用」，不是名字） | 用户当前会话正走这条通道，动它 = 立刻断线。名字对不上也要按「可能正在用」处理；拿不准先问 |
 | 2 | 删除本机服务 / 服务器前，先看有没有隧道引用 | 应用会拒绝并列出是哪几条。**不要绕过**（不要手改 config.json 硬删） |
-| 3 | 访问密码只在「设置时」出现一次，只存加密结果（bcrypt `$2y$…`）；加密在**本机**算好，服务器不用装任何东西；配免密的登录密码只在内存里用一次 | 密码不落盘、不进日志。不要把明文密码写进 config.json、日志、`cli call` 的参数里；传给命令行时优先走标准输入（`echo 密码 \| cli server hash-password ...`） |
+| 3 | 访问密码只在「设置时」出现一次，只存加密结果（优先 bcrypt `$2y$…`；服务器 nginx 验不了时自动用兼容格式 `$apr1$…`）；加密在**本机**算好，服务器不用装任何东西；配免密的登录密码只在内存里用一次 | 密码不落盘、不进日志。不要把明文密码写进 config.json、日志、`cli call` 的参数里；传给命令行时优先走标准输入（`echo 密码 \| cli server hash-password ...`） |
 | 4 | 云端只做「普通 sshd + nginx」，而且**只动站点配置** | 不替用户装任何软件（包括 fail2ban）、不改服务器 sshd 配置；**永不碰全局 `nginx.conf`**（要改 `http{}` 的东西，比如 `limit_req_zone`/`limit_req`，默认只出文案和强警告，不生成、不自动下发）。应用也永远不会自动写服务器上的 nginx 配置或自动 reload——片段一律由人粘贴 |
 | 5 | 应用退出 = 所有隧道停止；本机服务保活（继续跑） | 隧道跟应用走，别人立刻访问不了。但应用启动的本地服务不会跟着退，下次打开应用会按端口认领。不要用「杀掉应用」当重启手段 |
 | 6 | 隧道 `paused` = 别人访问不了 | 不确定要不要停，先问 |
@@ -506,7 +506,7 @@ cli tunnel add --service <服务id> --server <服务器id> --remote-port <云端
 | `--url` | 否 | 公网要用的域名：**只要对外发布就该填**（只填纯域名，不要 `http://`、不要端口和路径）。留空、或写得不合规范时，nginx 片段会用「你的域名」占位并给警告——后续核对、检查云端都没有意义。用户没给域名 → 先问 |
 | `--access` | 否 | `none`（默认）/ `password` / `ip`。**可重复，也支持逗号分隔**：`--access password --access ip` 或 `--access password,ip` = 两个条件都要满足（nginx 默认 satisfy all）。**默认不传 = none = 谁都能进，建隧道时务必显式传值**。写别的值（比如 `passwrod`）会**直接报错**，不会静默变成无保护 |
 | `--access-user` | 否 | 访问用户名（选了 `password` 用）。不填时生成的 htpasswd 默认用户名是 `shangxian`——**不要默认**：应显式问用户想用什么用户名，并通过 `--access-user` 传进去 |
-| `--access-password` | 否 | 访问密码。加密（bcrypt `$2y$…`）在**本机**算好再写进配置，密码本身不落盘、不碰到服务器（不要服务器装任何东西）。但会短暂出现在本机命令行；介意就用 `hash-password` 拿哈希再 `cli call add_tunnel` |
+| `--access-password` | 否 | 访问密码。加密（优先 bcrypt `$2y$…`；服务器 nginx 验不了时自动用兼容格式 `$apr1$…`）在**本机**算好再写进配置，密码本身不落盘、不碰到服务器（不要服务器装任何东西）。但会短暂出现在本机命令行；介意就用 `hash-password` 拿哈希再 `cli call add_tunnel` |
 | `--access-ips` | 否 | IP 白名单，逗号分隔（选了 `ip` 用） |
 | `--preset` | 否 | nginx 片段预设：`web`（默认，普通网站）/ `ws`（WebSocket）/ `upload`（传大文件）。写别的值直接报错 |
 
@@ -546,7 +546,7 @@ cli tunnel edit <隧道id> [--name X] [--remote-port N] [--url X]
 - `--access` 同样可重复/逗号分隔，写什么就是什么（整体替换）：不传 `--access` = 保持原来的保护不变；`--access none` = 改成无保护。
 - `--preset` 不传 = 保持原来的；`web`/`ws`/`upload` 三选一，写别的直接报错。
 - `--access-password` 不填 = 密码保持不变。选了 `password` 但从来没有密码哈希，会报：`✗ 这条隧道选了「要密码才能进」，请先设置访问密码`。
-- `--access-password` 的加密也是本机算（bcrypt），服务器不用装东西；`--access-ips` 必须配 `--access ip`、`--access-password` 必须配 `--access password`，配不上会直接报错（不会静默丢掉）。
+- `--access-password` 的加密也是本机算（优先 bcrypt，服务器 nginx 不支持时自动用兼容格式），服务器不用装东西；`--access-ips` 必须配 `--access ip`、`--access-password` 必须配 `--access password`，配不上会直接报错（不会静默丢掉）。
 - 改了云端端口：应用会停掉旧隧道，按新端口重连。**记得重新贴 nginx 配置。**
 - 改了服务器地址 / SSH 端口 / 账号 / 密钥，或改了本机服务的端口：应用会自动停掉旧隧道、按新参数重建（不用手删重建）。
 
@@ -690,11 +690,11 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 
 | 项 | 说明 |
 |---|---|
-| 作用 | 生成 nginx 用的访问密码哈希（bcrypt，`$2y$12$…`） |
+| 作用 | 生成 nginx 用的访问密码哈希（优先 bcrypt `$2y$12$…`；服务器 nginx 验不了时自动用兼容格式 `$apr1$…`） |
 | 密码输入 | **从标准输入读一行**（`echo 密码 \| cli server hash-password <id>`）；交互终端也不回显 |
-| 实现 | **在本机算**（Rust bcrypt 库），不连服务器、不需要服务器装任何东西 |
-| 限制 | 密码超过 72 字节会被拒绝（bcrypt 的上限） |
-| 副作用 | 无（只是算一个哈希并打印）；服务器 id 必须存在（用它只是定位，不会去连） |
+| 实现 | **在本机算**（Rust bcrypt / apr1）；会先只读探测一次服务器支不支持 bcrypt，不需要服务器装任何东西 |
+| 限制 | 用 bcrypt 时密码超过 72 字节会被拒绝（bcrypt 的上限）；用兼容格式兜底时没这个限制 |
+| 副作用 | 只读探测一次服务器（看 nginx 真正加载的加密库支不支持 bcrypt）；连不上或探不出就按兼容格式算。服务器 id 必须存在 |
 
 人话输出（真实形状）：
 
@@ -702,7 +702,7 @@ cli server edit <服务器id> [--name X] [--host X] [--user X] [--port N] [--key
 $2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 ```
 
-`--json`：`{ "ok": true, "result": { "hash": "$2y$12$..." } }`
+`--json`：`{ "ok": true, "result": { "hash": "$2y$12$...", "format": "bcrypt" } }`；用了兼容格式时 `format` 是 `"apr1"`，并多一个 `note` 说明原因。
 
 失败例子：`✗ 访问密码太长了：bcrypt 只认前 72 个字节，请换短一点的密码`。
 
@@ -867,7 +867,7 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 | 参数 | `--out <文件>`（不写 = 存到 `<数据目录>\diag\` 下按时间命名）；`--deep` 传给体检（包里的 doctor.json 用 deep 报告） |
 | 包含 | `config.redacted.json`（没有密码哈希、没有密钥路径，只有 `hasPassword`/`keyPathPresent`）、`state.redacted.json`、`snapshot.json`、`stats.json`、`doctor.json`、`events.tail.jsonl`、`logs/app.tail.txt`、各隧道/服务日志尾巴、`README.txt` |
 | 脱敏 | 密码/密码哈希/token/密钥内容、`C:\Users\<名字>` 里的用户名都会替换成占位；`launch.args` 在诊断包里只留长度（`<已省略>`） |
-| 安全边界 | 包里**不会有** ctl 通行证、密钥文件内容、bcrypt 哈希；但有域名/路径等信息，不要公开贴到网上 |
+| 安全边界 | 包里**不会有** ctl 通行证、密钥文件内容、密码哈希（bcrypt/apr1）；但有域名/路径等信息，不要公开贴到网上 |
 | 前提 | 应用在跑（离线退出码 3） |
 
 人话输出：`✓ 诊断包已生成：C:\...\diag\diag-20261012-101500.zip（120.5 KB，已脱敏）`；`--json` 的 `result`：`{ "path":"...", "bytes":123456, "redacted":true, "deep":false, "truncated":false }`。
@@ -990,7 +990,7 @@ cli call set_notify_enabled '{"enabled":false}' --json       # → {"ok":true,"r
 | `delete_server` | 删除云端服务器（有隧道在用会拒绝；返回撤销令牌） | `{id}` |
 | `setup_passwordless` | 用密码登录一次，自动配好免密（密码不落盘） | `{serverId, password}` |
 | `test_server` | 测试连接：真连一次这台服务器的 SSH（最长 15 秒） | `{serverId}`（也认 `id`） |
-| `hash_password` | 生成访问密码的哈希（bcrypt，本机算好、给 nginx 用） | `{serverId, password}` |
+| `hash_password` | 生成访问密码的哈希（优先 bcrypt；服务器 nginx 验不了时用兼容的 apr1；本机算好、给 nginx 用） | `{serverId, password}` |
 | `get_nginx_snippet` | 生成某条隧道的 nginx 配置片段 | `{id}` |
 | `check_tunnel_access` | 核对云端 nginx 上这条隧道的实际访问保护（和 `check_tunnel_cloud` 的 `full` 同路，SSH 最长约 30 秒；结果会存进运行记录） | `{id}` |
 | `check_tunnel_cloud` | 云端完整检查（full/drift/audit/env；含 HTTPS/证书/端口/审计） | `{id, mode?}` |
@@ -1334,7 +1334,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
 | `keyPath` | string / null | 覆盖服务器的密钥；`null` = 继承服务器 |
 | `access` | array | 可同时含 `"password"` 和 `"ip"`（两个都含 = 两个条件都要满足）；`[]` = 无保护 |
 | `accessUser` | string / null | 访问用户名 |
-| `accessHash` | string / null | 访问密码的 bcrypt 哈希（`$2y$12$…`，本机算）；明文密码只显示一次，不落盘 |
+| `accessHash` | string / null | 访问密码的哈希（优先 `$2y$12$…`，服务器不支持 bcrypt 时是兼容格式 `$apr1$…`；本机算）；明文密码只显示一次，不落盘 |
 | `accessDetail` | string / null | 访问保护细节（IP 白名单，逗号分隔） |
 | `enabled` | bool | 是否正在发布；`false` = 已暂停 |
 | `preset` | string | v6 新增的 nginx 片段预设：`web`（默认）/ `ws`（WebSocket）/ `upload`（传大文件）；非法值读时归一成 `web` |
@@ -1562,7 +1562,7 @@ cli tunnel check <隧道id> --json   # 核对云端实际生效的保护
 方式 B（推荐给 agent / 不想让密码进命令行）：
 
 ```bash
-# 1. 在本机算哈希（密码走 stdin，不进命令行；不碰服务器）
+# 1. 在本机算哈希（密码走 stdin，不进命令行；会只读探测一次服务器支持的格式）
 echo '新密码' | cli server hash-password <服务器id>
 # → $2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 
@@ -1716,7 +1716,7 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
 |---|---|---|
 | 1 | **不动用户正在用的东西** | 本仓库环境里用户正在用的是 pi-web 服务 + 它的隧道；其它环境按「谁在用」判断（用户当前会话依赖的通道、网页入口这类）。任何时候不暂停、不重启、不删除，拿不准先问 |
 | 2 | `tunnel add --access` 默认 `none` | 界面向导默认 `password`，命令行默认**无保护**。agent 建隧道必须显式传 `--access password` 或 `--access ip`（可重复/逗号分隔，两个都传 = 两个条件都要满足） |
-| 3 | `hash-password` 在本机算 | 用 bcrypt（`$2y$12$…`），**不连服务器、不需要服务器装任何东西**；只要服务器 id 存在于配置里就能算。密码超过 72 字节会被拒绝 |
+| 3 | `hash-password` 在本机算 | 优先 bcrypt（`$2y$12$…`），服务器 nginx 验不了时自动用兼容格式（`$apr1$…`）；**不需要服务器装任何东西**，但会只读探测一次服务器；只要服务器 id 存在于配置里就能算（探测失败按兼容格式兜底）。用 bcrypt 时密码超过 72 字节会被拒绝 |
 | 4 | `tunnel add/edit --access-password` 也是本机算哈希 | 不依赖服务器；但密码会短暂出现在本机命令行，介意就用配方 3 的方式 B。`--access` 写错、`--access-password` 配不上 `--access password` 都会直接报错（不会静默丢掉保护） |
 | 5 | `tunnel edit` 不能换服务/服务器 | 想换服务器用配方 5：先 add 新、验证、再 remove 旧 |
 | 6 | `logs <不存在的id>` | 会直接报错「没找到隧道/本机服务「xxx」」并退出码 1（2026-10-11 已修） |

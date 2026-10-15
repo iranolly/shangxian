@@ -151,11 +151,15 @@ pub fn build_script(input: &ScriptInput<'_>) -> Result<String, String> {
     };
 
     let mut out = String::new();
+    // ENV 里的占位：nginx 查找和 bcrypt 探测（和 cryptprobe 共用同一份 shell 片段，避免两边走样）
+    let env_tmpl = ENV_TMPL
+        .replace("@NGINX_FIND@", crate::cryptprobe::NGINX_FIND)
+        .replace("@BCRYPT_PROBE@", crate::cryptprobe::BCRYPT_PROBE);
     out.push_str("echo SHANGXIAN-CHECK-V2\n");
     out.push_str(SHX_EXPAND_FN);
     for section in input.mode.sections() {
         let tmpl = match *section {
-            "ENV" => ENV_TMPL,
+            "ENV" => env_tmpl.as_str(),
             "CONF" => CONF_TMPL,
             "HTPASSWD" => HTPASSWD_TMPL,
             "HTTPS" => HTTPS_TMPL,
@@ -181,11 +185,9 @@ else
 fi
 echo "PANEL=$panel"
 echo "PANEL_EVIDENCE=$pev"
-has_nginx=0; has_apache=0; nginx_bin=''
-if command -v nginx >/dev/null 2>&1; then has_nginx=1; nginx_bin=$(command -v nginx)
-elif [ -x /www/server/nginx/sbin/nginx ]; then has_nginx=1; nginx_bin=/www/server/nginx/sbin/nginx
-elif [ -x /xp/panel/nginx/sbin/nginx ]; then has_nginx=1; nginx_bin=/xp/panel/nginx/sbin/nginx
-fi
+@NGINX_FIND@
+has_nginx=0; has_apache=0
+[ -n "$nginx_bin" ] && has_nginx=1
 if command -v httpd >/dev/null 2>&1 || command -v apache2 >/dev/null 2>&1; then has_apache=1; fi
 case "$has_nginx$has_apache" in
   11) web=both;; 10) web=nginx;; 01) web=apache;; *) web=unknown;;
@@ -198,17 +200,21 @@ echo "VHOST_DIR=@DIR@"
 echo "VHOST_DIR_EXISTS=$ve"
 nf=0
 [ -d /etc/nginx ] && nf=1
-[ -x "$nginx_bin" ] && nf=1
+[ -n "$nginx_bin" ] && [ -x "$nginx_bin" ] && nf=1
 [ -d @DIR@/nginx ] && nf=1
 echo "WEB_CONF_EXISTS=$nf"
 ws=unknown; wsf=0
-for f in /etc/nginx/nginx.conf /www/server/nginx/conf/nginx.conf /xp/panel/nginx/conf/nginx.conf; do
+ws_conf=''
+[ -n "$nginx_bin" ] && ws_conf=$(dirname "$nginx_bin")/../conf/nginx.conf
+for f in /etc/nginx/nginx.conf /www/server/nginx/conf/nginx.conf /xp/panel/nginx/conf/nginx.conf $ws_conf; do
   if [ -f "$f" ]; then
     wsf=1
     if grep -q 'connection_upgrade' "$f" 2>/dev/null; then ws=1; break; else ws=0; fi
   fi
 done
-echo "WS_MAP=$ws""#;
+echo "WS_MAP=$ws"
+@BCRYPT_PROBE@
+"#;
 
 /// 站点配置展开函数：小皮 / 宝塔把证书、强制 HTTPS 写进被 `include` 的独立文件里，
 /// 检查脚本要跟着 include 把正文拼回来看——不然会误报「证书文件找不到」、也看不到 80 跳 443。
@@ -278,6 +284,59 @@ else
   echo "HTPASSWD_EXISTS=0"
   echo HTPASSWD_NO
 fi"#;
+
+/// 假账号验证脚本（完整检查后由 app 单独跑一次；和只读检查脚本分开，检查脚本保持
+/// 「不主动发请求」的规矩）。从服务器本机带一对假账号访问一次站点：正常应 401；
+/// 500 说明 nginx 读不进密码文件（格式不支持 / 权限不对）。
+/// 用 `--resolve` 把域名定到本机，避免绕到外网或 CDN；`--noproxy` 防止代理变量干扰。
+const AUTH_PROBE_TMPL: &str = r#"d=@DOMAIN@
+code=''
+if command -v curl >/dev/null 2>&1; then
+  code=$(curl -ks --noproxy '*' --max-time 8 -o /dev/null -w '%{http_code}' --resolve "$d:443:127.0.0.1" -u '__shangxian_probe__:invalid' "https://$d/" 2>/dev/null)
+  case "$code" in
+    ''|000) code=$(curl -s --noproxy '*' --max-time 8 -o /dev/null -w '%{http_code}' --resolve "$d:80:127.0.0.1" -u '__shangxian_probe__:invalid' "http://$d/" 2>/dev/null) ;;
+  esac
+fi
+echo "AUTH_PROBE=$code"
+"#;
+
+/// 生成假账号验证脚本（域名先过 `valid_domain` 再用单引号包好）。
+pub fn auth_probe_script(domain: &str) -> Result<String, String> {
+    if !valid_domain(domain) {
+        return Err(format!(
+            "域名「{domain}」不能直接拼进脚本：只允许字母、数字、点、横杠"
+        ));
+    }
+    let d = crate::cleanup::shell_quote(domain.trim());
+    Ok(AUTH_PROBE_TMPL.replace("@DOMAIN@", &d))
+}
+
+/// 解析假账号验证输出；没测出来（没 curl / 连不上）返回 `None`。
+pub fn parse_auth_probe(output: &str) -> Option<u16> {
+    for line in output.lines() {
+        if let Some(v) = line.trim().strip_prefix("AUTH_PROBE=") {
+            let v = v.trim();
+            if !v.is_empty() && v != "000" {
+                if let Ok(code) = v.parse::<u16>() {
+                    return Some(code);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 假账号验证拿到 500 时给用户的一句人话警告；其它状态码返回 `None`。
+pub fn auth_probe_warning(code: u16) -> Option<String> {
+    if code == 500 {
+        Some(
+            "云端读不进密码文件：假账号测试时站点返回 500（正常应该是 401），现在网站对所有人都会报错。多半是密码文件里的格式这台服务器的 nginx 不认识，或文件权限不对。请重新设置一次访问密码（会自动用兼容格式），或按《使用指南》修复服务器上的旧加密库。"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
 
 const HTTPS_TMPL: &str = r#"echo "===SECTION:HTTPS==="
 d=@DOMAIN@; dir=@DIR@; f="$dir/nginx/$d.conf"; cert=''
@@ -403,6 +462,15 @@ pub struct CloudEnv {
     /// 全局配置里有没有 `connection_upgrade` 的 map；`None` = 没探出来
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ws_map: Option<bool>,
+    /// 这台服务器的 nginx 能不能验 bcrypt（`$2y$`）：`Some(true/false)`；`None` = 没探出来
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcrypt: Option<bool>,
+    /// nginx 真正加载的 libcrypt 路径（探测证据）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crypt_lib: Option<String>,
+    /// bcrypt 探测证据（`nginx 路径|库路径`）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bcrypt_evidence: Option<String>,
     /// 缓存时间（epoch 毫秒）；解析时不填，state 落盘时由调用方填
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detected_at: Option<i64>,
@@ -421,6 +489,9 @@ impl Default for CloudEnv {
             vhost_dir: None,
             vhost_dir_exists: None,
             ws_map: None,
+            bcrypt: None,
+            crypt_lib: None,
+            bcrypt_evidence: None,
             detected_at: None,
         }
     }
@@ -452,6 +523,13 @@ impl CloudEnv {
         let vhost_dir = key_str(keys, "VHOST_DIR").map(|d| d.trim_matches('\'').to_string());
         let vhost_dir_exists = key_bool(keys, "VHOST_DIR_EXISTS");
         let ws_map = key_bool(keys, "WS_MAP");
+        let bcrypt = match key_str(keys, "BCRYPT").as_deref() {
+            Some("yes") => Some(true),
+            Some("no") => Some(false),
+            _ => None,
+        };
+        let crypt_lib = key_str(keys, "CRYPT_LIB");
+        let bcrypt_evidence = key_str(keys, "BCRYPT_EVIDENCE");
         let conf_dir_exists = key_bool(keys, "WEB_CONF_EXISTS").unwrap_or(false);
 
         // 置信度规则按 D3 §3 在本地算；如果将来脚本自己带置信度，就优先用脚本给的（只认四个合法值）。
@@ -484,6 +562,9 @@ impl CloudEnv {
             vhost_dir,
             vhost_dir_exists,
             ws_map,
+            bcrypt,
+            crypt_lib,
+            bcrypt_evidence,
             detected_at: None,
         }
     }
@@ -1867,6 +1948,7 @@ pub fn assemble_v2(output: &str, input: &CheckInput<'_>) -> CloudCheckResult {
         "env": env,
         "clientIp": client_ip,
         "audit": audit,
+        "authProbe": actual.auth_probe,
         "warnings": warnings,
     });
 
@@ -2346,6 +2428,43 @@ HTPASSWD_YES
     }
 
     #[test]
+    fn env_parses_bcrypt_probe_keys() {
+        let no = CloudEnv::from_keys(&keys(&[
+            ("NGINX_BIN", "/xp/server/nginx/sbin/nginx"),
+            ("CRYPT_LIB", "/xp/server/nginx/sbin/libs/libcrypt.so.1"),
+            ("BCRYPT", "no"),
+            (
+                "BCRYPT_EVIDENCE",
+                "/xp/server/nginx/sbin/nginx|/xp/server/nginx/sbin/libs/libcrypt.so.1",
+            ),
+        ]));
+        assert_eq!(no.bcrypt, Some(false));
+        assert_eq!(
+            no.crypt_lib.as_deref(),
+            Some("/xp/server/nginx/sbin/libs/libcrypt.so.1")
+        );
+        assert!(no.bcrypt_evidence.unwrap().contains("libcrypt"));
+
+        assert_eq!(CloudEnv::from_keys(&keys(&[("BCRYPT", "yes")])).bcrypt, Some(true));
+        assert_eq!(CloudEnv::from_keys(&keys(&[("BCRYPT", "unknown")])).bcrypt, None);
+        assert_eq!(CloudEnv::from_keys(&keys(&[])).bcrypt, None);
+    }
+
+    #[test]
+    fn env_script_probes_bcrypt_and_finds_xp_server_nginx() {
+        let script =
+            build_script(&script_input(CheckMode::Env, "album.example.com", "/xp/panel/vhost"))
+                .unwrap();
+        assert!(
+            script.contains("/xp/server/nginx/sbin/nginx"),
+            "小皮实际 nginx 路径要进候选：\n{script}"
+        );
+        assert!(script.contains("BCRYPT="), "环境识别要带 bcrypt 探测");
+        assert!(script.contains("$2y$12$"), "探测要真算一次 bcrypt");
+        assert!(script.contains("libcrypt"), "探测要看 nginx 真正加载的库");
+    }
+
+    #[test]
     fn env_banner_covers_every_case() {
         let env = |panel: &str, web: &str| CloudEnv {
             panel: panel.into(),
@@ -2722,6 +2841,7 @@ server {
                 ip_on: ip,
                 allow_ips: ips.iter().map(|s| s.to_string()).collect(),
                 htpasswd_exists: htpasswd,
+                auth_probe: None,
             }
         }
         let expected = ExpectedProtection {
@@ -2928,6 +3048,39 @@ server {
                 );
             }
         }
+    }
+
+    #[test]
+    fn auth_probe_script_only_requests_localhost() {
+        // 假账号验证单独一个脚本（不在只读检查脚本里），但同样只读：
+        // 唯一动作是向本机发一次带假密码的 GET，不写任何文件。
+        let s = auth_probe_script("album.example.com").unwrap();
+        assert!(s.contains("--resolve \"$d:443:127.0.0.1\""), "https 要定到本机：{s}");
+        assert!(s.contains("--resolve \"$d:80:127.0.0.1\""), "http 要定到本机：{s}");
+        assert!(s.contains("-o /dev/null"), "不把响应落盘：{s}");
+        assert!(s.contains("--noproxy"), "绕开服务器上的代理变量：{s}");
+        for bad in ["sed -i", "systemctl", "rm ", "kill ", "wget "] {
+            assert!(!s.contains(bad), "不该出现「{bad}」：{s}");
+        }
+        for (idx, _) in s.match_indices('>') {
+            let rest = &s[idx..];
+            assert!(
+                rest.starts_with(">/dev/null") || rest.starts_with(">&1"),
+                "只允许丢弃输出：{s}"
+            );
+        }
+    }
+
+    #[test]
+    fn auth_probe_parse_and_warning() {
+        assert_eq!(parse_auth_probe("AUTH_PROBE=401\n"), Some(401));
+        assert_eq!(parse_auth_probe("noise\nAUTH_PROBE=500"), Some(500));
+        assert_eq!(parse_auth_probe("AUTH_PROBE=\n"), None);
+        assert_eq!(parse_auth_probe("AUTH_PROBE=000\n"), None);
+        assert_eq!(parse_auth_probe("AUTH_PROBE=abc\n"), None);
+        assert!(auth_probe_warning(500).is_some());
+        assert!(auth_probe_warning(401).is_none());
+        assert!(auth_probe_script("bad domain").is_err());
     }
 
     #[test]

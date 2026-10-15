@@ -179,6 +179,17 @@ export function readExtra(check?: ProtectionCheck | null): {
   const warnings = Array.isArray(obj.warnings)
     ? obj.warnings.filter((w): w is string => typeof w === "string")
     : [];
+  // 服务器 nginx 验不了 bcrypt 时密码会用兼容格式（apr1）；密码开着就顺带说明一句
+  const env = obj.env;
+  const bcryptUnsupported =
+    env && typeof env === "object"
+      ? (env as Record<string, unknown>).bcrypt === false
+      : false;
+  if (bcryptUnsupported && check?.expected?.password === true) {
+    warnings.push(
+      "这台服务器的 nginx 不支持更安全的密码格式（bcrypt），访问密码用的是兼容格式（apr1），不影响使用。",
+    );
+  }
   return { https, warnings };
 }
 

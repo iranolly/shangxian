@@ -1075,10 +1075,34 @@ fn scrub_line(line: &str) -> String {
 }
 
 fn scrub_bcrypt(text: &str) -> String {
+    let is_crypt_char = |b: u8| b.is_ascii_alphanumeric() || b == b'.' || b == b'/';
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut i = 0usize;
     while i < bytes.len() {
+        // apr1（服务器 nginx 验不了 bcrypt 时用的兼容格式）也要脱敏
+        if text[i..].starts_with("$apr1$") {
+            // $apr1$ + 8 位盐 + $ + 22 位哈希
+            let mut j = i + 6;
+            let mut salt_len = 0;
+            while j < bytes.len() && salt_len < 8 && is_crypt_char(bytes[j]) {
+                j += 1;
+                salt_len += 1;
+            }
+            if salt_len == 8 && j < bytes.len() && bytes[j] == b'$' {
+                j += 1;
+                let mut hash_len = 0;
+                while j < bytes.len() && hash_len < 22 && is_crypt_char(bytes[j]) {
+                    j += 1;
+                    hash_len += 1;
+                }
+                if hash_len == 22 {
+                    out.push_str("<密码哈希已省略>");
+                    i = j;
+                    continue;
+                }
+            }
+        }
         let is_bcrypt = bytes[i] == b'$'
             && i + 3 < bytes.len()
             && bytes[i + 1] == b'2'
@@ -2248,7 +2272,7 @@ const METHODS: &[(&str, &str, &str)] = &[
     ),
     (
         "hash_password",
-        "生成访问密码哈希（bcrypt，本机计算，供 nginx 使用）",
+        "生成访问密码哈希（优先 bcrypt；服务器 nginx 验不了时自动用兼容格式，本机计算）",
         "{serverId, password}",
     ),
     ("get_nginx_snippet", "生成某条隧道的 nginx 配置片段", "{id}"),
@@ -2623,8 +2647,7 @@ pub(crate) fn dispatch(ctx: &Ctx, method: &str, params: &Value) -> Result<Value,
             let server_id = need_server_id(params)?;
             let conn = crate::server_conn(&ctx.guardian, &server_id)?;
             let password = need_str(params, "password")?;
-            let hash = shangxian_core::cleanup::hash_password(&conn.exec(), &password)?;
-            Ok(json!({"hash": hash}))
+            hash_password_adaptive(ctx, &server_id, &conn.exec(), &password)
         }
         "setup_passwordless" => setup_passwordless(ctx, params),
         "test_server" => {
@@ -2730,6 +2753,70 @@ fn cached_env(ctx: &Ctx, server_id: &str) -> Option<CloudEnv> {
     ctx.state
         .server_env(server_id)
         .and_then(|value| serde_json::from_value::<CloudEnv>(value).ok())
+}
+
+/// 生成访问密码哈希：先探服务器上的 nginx 认不认 bcrypt，认→bcrypt，
+/// 不认/说不准→本机 apr1（nginx 内置支持，任何版本都能验）。
+///
+/// 探测结果写进这台服务器的环境缓存（`server_env`），之后检查/界面都能看到。
+/// 密码明文始终只在本机内存里，不落盘、不进命令行。
+pub(crate) fn hash_password_adaptive(
+    ctx: &Ctx,
+    server_id: &str,
+    exec: &shangxian_core::cleanup::SshExec,
+    password: &str,
+) -> Result<Value, String> {
+    use shangxian_core::cryptprobe::{BcryptSupport, probe};
+
+    // 优先用缓存里的 nginx 路径当线索；探测本身每次现跑（比缓存新，改面板后不会误判）
+    let hint = cached_env(ctx, server_id).and_then(|e| e.nginx_bin);
+    let probe = probe(exec, hint.as_deref(), Duration::from_secs(20)).ok();
+    if let Some(p) = &probe {
+        merge_bcrypt_cache(ctx, server_id, p);
+    }
+    let support = probe.as_ref().map(|p| p.support);
+    if support == Some(BcryptSupport::Yes) {
+        let hash = shangxian_core::cleanup::hash_password(exec, password)?;
+        Ok(json!({"hash": hash, "format": "bcrypt"}))
+    } else {
+        let hash = shangxian_core::cleanup::hash_password_apr1(password)?;
+        let note = match support {
+            Some(BcryptSupport::No) => {
+                "这台服务器的 nginx 不支持更安全的 bcrypt（多半是面板自带的旧加密库），已自动改用兼容格式；不影响使用。"
+            }
+            _ => "没能确认这台服务器支不支持 bcrypt，已自动用兼容格式；不影响使用。",
+        };
+        Ok(json!({"hash": hash, "format": "apr1", "note": note}))
+    }
+}
+
+/// 把 bcrypt 探测结果并进这台服务器的环境缓存（保留缓存里别的字段）。
+fn merge_bcrypt_cache(
+    ctx: &Ctx,
+    server_id: &str,
+    probe: &shangxian_core::cryptprobe::BcryptProbe,
+) {
+    use shangxian_core::cryptprobe::BcryptSupport;
+
+    let mut value = ctx.state.server_env(server_id).unwrap_or_else(|| json!({}));
+    let Some(obj) = value.as_object_mut() else {
+        return;
+    };
+    obj.insert(
+        "bcrypt".into(),
+        match probe.support {
+            BcryptSupport::Yes => json!(true),
+            BcryptSupport::No => json!(false),
+            BcryptSupport::Unknown => Value::Null,
+        },
+    );
+    if let Some(lib) = probe.crypt_lib.as_ref() {
+        obj.insert("cryptLib".into(), json!(lib));
+    }
+    if let Some(evidence) = probe.evidence.as_ref() {
+        obj.insert("bcryptEvidence".into(), json!(evidence));
+    }
+    ctx.state.set_server_env(server_id, value);
 }
 
 /// 手动检查的来源标记。
@@ -2878,7 +2965,7 @@ fn run_cloud_check(
             }));
         }
     };
-    let result = assemble_cloud_check(
+    let mut result = assemble_cloud_check(
         &output,
         &CheckInput {
             domain: &req.domain,
@@ -2892,7 +2979,38 @@ fn run_cloud_check(
             cached_env: env,
         },
     );
+    // 完整检查额外做一次假账号验证：密码文件读不进去（例如格式这台 nginx 不认识）
+    // 会在这里变成一句明确警告，而不是等用户发现网站 500。
+    if mode == CheckMode::Full && result.actual.password_on && result.actual.htpasswd_exists {
+        if let Ok(script) = cloudcheck::auth_probe_script(&req.domain) {
+            if let Ok(out) = shangxian_core::cleanup::run(&exec, &script, Duration::from_secs(12)) {
+                if let Some(code) = cloudcheck::parse_auth_probe(&out) {
+                    result.actual.auth_probe = Some(code);
+                    patch_auth_probe(&mut result, code);
+                }
+            }
+        }
+    }
     Ok(result)
+}
+
+/// 把假账号验证结果写进检查结果（`extra.authProbe` + 500 时的一句人话警告）。
+fn patch_auth_probe(result: &mut cloudcheck::CloudCheckResult, code: u16) {
+    let Some(extra) = result.check.extra.as_mut() else {
+        return;
+    };
+    let Some(obj) = extra.as_object_mut() else {
+        return;
+    };
+    obj.insert("authProbe".into(), json!(code));
+    if let Some(warning) = cloudcheck::auth_probe_warning(code) {
+        match obj.get_mut("warnings").and_then(|v| v.as_array_mut()) {
+            Some(list) => list.push(json!(warning)),
+            None => {
+                obj.insert("warnings".into(), json!([warning]));
+            }
+        }
+    }
 }
 
 fn check_tunnel_cloud(ctx: &Ctx, params: &Value) -> Result<Value, String> {
@@ -3175,6 +3293,11 @@ mod tests {
         let text = format!("accessHash={hash}");
         let out = scrub_text(&text);
         assert!(!out.contains("$2y$"), "{out}");
+        // apr1（兼容格式）同样不能漏
+        let apr1 = "$apr1$LSzMVDV.$pfCdvnQ0zdqDq05f5WBU90";
+        let out = scrub_text(&format!("accessHash={apr1}"));
+        assert!(!out.contains("$apr1$"), "{out}");
+        assert!(out.contains("密码哈希已省略"), "{out}");
         let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----";
         let out = scrub_text(key);
         assert!(out.contains("<私钥内容已省略>"), "{out}");

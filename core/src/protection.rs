@@ -39,6 +39,9 @@ pub struct AccessCheck {
     pub allow_ips: Vec<String>,
     /// 密码文件在不在（/xp/panel/vhost/<域名>.htpasswd）
     pub htpasswd_exists: bool,
+    /// 假账号实测拿到的状态码（401 = 正常把关；500 = 密码文件读不进；None = 没测）
+    #[serde(default)]
+    pub auth_probe: Option<u16>,
 }
 
 /// 解析远端脚本的输出：两条正文标记之间的站点配置全文，加上标记外的
@@ -50,6 +53,7 @@ pub fn parse(output: &str) -> AccessCheck {
         ip_on: false,
         allow_ips: Vec::new(),
         htpasswd_exists: false,
+        auth_probe: None,
     };
 
     let mut in_conf = false;
@@ -74,7 +78,13 @@ pub fn parse(output: &str) -> AccessCheck {
             "CONF_MISSING" => check.conf_found = false,
             "HTPASSWD_YES" => check.htpasswd_exists = true,
             "HTPASSWD_NO" => check.htpasswd_exists = false,
-            _ => {}
+            _ => {
+                if let Some(v) = line.strip_prefix("AUTH_PROBE=") {
+                    if let Ok(code) = v.trim().parse::<u16>() {
+                        check.auth_probe = Some(code);
+                    }
+                }
+            }
         }
     }
 

@@ -584,18 +584,19 @@ fn delete_server(id: String, state: State<'_, AppState>) -> Result<serde_json::V
     Ok(ctl::dispatch_delete_result("server", &info))
 }
 
-/// 在本机生成访问密码的哈希（bcrypt `$2y$…`，给 nginx 用）；密码只在本机算。
+/// 在本机生成访问密码的哈希（优先 bcrypt；服务器 nginx 验不了时自动用兼容的 apr1）。
+/// 密码只在本机算，不落盘。
 #[tauri::command]
 async fn hash_password(
     server_id: String,
     password: String,
     state: State<'_, AppState>,
-) -> Result<String, String> {
+) -> Result<serde_json::Value, String> {
     let ctx = state.ctx.clone();
     let guardian = ctx.guardian.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let conn = server_conn(&guardian, &server_id)?;
-        shangxian_core::cleanup::hash_password(&conn.exec(), &password)
+        ctl::hash_password_adaptive(&ctx, &server_id, &conn.exec(), &password)
     })
     .await
     .map_err(|e| format!("内部错误：{e}"))?
