@@ -1,6 +1,6 @@
 {
   "name": "shangxian",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "private": true,
   "description": "上线助手：把本机服务发布到公网（SSH 隧道 + 云端 nginx + 访问保护）。含给 AI agent 用的 skill。",
   "pi": {

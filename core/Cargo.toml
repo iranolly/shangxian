@@ -1,6 +1,6 @@
 [package]
 name = "shangxian-core"
-version = "0.6.1"
+version = "0.6.2"
 description = "上线助手核心：SSH 隧道进程看护（不依赖界面）"
 edition = "2021"
 

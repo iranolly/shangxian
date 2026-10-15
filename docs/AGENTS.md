@@ -95,7 +95,7 @@ echo "$CLI"
 | 项目 | 约定 |
 |---|---|
 | cli 位置 | 开发版：`target\debug\cli.exe`（或 release）；分发给用户时，`cli.exe` 要和 `app.exe` 放同一个文件夹（`cli app start` 靠这个找人） |
-| 名字 / 版本 | 程序名 `cli`，版本 `0.6.1`（`cli --version` 输出 `cli 0.6.1`） |
+| 名字 / 版本 | 程序名 `cli`，版本 `0.6.2`（`cli --version` 输出 `cli 0.6.2`） |
 | 写操作前提 | 应用必须在跑（`cli app status --json` 看到 `result.running: true`） |
 | 只读四个命令 | `status` / `services` / `tunnels` / `servers` 离线也能读配置文件，状态字段为 `"unknown"` |
 | 默认输出 | 中文人话，成功以 `✓` 开头，失败以 `✗` 开头（写到 stderr） |
@@ -177,13 +177,13 @@ guide     给 AI agent 的速查说明
   "app": {
     "snapshotVersion": 2,
     "pid": 12345,
-    "appVersion": "0.6.1",
+    "appVersion": "0.6.2",
     "dataDir": "C:\\Users\\你\\AppData\\Roaming\\Shangxian",
     "startedAt": 1760000000000,
     "jobGuardOk": true,
     "jobGuardError": null,
     "configTrusted": true,
-    "updateInfo": { "status": "upToDate", "latest": "0.6.1", "url": null, "checkedAt": 1760000000000, "error": null },
+    "updateInfo": { "status": "upToDate", "latest": "0.6.2", "url": null, "checkedAt": 1760000000000, "error": null },
     "settings": {
       "refreshIntervalMs": 800,
       "quietHours": { "enabled": false, "start": "22:00", "end": "08:00" },
@@ -324,7 +324,7 @@ guide     给 AI agent 的速查说明
 人话输出（真实格式）：
 
 ```
-「上线助手」0.6.1（进程 12345）已运行 2 小时 13 分钟
+「上线助手」0.6.2（进程 12345）已运行 2 小时 13 分钟
 本机服务：3 台，2 台在跑，1 台没在跑，0 台不知道
 发布隧道：3 条（2 条开着），2 条正在发布，1 条正在重试，今日重连 4 次
   ·「comfyui 发布」第 3 次没连上，12 秒后重试
@@ -337,7 +337,7 @@ guide     给 AI agent 的速查说明
 {
   "schemaVersion": 1,
   "generatedAt": 1760000000000,
-  "app": { "pid": 12345, "appVersion": "0.6.1", "startedAt": 1760000000000,
+  "app": { "pid": 12345, "appVersion": "0.6.2", "startedAt": 1760000000000,
            "uptimeSecs": 7980, "dayKey": "2026-10-12", "jobGuardOk": true, "eventsSinceStart": 128 },
   "tunnels": { "total": 3, "enabled": 2, "running": 2, "retrying": 1, "reconnectsToday": 4,
     "items": [ { "id": "tun-abc123", "name": "comfyui 发布", "status": "disconnected",
@@ -345,7 +345,7 @@ guide     给 AI agent 的速查说明
                  "connectedSince": null, "uptimeSecs": 0, "reconnectsToday": 2 } ] },
   "services": { "total": 3, "up": 2, "down": 1, "unknown": 0,
     "items": [ { "id": "svc-abc123", "name": "comfyui", "status": "running", "health": "up" } ] },
-  "update": { "status": "upToDate", "latest": "0.6.1", "url": null, "checkedAt": 1760000000000, "error": null }
+  "update": { "status": "upToDate", "latest": "0.6.2", "url": null, "checkedAt": 1760000000000, "error": null }
 }
 ```
 
@@ -720,7 +720,7 @@ $2y$12$xxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
 `--json`：
 
 ```json
-{ "ok": true, "result": { "running": true, "offline": false, "port": 58601, "pid": 12345, "appVersion": "0.6.1" } }
+{ "ok": true, "result": { "running": true, "offline": false, "port": 58601, "pid": 12345, "appVersion": "0.6.2" } }
 { "ok": true, "result": { "running": false, "offline": true, "hint": "要叫起来：cli app start" } }
 ```
 
@@ -1206,7 +1206,7 @@ cli call preview_launch_command '{"exe":"C:\\Python311\\python.exe","args":"-m h
   "port": 58601,
   "token": "8222253e...b180",
   "pid": 1283452,
-  "appVersion": "0.6.1"
+  "appVersion": "0.6.2"
 }
 ```
 
@@ -1871,7 +1871,7 @@ cli config import 备份.json --mode replace --yes     # 整份替换（先自�
 
 ## 文档版本
 
-- 本版对应 2026-10-12 的全景修复 + 可靠性 / 生命周期改造；2026-10-13 完成文档改名（`AI-AGENT.md` → `AGENTS.md`）与可读性完善（补「先找到 cli.exe」「缺信息先问」两节、重排配方 1）。
+- 本版对应 2026-10-12 的全景修复 + 可靠性 / 生命周期改造；2026-10-13 完成文档改名（`AI-AGENT.md` → `AGENTS.md`）与可读性完善（补「先找到 cli.exe」「缺信息先问」两节、重排配方 1）；2026-10-15 使用手册改名 `使用指南.md`，并随发布包一起发（安装包 / 便携包里和 `AGENTS.md`、`SKILL.md` 同层）。
 - ctl 底层方法 **60 条**（见第 5 节）；CLI：`server test` 在内的常用命令见第 4 节；`cli methods --json` 可列出全部方法。
 - 配置文件 **v6**（新增 `settings` 与隧道 `preset`）；运行状态存 `state.json`，事件流存 `events.jsonl`。
 - 本版新增 / 变更的 CLI：`stats` / `doctor` / `diag` / `undo` / `config export|import` / `app stop-all|update-check` / `tunnel forget-key` / `server test`。
