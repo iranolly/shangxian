@@ -28,6 +28,7 @@
     ],
     "resources": {
       "../../docs/AGENTS.md": "AGENTS.md",
+      "../../docs/使用指南.md": "使用指南.md",
       "../../skills/shangxian/SKILL.md": "SKILL.md"
     },
     "icon": [

@@ -12,12 +12,12 @@ compatibility: Windows；需要先安装并运行「上线助手」桌面应用�
   https://github.com/iranolly/shangxian
 - **完整 agent 文档（`AGENTS.md`）**（全部字段表、60 个底层方法、已知坑、离线行为）：
   https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
-- 给人看的使用手册：仓库里 `docs/使用手册.md`
+- 给人看的使用指南：仓库里 `docs/使用指南.md`（发布包里也叫 `使用指南.md`，和 `cli.exe` 同层）
 
 **前提**：电脑上已安装「上线助手」（Windows 桌面应用）。没装的话，先让用户去
 Releases 下载安装包或便携包：https://github.com/iranolly/shangxian/releases
 
-**版本口径**：本技能（`SKILL.md`）和完整文档 `AGENTS.md` 随安装包分发（安装目录里、`cli.exe` 旁边）。加载到的技能副本如果和安装目录 / 仓库里的不一致，**以较新的那份为准**（拿不准就对照仓库 main 分支）。本文件只是速查卡；完整字段表、全部方法和已知坑以 `AGENTS.md` 为准。
+**版本口径**：本技能（`SKILL.md`）、完整文档 `AGENTS.md` 和给人看的使用指南 `使用指南.md` 随安装包分发（安装目录里、`cli.exe` 旁边）。加载到的技能副本如果和安装目录 / 仓库里的不一致，**以较新的那份为准**（拿不准就对照仓库 main 分支）。本文件只是速查卡；完整字段表、全部方法和已知坑以 `AGENTS.md` 为准。
 
 ## 第一步：找到 cli.exe
 

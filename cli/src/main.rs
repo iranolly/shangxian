@@ -2790,7 +2790,7 @@ const GUIDE: &str = r#"# 上线助手命令行速查（给 AI agent）
 - 老版本（没有子命令时）可以直接调底层方法：cli call test_server '{"serverId":"..."}'（等价于 cli server test <服务器id>）。
 
 ## 完整文档在哪
-- 安装目录里（和 cli.exe 同一层）有一份 AGENTS.md：命令全表、配方、已知坑、安全红线，给 AI 助手看的完整说明；旁边还有一份 SKILL.md（速查技能）。
+- 安装目录里（和 cli.exe 同一层）有一份 AGENTS.md：命令全表、配方、已知坑、安全红线，给 AI 助手看的完整说明；旁边还有 SKILL.md（速查技能）和 使用指南.md（给人看的使用指南）。
 - 在线版：https://github.com/iranolly/shangxian/blob/main/docs/AGENTS.md
 
 ## 输出约定

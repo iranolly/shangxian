@@ -5,7 +5,8 @@
 完整设计见 [DESIGN.md](DESIGN.md)；本次更新见 [Releases 发布说明](https://github.com/iranolly/shangxian/releases)。
 
 - **下载安装包**：[Releases](https://github.com/iranolly/shangxian/releases)（安装版，中文安装向导；不想装就用便携包）
-- 给人看的使用说明：[docs/使用手册.md](docs/使用手册.md)
+- 给人看的使用指南：[docs/使用指南.md](docs/使用指南.md)（安装包/便携包里也带一份）
+- 想自己编译、改代码：[AGENTS.md](AGENTS.md)（开发指南：环境、编译、测试、打包）
 - 给 AI agent 看的：[docs/AGENTS.md](docs/AGENTS.md)（配 `cli.exe` 用；安装后程序旁边也带一份）
 - 给 AI agent 用的 skill：[skills/shangxian/SKILL.md](skills/shangxian/SKILL.md)（Pi 用户一条命令装：`pi install git:github.com/iranolly/shangxian`；其他工具把文件夹拷进 skills 目录）
 
@@ -58,7 +59,7 @@
 - 中文 NSIS 安装器：程序和快捷方式都叫「上线助手」，装在自己账号目录、**不需要管理员**；卸载时有「同时删除配置和密钥」勾选框（**默认不勾**，配置默认保留）。
 - 安装/卸载前先调 `cli app stop-all --yes`，把正在发布的隧道和应用拉起的本机服务停掉再动程序文件。
 - 安装包：`Shangxian_<版本>_x64-setup.exe`；便携包：`shangxian-v<版本>-portable.zip`（数据放解压目录的 `data\`，整个文件夹拷走即搬家）；另出 `SHA256SUMS` 校验和。
-- 安装包和便携包都带两份给 AI 看的文档：`AGENTS.md`（命令参考 / 配方 / 安全红线）和 `SKILL.md`（agent 技能文件），就在 `cli.exe` 旁边，装完/解压后可以直接读。
+- 安装包和便携包都带三份文档，就在 `cli.exe` 旁边，装完/解压后可以直接读：给 AI 看的 `AGENTS.md`（命令参考 / 配方 / 安全红线）和 `SKILL.md`（agent 技能文件），以及给人看的 `使用指南.md`。
 
 ## 命令行（给 AI agent 和脚本用）
 
@@ -107,8 +108,9 @@ cli guide                  # 给 AI agent 的速查说明
 
 ```
 上线助手/
+├─ AGENTS.md            开发指南（环境 / 编译 / 测试 / 打包）
 ├─ DESIGN.md            设计方案（功能 / 架构 / 界面 / 路线）
-├─ docs/                使用手册（给人）+ AGENTS.md（给 agent）
+├─ docs/                使用指南（给人）+ AGENTS.md（给 agent）
 ├─ packaging/说明.txt    便携包里给用户看的说明
 ├─ Cargo.toml           工作区（core + app/src-tauri + cli + tools/capture）
 ├─ core/                Rust 核心库（不依赖界面）

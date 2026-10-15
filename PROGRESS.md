@@ -287,3 +287,18 @@ cargo test -p shangxian-core --test guardian_docker -- --ignored   # 需靶机
   - 第一实例正常启动：窗口正常显示 ✓、无提示框 ✓、隧道正常恢复 ✓。
 - **文档**：DESIGN.md 生命周期一节与 docs/AGENTS.md 铁律 29 同步更新（同会话唤起、跨会话才提示）。
 - **文件**：`app/src-tauri/src/lib.rs`、`app/src-tauri/src/singleton.rs`（注释）、`DESIGN.md`、`docs/AGENTS.md`。
+
+---
+
+## 文档分工：仓库放开发指南，发布包带使用指南（2026-10-15）
+
+- **目标**：仓库里的指南讲「怎么开发这个项目」；发布包里的指南讲「怎么用这个软件」。
+- **改动**：
+  - 新增仓库根目录 `AGENTS.md`（开发指南）：环境准备、目录速览、编译与运行、测试、打包发布、约定、常见坑。
+  - `docs/使用手册.md` 改名为 `docs/使用指南.md`（标题同步改），阅读对象不变（完全不懂技术的用户）。
+  - 发布包文档从两份变三份：`AGENTS.md` + `SKILL.md`（给 AI 助手）+ `使用指南.md`（给人）。安装包走 `app/src-tauri/tauri.conf.json` 的 `bundle.resources`，便携包走 `build-release.sh` 第 ④ 步的 `cp`。
+  - `packaging/说明.txt` 增加「使用指南（给人看）」一节；`README.md` 增加开发指南入口；`cli` 帮助里的「完整文档在哪」一节（`cli/src/main.rs`）与 `docs/AGENTS.md`、`skills/shangxian/SKILL.md` 同步成三份。
+  - 顺带修 v0.6.1 发布说明里被改名带坏的文档链接：改指 `v0.6.1` 标签里的文件，永久有效。
+- **验证**（写开发指南时逐条核对，可离线实跑的当场跑过）：`cargo test -p shangxian-core` 359 通过 / 0 失败 / 8 跳过；`cargo test -p shangxian-cli` 22 通过；`cargo test -p shangxian-core --test env_checks` 10 通过；`bash -n build-release.sh` 语法 OK；`node -p` 读版本号 0.6.1。
+- **打包验证**：`bash build-release.sh` 成功；`7z l` 确认安装包里 `AGENTS.md` / `SKILL.md` / `使用指南.md` 与 app.exe、cli.exe 同层；便携包根层同样三份（Python zipfile 读回，中文文件名带 UTF-8 标志）；`sha256sum -c SHA256SUMS` 两个产物 OK。
+- **文件**：`AGENTS.md`（新）、`docs/使用指南.md`（改名）、`docs/AGENTS.md`、`README.md`、`skills/shangxian/SKILL.md`、`packaging/说明.txt`、`build-release.sh`、`app/src-tauri/tauri.conf.json`、`cli/src/main.rs`、`PROGRESS.md`。
